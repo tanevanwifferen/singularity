@@ -65,7 +65,7 @@ func TestCompareBranchesByTreeSquash(t *testing.T) {
 	if result.TreeDiverged {
 		t.Error("Expected treeDiverged=false after squash")
 	}
-	if result.CommitDiverged {
+	if result.CommitDiverged == false {
 		t.Error("Expected commitDiverged=true (different commits)")
 	}
 	if !result.SquashDetected {
@@ -109,18 +109,18 @@ func setupTestRepo(t *testing.T) string {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 
-	runGit(t, tmpDir, "init")
-	runGit(t, tmpDir, "config", "user.name", "Test User")
-	runGit(t, tmpDir, "config", "user.email", "test@example.com")
+	runGitTree(t, tmpDir, "init")
+	runGitTree(t, tmpDir, "config", "user.name", "Test User")
+	runGitTree(t, tmpDir, "config", "user.email", "test@example.com")
 
-	createFile(t, tmpDir, "README.md", "# Test")
-	runGit(t, tmpDir, "add", ".")
-	runGit(t, tmpDir, "commit", "-m", "Initial commit")
+	createFileTree(t, tmpDir, "README.md", "# Test")
+	runGitTree(t, tmpDir, "add", ".")
+	runGitTree(t, tmpDir, "commit", "-m", "Initial commit")
 
 	return tmpDir
 }
 
-func runGit(t *testing.T, dir string, args ...string) {
+func runGitTree(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -128,7 +128,7 @@ func runGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
-func createFile(t *testing.T, dir, name, content string) {
+func createFileTree(t *testing.T, dir, name, content string) {
 	t.Helper()
 	path := filepath.Join(dir, name)
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {

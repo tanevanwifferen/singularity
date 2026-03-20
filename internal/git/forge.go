@@ -51,9 +51,9 @@ func detectGitHubAuth() *ForgeAuth {
 		return nil
 	}
 
-	// Check auth status
+	// Check auth status (we just need to ensure gh is authenticated)
 	cmd := exec.Command("gh", "auth", "status", "--json", "user,hostname")
-	output, err := cmd.Output()
+	_, err := cmd.Output()
 	if err != nil {
 		return nil
 	}

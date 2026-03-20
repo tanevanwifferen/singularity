@@ -147,8 +147,10 @@ func CachedCompareBranches(repoPath, branchA, branchB string) (*BranchComparison
 	cache := GetGlobalCache()
 	key := cacheKey("compare", repoPath, branchA, branchB)
 
-	if result, ok := cache.Get(key).(*BranchComparison); ok && result != nil {
-		return result, nil
+	if val, ok := cache.Get(key); ok {
+		if result, ok := val.(*BranchComparison); ok && result != nil {
+			return result, nil
+		}
 	}
 
 	result, err := CompareBranches(repoPath, branchA, branchB)
@@ -165,8 +167,10 @@ func CachedCompareBranchesByTree(repoPath, branchA, branchB string) (*TreeCompar
 	cache := GetGlobalCache()
 	key := cacheKey("tree", repoPath, branchA, branchB)
 
-	if result, ok := cache.Get(key).(*TreeComparison); ok && result != nil {
-		return result, nil
+	if val, ok := cache.Get(key); ok {
+		if result, ok := val.(*TreeComparison); ok && result != nil {
+			return result, nil
+		}
 	}
 
 	result, err := CompareBranchesByTree(repoPath, branchA, branchB)
@@ -183,8 +187,10 @@ func CachedOpenRepo(path string) (*RepoInfo, error) {
 	cache := GetGlobalCache()
 	key := cacheKey("repo", path)
 
-	if result, ok := cache.Get(key).(*RepoInfo); ok && result != nil {
-		return result, nil
+	if val, ok := cache.Get(key); ok {
+		if result, ok := val.(*RepoInfo); ok && result != nil {
+			return result, nil
+		}
 	}
 
 	result, err := OpenRepo(path)

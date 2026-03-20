@@ -1,9 +1,10 @@
 package git
 
 import (
+	"bufio"
 	"fmt"
+	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 )
 
@@ -288,13 +289,14 @@ func SquashCommits(repoPath string, count int, message string) error {
 
 // ReorderCommits reorders commits using rebase
 func ReorderCommits(repoPath, from string, commits []string) error {
-	// Get current branch
+	// Get current branch (unused but kept for potential future use)
+	_ = from // suppress unused warning
 	cmd := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD")
 	output, err := cmd.Output()
 	if err != nil {
 		return err
 	}
-	branch := strings.TrimSpace(string(output))
+	_ = strings.TrimSpace(string(output)) // branch name unused
 
 	// Cherry-pick commits in new order
 	for _, sha := range commits {

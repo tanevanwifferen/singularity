@@ -35,7 +35,7 @@ func CreateMR(repoPath, sourceBranch, targetBranch, title, description string, r
 	}
 
 	if auth.IsGitLab() {
-		return createGitLabMR(repoPath, sourceBranch, targetBranch, title, description, auth)
+		return createGitLabMR(repoPath, sourceBranch, targetBranch, title, description, reviewers, auth)
 	}
 	if auth.IsGitHub() {
 		return createGitHubPR(repoPath, sourceBranch, targetBranch, title, description, auth)
@@ -45,7 +45,7 @@ func CreateMR(repoPath, sourceBranch, targetBranch, title, description string, r
 }
 
 // createGitLabMR creates a merge request on GitLab
-func createGitLabMR(repoPath, sourceBranch, targetBranch, title, description string, auth *ForgeAuth) (*MergeRequest, error) {
+func createGitLabMR(repoPath, sourceBranch, targetBranch, title, description string, reviewers []string, auth *ForgeAuth) (*MergeRequest, error) {
 	// Get project path from remote
 	projectPath := getProjectPath(repoPath)
 	if projectPath == "" {

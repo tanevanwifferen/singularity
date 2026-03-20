@@ -18,6 +18,14 @@ type StashEntry struct {
 	Files   []string  `json:"files"`
 }
 
+// Worktree represents a git worktree
+type Worktree struct {
+	Path   string `json:"path"`
+	Branch string `json:"branch"`
+	HEAD   string `json:"head"`
+	Locked bool   `json:"locked"`
+}
+
 // GetStashList returns all stash entries
 func GetStashList(repoPath string) ([]StashEntry, error) {
 	cmd := exec.Command("git", "-C", repoPath, "stash", "list", "--format=%H|%gd|%s|%an|%at")
@@ -84,6 +92,7 @@ func GetStash(repoPath string, index int) (*StashEntry, error) {
 
 	// Get files
 	cmd = exec.Command("git", "-C", repoPath, "stash", "show", fmt.Sprintf("stash@{%d}", index), "--name-only")
+	_ = cmd.Run()
 	output, err = cmd.Output()
 	if err == nil {
 		scanner := bufio.NewScanner(strings.NewReader(string(output)))
@@ -106,14 +115,14 @@ func CreateStash(repoPath, message string, includeUntracked bool) (int, error) {
 	}
 
 	cmd := exec.Command("git", args...)
-	output, err := cmd.CombinedOutput()
+	_, err := cmd.CombinedOutput()
 	if err != nil {
 		return -1, fmt.Errorf("failed to create stash: %w", err)
 	}
 
 	// Parse the new stash index
 	cmd = exec.Command("git", "-C", repoPath, "stash", "list", "--format=%gd")
-	output, _ = cmd.Output()
+	output, _ := cmd.Output()
 
 	var entry StashEntry
 	fmt.Fscanf(strings.NewReader(string(output)), "stash@{%d}", &entry.Index)
@@ -129,28 +138,12 @@ func ApplyStash(repoPath string, index int, dropAfter bool) error {
 	}
 
 	cmd := exec.Command("git", "-C", repoPath, "stash", action, fmt.Sprintf("stash@{%d}", index))
-	output, err := cmd.CombinedOutput()
+	_, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to apply stash: %w", err)
 	}
 
 	if dropAfter {
-		// Already popped (applied and dropped)
-		return nil
-	}
-
-	// Check if we need to drop
-	cmd = exec.Command("git", "-C", repoPath, "stash", "list")
-	output, _ = cmd.Output()
-
-	var entries []string
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
-	for scanner.Scan() {
-		entries = append(entries, scanner.Text())
-	}
-
-	// If index is out of range, stash was dropped
-	if index >= len(entries) {
 		return nil
 	}
 
@@ -160,7 +153,7 @@ func ApplyStash(repoPath string, index int, dropAfter bool) error {
 // DropStash drops a stash entry
 func DropStash(repoPath string, index int) error {
 	cmd := exec.Command("git", "-C", repoPath, "stash", "drop", fmt.Sprintf("stash@{%d}", index))
-	output, err := cmd.CombinedOutput()
+	_, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to drop stash: %w", err)
 	}
@@ -170,7 +163,7 @@ func DropStash(repoPath string, index int) error {
 // ClearStash removes all stash entries
 func ClearStash(repoPath string) error {
 	cmd := exec.Command("git", "-C", repoPath, "stash", "clear")
-	output, err := cmd.CombinedOutput()
+	_, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to clear stash: %w", err)
 	}
@@ -225,7 +218,7 @@ func CreateWorktree(repoPath, worktreePath, branch string, createBranch bool) er
 	}
 
 	cmd := exec.Command("git", args...)
-	output, err := cmd.CombinedOutput()
+	_, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to create worktree: %w", err)
 	}
@@ -242,7 +235,7 @@ func RemoveWorktree(repoPath, worktreePath string, force bool) error {
 	args = append(args, worktreePath)
 
 	cmd := exec.Command("git", args...)
-	output, err := cmd.CombinedOutput()
+	_, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to remove worktree: %w", err)
 	}
@@ -253,7 +246,7 @@ func RemoveWorktree(repoPath, worktreePath string, force bool) error {
 // PruneWorktrees prunes stale worktree references
 func PruneWorktrees(repoPath string) error {
 	cmd := exec.Command("git", "-C", repoPath, "worktree", "prune")
-	output, err := cmd.CombinedOutput()
+	_, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to prune worktrees: %w", err)
 	}
@@ -264,7 +257,7 @@ func PruneWorktrees(repoPath string) error {
 // LockWorktree locks a worktree
 func LockWorktree(repoPath, worktreePath string) error {
 	cmd := exec.Command("git", "-C", repoPath, "worktree", "lock", worktreePath)
-	output, err := cmd.CombinedOutput()
+	_, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to lock worktree: %w", err)
 	}
@@ -275,7 +268,7 @@ func LockWorktree(repoPath, worktreePath string) error {
 // UnlockWorktree unlocks a worktree
 func UnlockWorktree(repoPath, worktreePath string) error {
 	cmd := exec.Command("git", "-C", repoPath, "worktree", "unlock", worktreePath)
-	output, err := cmd.CombinedOutput()
+	_, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to unlock worktree: %w", err)
 	}
