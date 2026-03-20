@@ -1,12 +1,10 @@
 package session
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sync"
 	"time"
 )
@@ -131,13 +129,11 @@ func (m *Manager) runSession(session *Session, task string, timeoutSeconds int) 
 
 	// Set timeout
 	done := make(chan struct{})
-	var err error
 
 	go func() {
 		// Get output
 		output, oerr := cmd.CombinedOutput()
 		if oerr != nil {
-			err = oerr
 			session.mu.Lock()
 			session.Error = oerr.Error()
 			session.State = SessionError
