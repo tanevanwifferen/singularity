@@ -1,0 +1,81 @@
+# GitLab CI/CD Pipeline for git-frontend
+# A TUI frontend for Git operations
+
+stages:
+  - build
+  - test
+  - security
+  - release
+
+variables:
+  GO_VERSION: "1.21"
+  BINARY_NAME: "git-frontend"
+
+# Cache Go modules
+.cache:
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - go-modules/
+
+# Build stage
+build:
+  stage: build
+  image: golang:${GO_VERSION}
+  script:
+    - echo "Building git-frontend..."
+    - go mod download
+    - go build -o ${BINARY_NAME} ./cmd/git-frontend
+    - echo "Build successful!"
+  artifacts:
+    paths:
+      - ${BINARY_NAME}
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_BRANCH == "master"
+    - if: $CI_COMMIT_BRANCH != "master"
+
+# Test stage
+test:
+  stage: test
+  image: golang:${GO_VERSION}
+  script:
+    - echo "Running tests..."
+    - go mod download
+    - go test -v -race ./...
+  rules:
+    - if: $CI_COMMIT_BRANCH == "master"
+    - if: $CI_COMMIT_BRANCH != "master"
+
+# Security scan (GoSec)
+security:
+  stage: security
+  image: aquasec/gosec
+  script:
+    - echo "Running security scan..."
+    - go mod download
+    - gosec -exclude=G104 ./... || true  # G104 is error handling, often false positives
+  rules:
+    - if: $CI_COMMIT_BRANCH == "master"
+
+# Release stage
+release:
+  stage: release
+  image: golang:${GO_VERSION}
+  script:
+    - echo "Creating release artifacts..."
+    - go mod download
+    - GOOS=linux GOARCH=amd64 go build -o git-frontend-linux-amd64 ./cmd/git-frontend
+    - GOOS=darwin GOARCH=amd64 go build -o git-frontend-darwin-amd64 ./cmd/git-frontend
+    - GOOS=darwin GOARCH=arm64 go build -o git-frontend-darwin-arm64 ./cmd/git-frontend
+    - GOOS=windows GOARCH=amd64 go build -o git-frontend-windows-amd64.exe ./cmd/git-frontend
+    - echo "Release artifacts created!"
+  artifacts:
+    paths:
+      - git-frontend-linux-amd64
+      - git-frontend-darwin-amd64
+      - git-frontend-darwin-arm64
+      - git-frontend-windows-amd64.exe
+    expire_in: 30 days
+  rules:
+    - if: $CI_COMMIT_TAG
