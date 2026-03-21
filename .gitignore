@@ -25,3 +25,7 @@ Thumbs.db
 # Local environment
 .env
 .env.local
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db

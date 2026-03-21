@@ -48,7 +48,7 @@ func GetUnstagedDiff(path string) (string, error) {
 }
 
 // GenerateCommitMessage creates a commit message from the staged diff
-// This is a placeholder - in production, this would call an LLM API
+// Uses claude -p for enterprise API limits (not full interactive session)
 func GenerateCommitMessage(path string) (*CommitMessage, error) {
 	diff, err := GetStagedDiff(path)
 	if err != nil {
@@ -59,12 +59,62 @@ func GenerateCommitMessage(path string) (*CommitMessage, error) {
 		return nil, fmt.Errorf("no staged changes to commit")
 	}
 
-	// Analyze the diff and generate a conventional commit message
-	// This is a simple heuristic-based implementation
-	// In production, this would use an LLM API
+	// Try Claude first
+	if msg := generateWithClaude(path, diff); msg != nil {
+		return msg, nil
+	}
 
+	// Fallback to heuristic-based generation
 	msg := analyzeDiffAndGenerateMessage(diff)
 	return msg, nil
+}
+
+// generateWithClaude uses claude -p to generate a commit message
+// Returns nil if Claude is unavailable or fails
+func generateWithClaude(path, diff string) *CommitMessage {
+	prompt := fmt.Sprintf(`Analyze this git diff and generate a conventional commit message.
+Respond with ONLY the commit message in this format:
+  type: short description
+
+Type must be one of: feat, fix, docs, style, refactor, test, chore, perf, ci, build
+Do NOT include any explanation, markdown, or additional text.
+
+Diff:
+%s`, diff)
+
+	cmd := exec.Command("claude", "--print", "--permission-mode", "bypassPermissions", "-p", prompt)
+	cmd.Dir = path
+	output, err := cmd.Output()
+	if err != nil {
+		// Claude unavailable or failed - return nil for fallback
+		return nil
+	}
+
+	result := strings.TrimSpace(string(output))
+	if result == "" {
+		return nil
+	}
+
+	// Parse the output into type and subject
+	lines := strings.SplitN(result, ":", 2)
+	if len(lines) < 2 {
+		// Couldn't parse conventional format, use raw output
+		return &CommitMessage{
+			Type:    detectCommitType(diff),
+			Subject: result,
+			Full:    result,
+		}
+	}
+
+	msgType := strings.TrimSpace(lines[0])
+	subject := strings.TrimSpace(lines[1])
+
+	return &CommitMessage{
+		Type:    msgType,
+		Subject: subject,
+		Body:    generateBody(diff),
+		Full:    result,
+	}
 }
 
 // analyzeDiffAndGenerateMessage creates a commit message from diff content
