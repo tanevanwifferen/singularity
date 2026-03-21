@@ -104,6 +104,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/status", withCORS(s.handleStatus))
 	mux.HandleFunc("/api/repo/open", withCORS(s.handleRepoOpen))
 	mux.HandleFunc("/api/repo/info", withCORS(s.handleRepoInfo))
+	mux.HandleFunc("/api/repo", withCORS(s.handleRepoInfo)) // alias for browser access
 	mux.HandleFunc("/api/branch/compare", withCORS(s.handleBranchCompare))
 	mux.HandleFunc("/api/branch/diff", withCORS(s.handleBranchDiff))
 	mux.HandleFunc("/api/commit/message", withCORS(s.handleCommitMessage))
