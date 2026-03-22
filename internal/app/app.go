@@ -91,6 +91,10 @@ func (m *Model) initRouter() {
 	commitView := views.NewCommitView(m.repoPath)
 	router.Register("commit", commitView)
 
+	// Register branch comparison view (split panel with diff summary)
+	branchCompareView := views.NewBranchComparisonView(m.repoPath)
+	router.Register("BranchCompare", branchCompareView)
+
 	// Register stub views for testing routing
 	stub1 := NewStubView1(m.repoPath)
 	stub2 := NewStubView2(m.repoPath)

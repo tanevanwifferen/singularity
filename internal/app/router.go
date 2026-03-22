@@ -3,6 +3,8 @@ package app
 import (
 	"fmt"
 
+	"git-frontend/internal/app/views"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -90,13 +92,26 @@ func (r *Router) Init() tea.Cmd {
 // Update handles messages and delegates to the active view.
 // It handles view switching messages.
 func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// Handle SwitchViewMsg
+	// Handle SwitchViewMsg (defined in this package)
 	if swMsg, ok := msg.(SwitchViewMsg); ok {
 		if err := r.SwitchTo(swMsg.ViewName); err != nil {
 			// Could log error here
 			return r, nil
 		}
 		// Re-init the new view
+		return r, r.active.Init()
+	}
+
+	// Handle views.ViewChangeMsg by importing views package
+	// This avoids circular dependencies while allowing view-to-view communication
+	// Note: We can't use the ViewChanger interface here because views.ViewChangeMsg
+	// can't implement an interface from app package without circular imports.
+	// Instead, we check for the concrete type via type switch.
+	switch v := msg.(type) {
+	case views.ViewChangeMsg:
+		if err := r.SwitchTo(v.ViewName); err != nil {
+			return r, nil
+		}
 		return r, r.active.Init()
 	}
 
