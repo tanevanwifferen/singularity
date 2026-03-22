@@ -87,6 +87,10 @@ func (m *Model) initRouter() {
 		router.Register("Branches", dashboard)
 	}
 
+	// Register commit view
+	commitView := views.NewCommitView(m.repoPath)
+	router.Register("commit", commitView)
+
 	// Register stub views for testing routing
 	stub1 := NewStubView1(m.repoPath)
 	stub2 := NewStubView2(m.repoPath)
