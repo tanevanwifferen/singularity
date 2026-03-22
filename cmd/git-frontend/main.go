@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"git-frontend/internal/app"
+	"git-frontend/internal/project"
 	"git-frontend/internal/server"
 )
 
@@ -17,23 +18,43 @@ func main() {
 	serverAddr := flag.String("addr", "localhost:8080", "Server address (server mode only)")
 	repoPath := flag.String("repo", "", "Repository path")
 	clientURL := flag.String("client", "", "Connect to server at URL (client mode)")
+	projectConfig := flag.String("project-config", "", "Path to project config file (multi-repo)")
 	flag.Parse()
 
 	// Server mode
 	if *serverMode {
 		srv := server.New(*serverAddr, *repoPath)
+
+		// Load project config if provided
+		if *projectConfig != "" {
+			loader, err := project.NewLoaderFromFile(*projectConfig)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to load project config: %v\n", err)
+				os.Exit(1)
+			}
+			srv.SetProjectLoader(loader)
+			fmt.Printf("Project config loaded: %s\n", *projectConfig)
+		}
+
 		fmt.Printf("Starting git-frontend server v%s on %s\n", version, *serverAddr)
 		fmt.Printf("Repository: %s\n", *repoPath)
 		fmt.Println("API endpoints:")
-		fmt.Println("  GET  /api/status       - Server status")
-		fmt.Println("  POST /api/repo/open     - Open repository")
-		fmt.Println("  GET  /api/repo/info     - Get repo info")
-		fmt.Println("  POST /api/branch/compare - Compare branches")
-		fmt.Println("  POST /api/branch/diff   - Get branch diff")
-		fmt.Println("  POST /api/commit/message - Generate commit message")
-		fmt.Println("  POST /api/mr/create     - Create MR/PR")
-		fmt.Println("  GET  /api/forge/auth    - Get forge auth status")
-		fmt.Println("  WS   /ws               - WebSocket for events")
+		fmt.Println("  GET  /api/status              - Server status")
+		fmt.Println("  POST /api/repo/open            - Open repository")
+		fmt.Println("  GET  /api/repo/info            - Get repo info")
+		fmt.Println("  POST /api/branch/compare       - Compare branches")
+		fmt.Println("  POST /api/branch/diff          - Get branch diff")
+		fmt.Println("  POST /api/commit/message       - Generate commit message")
+		fmt.Println("  POST /api/mr/create            - Create MR/PR")
+		fmt.Println("  GET  /api/forge/auth           - Get forge auth status")
+		fmt.Println("  GET  /api/project/list         - List projects")
+		fmt.Println("  POST /api/project/load         - Load a project")
+		fmt.Println("  GET  /api/project/status       - Get project status")
+		fmt.Println("  POST /api/project/refresh      - Refresh project")
+		fmt.Println("  POST /api/project/branch/check - Check branch across repos")
+		fmt.Println("  POST /api/project/branch/compare - Compare branch across repos")
+		fmt.Println("  GET  /api/project/context      - Get project context for agents")
+		fmt.Println("  WS   /ws                       - WebSocket for events")
 		fmt.Println("\nPress Ctrl+C to stop")
 
 		if err := srv.Start(); err != nil {

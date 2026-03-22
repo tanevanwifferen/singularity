@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"git-frontend/internal/api"
+	"git-frontend/internal/engine"
 	"git-frontend/internal/git"
+	"git-frontend/internal/project"
 	"github.com/gorilla/websocket"
 )
 
@@ -26,8 +28,10 @@ type Server struct {
 	wsUpgrader websocket.Upgrader
 	wsClients  map[*websocket.Conn]bool
 	wsMux      sync.RWMutex
-	repoPath   string
-	stopCh     chan struct{}
+	repoPath      string
+	stopCh        chan struct{}
+	engine        *engine.Engine
+	projectLoader *project.Loader
 }
 
 // New creates a new server
@@ -44,7 +48,13 @@ func New(addr string, repoPath string) *Server {
 		},
 		wsClients: make(map[*websocket.Conn]bool),
 		stopCh:    make(chan struct{}),
+		engine:    engine.New(10),
 	}
+}
+
+// SetProjectLoader sets the project loader for multi-repo support
+func (s *Server) SetProjectLoader(loader *project.Loader) {
+	s.projectLoader = loader
 }
 
 // Start starts the server
@@ -69,7 +79,12 @@ func (s *Server) Start() error {
 // Stop stops the server
 func (s *Server) Stop() error {
 	close(s.stopCh)
-	
+
+	// Shutdown agent engine
+	if s.engine != nil {
+		s.engine.Shutdown()
+	}
+
 	// Close all WebSocket connections
 	s.wsMux.Lock()
 	for conn := range s.wsClients {
@@ -111,6 +126,24 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/mr/create", withCORS(s.handleMRCreate))
 	mux.HandleFunc("/api/forge/auth", withCORS(s.handleForgeAuth))
 	
+	// Project routes
+	mux.HandleFunc("/api/project/list", withCORS(s.handleProjectList))
+	mux.HandleFunc("/api/project/load", withCORS(s.handleProjectLoad))
+	mux.HandleFunc("/api/project/status", withCORS(s.handleProjectStatus))
+	mux.HandleFunc("/api/project/refresh", withCORS(s.handleProjectRefresh))
+	mux.HandleFunc("/api/project/branch/check", withCORS(s.handleProjectBranchCheck))
+	mux.HandleFunc("/api/project/branch/compare", withCORS(s.handleProjectBranchCompare))
+	mux.HandleFunc("/api/project/context", withCORS(s.handleProjectContext))
+
+	// Agent engine routes
+	mux.HandleFunc("/api/agent/start", withCORS(s.handleAgentStart))
+	mux.HandleFunc("/api/agent/message", withCORS(s.handleAgentMessage))
+	mux.HandleFunc("/api/agent/status", withCORS(s.handleAgentStatus))
+	mux.HandleFunc("/api/agent/output", withCORS(s.handleAgentOutput))
+	mux.HandleFunc("/api/agent/kill", withCORS(s.handleAgentKill))
+	mux.HandleFunc("/api/agent/list", withCORS(s.handleAgentList))
+	mux.HandleFunc("/api/agent/stats", withCORS(s.handleAgentStats))
+
 	// WebSocket route
 	mux.HandleFunc("/ws", s.handleWebSocket)
 	

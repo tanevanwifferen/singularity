@@ -2,19 +2,35 @@ package git
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"log"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // CommitMessage holds a generated commit message
 type CommitMessage struct {
-	Type      string `json:"type"`      // feat, fix, docs, etc.
-	Scope     string `json:"scope"`     // optional scope
-	Subject   string `json:"subject"`   // short description
-	Body      string `json:"body"`      // optional detailed description
-	Footers   []string `json:"footers"` // optional footers (BREAKING CHANGE, etc.)
-	Full      string `json:"full"`      // complete commit message
+	Type      string   `json:"type"`      // feat, fix, docs, etc.
+	Scope     string   `json:"scope"`     // optional scope
+	Subject   string   `json:"subject"`   // short description
+	Body      string   `json:"body"`      // optional detailed description
+	Footers   []string `json:"footers"`   // optional footers (BREAKING CHANGE, etc.)
+	Full      string   `json:"full"`      // complete commit message
+}
+
+// claudeConfig holds configuration for Claude API calls
+var claudeConfig = struct {
+	Timeout    time.Duration
+	Enabled    bool
+	MaxRetries int
+}{
+	Timeout:    30 * time.Second, // Enterprise API limit friendly
+	Enabled:    true,
+	MaxRetries: 1,
 }
 
 // GetStagedDiff returns the diff of staged changes
@@ -49,6 +65,7 @@ func GetUnstagedDiff(path string) (string, error) {
 
 // GenerateCommitMessage creates a commit message from the staged diff
 // Uses claude -p for enterprise API limits (not full interactive session)
+// Results are cached to avoid redundant API calls for the same diff
 func GenerateCommitMessage(path string) (*CommitMessage, error) {
 	diff, err := GetStagedDiff(path)
 	if err != nil {
@@ -59,19 +76,45 @@ func GenerateCommitMessage(path string) (*CommitMessage, error) {
 		return nil, fmt.Errorf("no staged changes to commit")
 	}
 
+	// Check cache first
+	cache := GetGlobalCache()
+	cacheKey := commitMsgCacheKey(diff)
+	if cached, ok := cache.Get(cacheKey); ok {
+		if msg, ok := cached.(*CommitMessage); ok && msg != nil {
+			log.Printf("[commitmsg] cache hit for diff hash: %s", cacheKey[:16])
+			return msg, nil
+		}
+	}
+
 	// Try Claude first
 	if msg := generateWithClaude(path, diff); msg != nil {
+		log.Printf("[commitmsg] generated message via claude -p: %s: %s", msg.Type, msg.Subject)
+		cache.Set(cacheKey, msg)
 		return msg, nil
 	}
 
+	log.Printf("[commitmsg] claude unavailable, using heuristic fallback")
+
 	// Fallback to heuristic-based generation
 	msg := analyzeDiffAndGenerateMessage(diff)
+	cache.Set(cacheKey, msg)
 	return msg, nil
+}
+
+// commitMsgCacheKey generates a cache key from diff content hash
+func commitMsgCacheKey(diff string) string {
+	hash := sha256.Sum256([]byte(diff))
+	return "commitmsg:" + hex.EncodeToString(hash[:16])
 }
 
 // generateWithClaude uses claude -p to generate a commit message
 // Returns nil if Claude is unavailable or fails
 func generateWithClaude(path, diff string) *CommitMessage {
+	if !claudeConfig.Enabled {
+		log.Printf("[commitmsg] claude generation disabled by config")
+		return nil
+	}
+
 	prompt := fmt.Sprintf(`Analyze this git diff and generate a conventional commit message.
 Respond with ONLY the commit message in this format:
   type: short description
@@ -82,17 +125,41 @@ Do NOT include any explanation, markdown, or additional text.
 Diff:
 %s`, diff)
 
-	cmd := exec.Command("claude", "--print", "--permission-mode", "bypassPermissions", "-p", prompt)
+	var lastErr error
+	for attempt := 0; attempt <= claudeConfig.MaxRetries; attempt++ {
+		msg, err := attemptClaudeGenerate(path, prompt)
+		if err == nil && msg != nil {
+			return msg
+		}
+		lastErr = err
+		if err != nil {
+			log.Printf("[commitmsg] claude attempt %d failed: %v", attempt+1, err)
+		}
+	}
+
+	log.Printf("[commitmsg] claude generation failed after %d attempts: %v", claudeConfig.MaxRetries+1, lastErr)
+	return nil
+}
+
+// attemptClaudeGenerate makes a single attempt to generate a commit message using claude -p
+func attemptClaudeGenerate(path, prompt string) (*CommitMessage, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), claudeConfig.Timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "claude", "--print", "--permission-mode", "bypassPermissions", "-p", prompt)
 	cmd.Dir = path
+
 	output, err := cmd.Output()
 	if err != nil {
-		// Claude unavailable or failed - return nil for fallback
-		return nil
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("claude -p timed out after %v", claudeConfig.Timeout)
+		}
+		return nil, fmt.Errorf("claude -p failed: %w", err)
 	}
 
 	result := strings.TrimSpace(string(output))
 	if result == "" {
-		return nil
+		return nil, fmt.Errorf("empty response from claude -p")
 	}
 
 	// Parse the output into type and subject
@@ -100,21 +167,44 @@ Diff:
 	if len(lines) < 2 {
 		// Couldn't parse conventional format, use raw output
 		return &CommitMessage{
-			Type:    detectCommitType(diff),
+			Type:    detectCommitType(prompt), // Use prompt to detect since we don't have diff here
 			Subject: result,
 			Full:    result,
-		}
+		}, nil
 	}
 
 	msgType := strings.TrimSpace(lines[0])
 	subject := strings.TrimSpace(lines[1])
 
+	// Validate the type is conventional
+	if !isValidCommitType(msgType) {
+		log.Printf("[commitmsg] invalid commit type from claude: %q, using 'feat'", msgType)
+		msgType = "feat"
+	}
+
 	return &CommitMessage{
 		Type:    msgType,
 		Subject: subject,
-		Body:    generateBody(diff),
+		Body:    "", // Claude didn't provide body
 		Full:    result,
+	}, nil
+}
+
+// isValidCommitType checks if a commit type is a valid conventional commit type
+func isValidCommitType(t string) bool {
+	validTypes := map[string]bool{
+		"feat":    true,
+		"fix":     true,
+		"docs":    true,
+		"style":   true,
+		"refactor": true,
+		"test":    true,
+		"chore":   true,
+		"perf":    true,
+		"ci":      true,
+		"build":   true,
 	}
+	return validTypes[t]
 }
 
 // analyzeDiffAndGenerateMessage creates a commit message from diff content
@@ -202,7 +292,7 @@ func detectScope(diff string) string {
 func generateSubject(diff, msgType string) string {
 	// Extract changed file names
 	files := extractChangedFiles(diff)
-	
+
 	if len(files) == 1 {
 		// Single file change
 		file := files[0]
@@ -240,7 +330,7 @@ func generateBody(diff string) string {
 func extractChangedFiles(diff string) []string {
 	var files []string
 	lines := strings.Split(diff, "\n")
-	
+
 	for _, line := range lines {
 		if strings.HasPrefix(line, "+++ b/") {
 			file := strings.TrimPrefix(line, "+++ b/")

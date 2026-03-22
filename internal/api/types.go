@@ -67,3 +67,59 @@ type APIResponse struct {
 	Data    interface{} `json:"data,omitempty"`
 	Error   string      `json:"error,omitempty"`
 }
+
+// Agent Engine API types
+
+// AgentStartRequest is the request for starting a new agent
+type AgentStartRequest struct {
+	ProjectPath  string   `json:"project_path"`
+	Task         string   `json:"task"`
+	Model        string   `json:"model,omitempty"`
+	AllowedTools []string `json:"allowed_tools,omitempty"`
+	MaxTurns     int      `json:"max_turns,omitempty"`
+	TimeoutSecs  int      `json:"timeout_secs,omitempty"`
+}
+
+// AgentMessageRequest is the request for sending a message to an agent
+type AgentMessageRequest struct {
+	SessionID string `json:"session_id"`
+	Message   string `json:"message"`
+}
+
+// AgentQueryRequest is the request for querying an agent
+type AgentQueryRequest struct {
+	SessionID string `json:"session_id"`
+	Offset    int    `json:"offset,omitempty"`
+}
+
+// WSEvent types for agent engine
+const (
+	WSEventAgentStarted  = "agent_started"
+	WSEventAgentOutput   = "agent_output"
+	WSEventAgentComplete = "agent_complete"
+	WSEventAgentError    = "agent_error"
+)
+
+// WSEvent types for project updates
+const (
+	WSEventProjectUpdate = "project_update"
+)
+
+// Project API types
+
+// ProjectListResponse is the response for listing available projects
+type ProjectListResponse struct {
+	Projects []string `json:"projects"`
+	Loaded   []string `json:"loaded"`
+}
+
+// ProjectLoadRequest is the request for loading a project
+type ProjectLoadRequest struct {
+	Key string `json:"key"`
+}
+
+// ProjectBranchRequest is the request for cross-repo branch operations
+type ProjectBranchRequest struct {
+	Key    string `json:"key"`
+	Branch string `json:"branch"`
+}
