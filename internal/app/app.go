@@ -111,6 +111,10 @@ func (m *Model) initRouter() {
 	logView := views.NewLogView(m.repoPath)
 	router.Register("Log", logView)
 
+	// Register pipeline dashboard view
+	pipelineView := views.NewPipelineView(m.repoPath)
+	router.Register("Pipeline", pipelineView)
+
 	// Register stub views for testing routing
 	stub1 := NewStubView1(m.repoPath)
 	stub2 := NewStubView2(m.repoPath)
