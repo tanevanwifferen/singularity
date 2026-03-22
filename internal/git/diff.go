@@ -130,3 +130,282 @@ func GetChangedFiles(repoPath, branchA, branchB string) ([]string, error) {
 
 	return files, nil
 }
+
+// StagedDiff holds file-level diff statistics for staged changes
+type StagedDiff struct {
+	FilesChanged   int          `json:"files_changed"`
+	TotalAdditions int          `json:"total_additions"`
+	TotalDeletions int          `json:"total_deletions"`
+	Files          []FileChange `json:"files"`
+}
+
+// UnstagedDiff holds file-level diff statistics for unstaged changes
+type UnstagedDiff struct {
+	FilesChanged   int          `json:"files_changed"`
+	TotalAdditions int          `json:"total_additions"`
+	TotalDeletions int          `json:"total_deletions"`
+	Files          []FileChange `json:"files"`
+}
+
+// GetStagedFilesDiff returns file-level diff statistics for staged changes
+func GetStagedFilesDiff(repoPath string) (*StagedDiff, error) {
+	// Run git diff --cached --numstat to get staged additions/deletions per file
+	cmd := exec.Command("git", "-C", repoPath, "diff", "--cached", "--numstat")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get staged diff stats: %w", err)
+	}
+
+	return parseNumstatOutput(string(output))
+}
+
+// GetUnstagedFilesDiff returns file-level diff statistics for unstaged changes
+func GetUnstagedFilesDiff(repoPath string) (*UnstagedDiff, error) {
+	// Run git diff --numstat to get unstaged additions/deletions per file
+	cmd := exec.Command("git", "-C", repoPath, "diff", "--numstat")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get unstaged diff stats: %w", err)
+	}
+
+	diff, err := parseNumstatOutput(string(output))
+	if err != nil {
+		return nil, err
+	}
+
+	return &UnstagedDiff{
+		FilesChanged:   diff.FilesChanged,
+		TotalAdditions: diff.TotalAdditions,
+		TotalDeletions: diff.TotalDeletions,
+		Files:          diff.Files,
+	}, nil
+}
+
+// GetStagedFileDiff returns the actual diff content for a specific staged file
+func GetStagedFileDiff(repoPath, filePath string) (string, error) {
+	cmd := exec.Command("git", "-C", repoPath, "diff", "--cached", "--", filePath)
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get staged file diff: %w", err)
+	}
+	return string(output), nil
+}
+
+// GetUnstagedFileDiff returns the actual diff content for a specific unstaged file
+func GetUnstagedFileDiff(repoPath, filePath string) (string, error) {
+	cmd := exec.Command("git", "-C", repoPath, "diff", "--", filePath)
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get unstaged file diff: %w", err)
+	}
+	return string(output), nil
+}
+
+// parseNumstatOutput parses git diff --numstat output into FileChange slice
+func parseNumstatOutput(output string) (*StagedDiff, error) {
+	var files []FileChange
+	totalAdditions := 0
+	totalDeletions := 0
+
+	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+
+		// Parse numstat format: "\t\t" for binary files, "additions\tdeletions\tpath" otherwise
+		parts := strings.Split(line, "\t")
+		if len(parts) < 3 {
+			continue
+		}
+
+		file := FileChange{}
+
+		// Handle binary files (shown as -\t-\tfilename)
+		if parts[0] == "-" && parts[1] == "-" {
+			file.Status = "M" // Binary modified
+			file.NewPath = parts[2]
+			files = append(files, file)
+			continue
+		}
+
+		// Parse additions
+		if parts[0] != "-" {
+			additions, err := strconv.Atoi(parts[0])
+			if err != nil {
+				continue
+			}
+			file.Additions = additions
+			totalAdditions += additions
+		}
+
+		// Parse deletions
+		if parts[1] != "-" {
+			deletions, err := strconv.Atoi(parts[1])
+			if err != nil {
+				continue
+			}
+			file.Deletions = deletions
+			totalDeletions += deletions
+		}
+
+		file.NewPath = parts[2]
+		file.Status = "M" // Default to modified
+
+		files = append(files, file)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read diff output: %w", err)
+	}
+
+	return &StagedDiff{
+		FilesChanged:   len(files),
+		TotalAdditions: totalAdditions,
+		TotalDeletions: totalDeletions,
+		Files:          files,
+	}, nil
+}
+
+// GetFileDiff returns the diff between two branches for a specific file
+func GetFileDiff(repoPath, branchA, branchB, filePath string) (string, error) {
+	cmd := exec.Command("git", "-C", repoPath, "diff", fmt.Sprintf("%s..%s", branchA, branchB), "--", filePath)
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get file diff: %w", err)
+	}
+	return string(output), nil
+}
+
+// WorkdirStatus holds status info for a file in the working directory
+type WorkdirStatus struct {
+	Path         string // File path
+	StagedStatus string // Status in staging area (A/M/D/R/?)
+	UnstagedStatus string // Status in working tree (A/M/D/R/?)
+	StagedAdditions int
+	StagedDeletions int
+	UnstagedAdditions int
+	UnstagedDeletions int
+}
+
+// WorkdirDiff holds all working directory changes
+type WorkdirDiff struct {
+	Files        []WorkdirStatus
+	TotalStagedAdds int
+	TotalStagedDels int
+	TotalUnstagedAdds int
+	TotalUnstagedDels int
+}
+
+// GetWorkdirStatus returns the status of all changed files in the working directory
+func GetWorkdirStatus(repoPath string) (*WorkdirDiff, error) {
+	// Get staged diff stats
+	stagedDiff, err := GetStagedFilesDiff(repoPath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get unstaged diff stats
+	unstagedDiff, err := GetUnstagedFilesDiff(repoPath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get git status for accurate status indicators
+	cmd := exec.Command("git", "-C", repoPath, "status", "--porcelane=v1")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get workdir status: %w", err)
+	}
+
+	// Build a map of file paths to their status
+	statusMap := make(map[string]*WorkdirStatus)
+
+	// First, add all staged files
+	for _, f := range stagedDiff.Files {
+		statusMap[f.NewPath] = &WorkdirStatus{
+			Path:              f.NewPath,
+			StagedStatus:      f.Status,
+			StagedAdditions:   f.Additions,
+			StagedDeletions:   f.Deletions,
+		}
+	}
+
+	// Then, add/merge unstaged files
+	for _, f := range unstagedDiff.Files {
+		if existing, ok := statusMap[f.NewPath]; ok {
+			existing.UnstagedStatus = f.Status
+			existing.UnstagedAdditions = f.Additions
+			existing.UnstagedDeletions = f.Deletions
+		} else {
+			statusMap[f.NewPath] = &WorkdirStatus{
+				Path:                f.NewPath,
+				UnstagedStatus:      f.Status,
+				UnstagedAdditions:   f.Additions,
+				UnstagedDeletions:   f.Deletions,
+			}
+		}
+	}
+
+	// Parse porcelain status
+	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+
+		// Porcelain format: XY path
+		// X = staged status, Y = unstaged status
+		// M = modified, A = added, D = deleted, R = renamed, ?? = untracked
+		if len(line) < 3 {
+			continue
+		}
+
+		staged := string(line[0])
+		unstaged := string(line[1])
+		path := line[3:] // Skip XY and space
+
+		// Update status map entry if it exists
+		if existing, ok := statusMap[path]; ok {
+			if staged != " " && staged != "?" {
+				existing.StagedStatus = staged
+			}
+			if unstaged != " " && unstaged != "?" {
+				existing.UnstagedStatus = unstaged
+			}
+		} else {
+			// New file that might only be unstaged
+			statusMap[path] = &WorkdirStatus{
+				Path: path,
+			}
+			if staged != " " && staged != "?" {
+				statusMap[path].StagedStatus = staged
+			}
+			if unstaged != " " && unstaged != "?" {
+				statusMap[path].UnstagedStatus = unstaged
+			}
+		}
+	}
+
+	// Convert to slice and calculate totals
+	var files []WorkdirStatus
+	var totalStagedAdds, totalStagedDels, totalUnstagedAdds, totalUnstagedDels int
+
+	for _, f := range statusMap {
+		files = append(files, *f)
+		totalStagedAdds += f.StagedAdditions
+		totalStagedDels += f.StagedDeletions
+		totalUnstagedAdds += f.UnstagedAdditions
+		totalUnstagedDels += f.UnstagedDeletions
+	}
+
+	return &WorkdirDiff{
+		Files:              files,
+		TotalStagedAdds:    totalStagedAdds,
+		TotalStagedDels:    totalStagedDels,
+		TotalUnstagedAdds:  totalUnstagedAdds,
+		TotalUnstagedDels:  totalUnstagedDels,
+	}, nil
+}
