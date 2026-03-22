@@ -95,6 +95,10 @@ func (m *Model) initRouter() {
 	branchCompareView := views.NewBranchComparisonView(m.repoPath)
 	router.Register("BranchCompare", branchCompareView)
 
+	// Register stash view
+	stashView := views.NewStashView(m.repoPath)
+	router.Register("Stashes", stashView)
+
 	// Register stub views for testing routing
 	stub1 := NewStubView1(m.repoPath)
 	stub2 := NewStubView2(m.repoPath)

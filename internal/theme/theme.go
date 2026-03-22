@@ -59,6 +59,11 @@ type Theme struct {
 	DashboardErrorStyle    lipgloss.Style
 	DashboardAccentStyle   lipgloss.Style
 
+	// Stash styles
+	StashStyle         lipgloss.Style
+	SelectedStashStyle lipgloss.Style
+	MutedTextStyle     lipgloss.Style
+
 	// Layout styles
 	HeaderStyle lipgloss.Style
 	BodyStyle   lipgloss.Style
@@ -136,6 +141,17 @@ var darkTheme = Theme{
 
 	DashboardAccentStyle: lipgloss.NewStyle().
 				Foreground(lipgloss.Color("220")),
+
+	StashStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("227")),
+
+	SelectedStashStyle: lipgloss.NewStyle().
+				Foreground(lipgloss.Color("227")).
+				Background(lipgloss.Color("235")).
+				Bold(true),
+
+	MutedTextStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241")),
 
 	HeaderStyle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("205")).
@@ -222,6 +238,17 @@ var lightTheme = Theme{
 
 	DashboardAccentStyle: lipgloss.NewStyle().
 				Foreground(lipgloss.Color("214")),
+
+	StashStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("166")),
+
+	SelectedStashStyle: lipgloss.NewStyle().
+				Foreground(lipgloss.Color("166")).
+				Background(lipgloss.Color("252")).
+				Bold(true),
+
+	MutedTextStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("245")),
 
 	HeaderStyle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("129")).
