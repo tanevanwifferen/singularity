@@ -75,17 +75,15 @@ func (m *Model) loadRepo() {
 
 // initRouter initializes the view router with available views.
 func (m *Model) initRouter() {
-	// Create the dashboard view as the first view
+	// Create the overview view as the first view (landing page)
+	overview := NewOverviewView(m.repoPath)
+	router := NewRouter(overview, "Overview")
+
+	// Register branch dashboard view
 	dashboard, err := NewBranchDashboard(m.repoPath)
-	if err != nil {
-		// Fall back to stub views if dashboard fails
-		stub1 := NewStubView1(m.repoPath)
-		m.router = NewRouter(stub1, "stub1")
-		stub2 := NewStubView2(m.repoPath)
-		m.router.Register("stub2", stub2)
-		return
+	if err == nil {
+		router.Register("Branches", dashboard)
 	}
-	router := NewRouter(dashboard, "Branches")
 
 	// Register stub views for testing routing
 	stub1 := NewStubView1(m.repoPath)
