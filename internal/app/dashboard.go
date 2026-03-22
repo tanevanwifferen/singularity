@@ -3,36 +3,8 @@ package app
 import (
 	"fmt"
 
-	"github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"git-frontend/internal/git"
-)
-
-// DashboardStyle defines the visual style for the dashboard
-var (
-	dashboardTitleStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("205")).
-				Bold(true)
-
-	dashboardBranchStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("86"))
-
-	dashboardSelectedBranchStyle = lipgloss.NewStyle().
-					Foreground(lipgloss.Color("220")).
-					Background(lipgloss.Color("235")).
-					Bold(true)
-
-	dashboardStatsStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("244"))
-
-	dashboardCommitStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("240"))
-
-	dashboardErrorStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("196"))
-
-	dashboardAccentStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("220"))
+	"github.com/charmbracelet/bubbletea"
 )
 
 // BranchDashboard is the main branch dashboard component
@@ -89,6 +61,8 @@ func (d *BranchDashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "esc":
 			d.comparing = false
+		case "t":
+			ToggleTheme()
 		case "q", "ctrl+c":
 			return d, tea.Quit
 		}
@@ -101,44 +75,46 @@ func (d *BranchDashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the dashboard
 func (d *BranchDashboard) View() string {
+	theme := GetTheme()
+
 	if d.err != nil {
-		return dashboardErrorStyle.Render(fmt.Sprintf("Error: %v", d.err))
+		return theme.DashboardErrorStyle.Render(fmt.Sprintf("Error: %v", d.err))
 	}
 
 	var s string
 
 	// Header
-	s += dashboardTitleStyle.Render(" Git Frontend - Branch Dashboard ")
+	s += theme.DashboardTitle.Render(" Git Frontend - Branch Dashboard ")
 	s += "\n\n"
 
 	// Repo info
-	s += dashboardStatsStyle.Render(fmt.Sprintf(" Repository: %s ", d.repo.Path))
+	s += theme.StatsStyle.Render(fmt.Sprintf(" Repository: %s ", d.repo.Path))
 	s += "\n"
-	s += dashboardStatsStyle.Render(fmt.Sprintf(" Branch: %s ", d.repo.CurrentBranch))
+	s += theme.StatsStyle.Render(fmt.Sprintf(" Branch: %s ", d.repo.CurrentBranch))
 	if d.repo.IsDirty {
-		s += dashboardErrorStyle.Render(" ●")
+		s += theme.DashboardErrorStyle.Render(" ●")
 	}
 	s += "\n\n"
 
 	// Branches header
-	s += dashboardStatsStyle.Render(" Branches ")
+	s += theme.StatsStyle.Render(" Branches ")
 	s += "\n"
-	s += dashboardStatsStyle.Render(" ─────────────────────────────────────────────── ")
+	s += theme.StatsStyle.Render(" ─────────────────────────────────────────────── ")
 	s += "\n"
 
 	// List branches
 	for i, branch := range d.branches {
 		prefix := "  "
 		if i == d.selected {
-			prefix = dashboardSelectedBranchStyle.Render(" >")
+			prefix = theme.SelectedBranchStyle.Render(" >")
 		}
 
 		branchStr := fmt.Sprintf("%s %s", prefix, branch.Name)
 
 		if i == d.selected {
-			branchStr = dashboardSelectedBranchStyle.Render(branchStr)
+			branchStr = theme.SelectedBranchStyle.Render(branchStr)
 		} else {
-			branchStr = dashboardBranchStyle.Render(branchStr)
+			branchStr = theme.BranchStyle.Render(branchStr)
 		}
 
 		s += branchStr
@@ -148,9 +124,9 @@ func (d *BranchDashboard) View() string {
 			behindAhead := fmt.Sprintf(" ↑%d ↓%d (%s)",
 				branch.Ahead, branch.Behind, branch.Upstream)
 			if branch.Ahead > 0 || branch.Behind > 0 {
-				s += dashboardStatsStyle.Render(behindAhead)
+				s += theme.StatsStyle.Render(behindAhead)
 			} else {
-				s += dashboardStatsStyle.Render(fmt.Sprintf(" (%s)", branch.Upstream))
+				s += theme.StatsStyle.Render(fmt.Sprintf(" (%s)", branch.Upstream))
 			}
 		}
 
@@ -160,54 +136,54 @@ func (d *BranchDashboard) View() string {
 	// Comparison view
 	if d.comparing && d.compareIdx < len(d.branches) {
 		s += "\n"
-		s += dashboardStatsStyle.Render(" ─────────────────────────────────────────────── ")
+		s += theme.StatsStyle.Render(" ─────────────────────────────────────────────── ")
 		s += "\n"
-		s += dashboardTitleStyle.Render(" Branch Comparison ")
+		s += theme.DashboardTitle.Render(" Branch Comparison ")
 		s += "\n\n"
 
 		branch := d.branches[d.compareIdx]
 		comparison, err := git.CompareBranches(d.repo.Path, d.repo.CurrentBranch, branch.Name)
 		if err != nil {
-			s += dashboardErrorStyle.Render(fmt.Sprintf(" Error: %v", err))
+			s += theme.DashboardErrorStyle.Render(fmt.Sprintf(" Error: %v", err))
 		} else {
-			s += dashboardStatsStyle.Render(fmt.Sprintf(" %s...%s:", d.repo.CurrentBranch, branch.Name))
+			s += theme.StatsStyle.Render(fmt.Sprintf(" %s...%s:", d.repo.CurrentBranch, branch.Name))
 			s += "\n"
 			if comparison.Diverged {
-				s += dashboardStatsStyle.Render(fmt.Sprintf("   Diverged: %d ahead, %d behind",
+				s += theme.StatsStyle.Render(fmt.Sprintf("   Diverged: %d ahead, %d behind",
 					comparison.Ahead, comparison.Behind))
 			} else if comparison.Ahead > 0 {
-				s += dashboardStatsStyle.Render(fmt.Sprintf("   Ahead by %d commits", comparison.Ahead))
+				s += theme.StatsStyle.Render(fmt.Sprintf("   Ahead by %d commits", comparison.Ahead))
 			} else if comparison.Behind > 0 {
-				s += dashboardStatsStyle.Render(fmt.Sprintf("   Behind by %d commits", comparison.Behind))
+				s += theme.StatsStyle.Render(fmt.Sprintf("   Behind by %d commits", comparison.Behind))
 			} else {
-				s += dashboardStatsStyle.Render("   Identical")
+				s += theme.StatsStyle.Render("   Identical")
 			}
 
 			// Also show tree comparison
 			s += "\n\n"
 			treeComp, treeErr := git.CompareBranchesByTree(d.repo.Path, d.repo.CurrentBranch, branch.Name)
 			if treeErr != nil {
-				s += dashboardErrorStyle.Render(fmt.Sprintf("   Tree comparison error: %v", treeErr))
+				s += theme.DashboardErrorStyle.Render(fmt.Sprintf("   Tree comparison error: %v", treeErr))
 			} else {
-				s += dashboardStatsStyle.Render(" Tree Status: ")
+				s += theme.StatsStyle.Render(" Tree Status: ")
 				if treeComp.SquashDetected {
-					s += dashboardAccentStyle.Render(" Squash merge detected!")
+					s += theme.DashboardAccentStyle.Render(" Squash merge detected!")
 				} else if treeComp.TreeDiverged {
-					s += dashboardStatsStyle.Render(" Trees differ")
+					s += theme.StatsStyle.Render(" Trees differ")
 				} else {
-					s += dashboardStatsStyle.Render(" Trees identical")
+					s += theme.StatsStyle.Render(" Trees identical")
 				}
 			}
 		}
 		s += "\n\n"
-		s += dashboardStatsStyle.Render(" Press ESC to close comparison ")
+		s += theme.StatsStyle.Render(" Press ESC to close comparison ")
 	}
 
 	// Footer
 	s += "\n"
-	s += dashboardStatsStyle.Render(" ─────────────────────────────────────────────── ")
+	s += theme.StatsStyle.Render(" ─────────────────────────────────────────────── ")
 	s += "\n"
-	s += dashboardStatsStyle.Render(" ↑/k: Select   Enter: Compare   q: Quit ")
+	s += theme.StatsStyle.Render(" ↑/k: Select   Enter: Compare   t: Toggle Theme   q: Quit ")
 
 	return s
 }
@@ -225,6 +201,11 @@ func (d *BranchDashboard) GetRepo() *git.RepoInfo {
 	return d.repo
 }
 
+// ShortHelp returns a short help string for the view.
+func (d *BranchDashboard) ShortHelp() string {
+	return "↑/k: Select  Enter: Compare  t: Theme  q: Quit"
+}
+
 // Refresh reloads repository data
 func (d *BranchDashboard) Refresh() error {
 	repo, err := git.OpenRepo(d.repo.Path)
@@ -237,4 +218,10 @@ func (d *BranchDashboard) Refresh() error {
 		d.selected = len(d.branches) - 1
 	}
 	return nil
+}
+
+// SetSize updates the dashboard dimensions.
+func (d *BranchDashboard) SetSize(width, height int) {
+	d.width = width
+	d.height = height
 }
