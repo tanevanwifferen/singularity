@@ -99,6 +99,10 @@ func (m *Model) initRouter() {
 	stashView := views.NewStashView(m.repoPath)
 	router.Register("Stashes", stashView)
 
+	// Register rebase planner view
+	rebaseView := views.NewRebaseView(m.repoPath)
+	router.Register("Rebase", rebaseView)
+
 	// Register stub views for testing routing
 	stub1 := NewStubView1(m.repoPath)
 	stub2 := NewStubView2(m.repoPath)
