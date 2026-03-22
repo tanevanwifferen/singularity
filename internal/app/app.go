@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"git-frontend/internal/app/views"
+	"git-frontend/internal/engine"
 	"git-frontend/internal/git"
 	"git-frontend/internal/theme"
 
@@ -20,6 +21,7 @@ type Model struct {
 	quitting   bool
 	repoPath   string
 	repoInfo   *git.RepoInfo
+	engine     *engine.Engine
 	statusMsg  string
 	errorMsg   string
 	router     *Router
@@ -37,6 +39,29 @@ func New() *Model {
 func (m *Model) SetRepoPath(path string) {
 	m.repoPath = path
 	m.loadRepo()
+}
+
+// SetEngine sets the agent engine (for server mode)
+func (m *Model) SetEngine(eng *engine.Engine) {
+	m.engine = eng
+	if m.router != nil {
+		// Update the AgentView if it exists
+		if agentView := m.getAgentView(); agentView != nil {
+			agentView.SetEngine(eng)
+		}
+	}
+}
+
+// getAgentView returns the AgentView from the router if it exists
+func (m *Model) getAgentView() *views.AgentView {
+	if m.router == nil {
+		return nil
+	}
+	view := m.router.ActiveView()
+	if av, ok := view.(*views.AgentView); ok {
+		return av
+	}
+	return nil
 }
 
 // loadRepo loads the repository
@@ -118,6 +143,10 @@ func (m *Model) initRouter() {
 	// Register PR/MR creation view
 	prView := views.NewPRView(m.repoPath)
 	router.Register("CreatePR", prView)
+
+	// Register agent console view (for server mode)
+	agentView := views.NewAgentView(m.repoPath, m.engine)
+	router.Register("Agents", agentView)
 
 	// Register stub views for testing routing
 	stub1 := NewStubView1(m.repoPath)
