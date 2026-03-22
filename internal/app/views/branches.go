@@ -5,12 +5,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"git-frontend/internal/app/components"
 	"git-frontend/internal/git"
 	"git-frontend/internal/theme"
 
 	"github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // BranchesView displays a filterable list of branches with comparison capabilities.
@@ -37,14 +39,22 @@ type BranchesView struct {
 	showNewBranch  bool
 	newBranchName  string
 	newBranchInput components.Filter[byte]
+
+	// CI status cache
+	pipelines    map[string]*git.PipelineInfo
+	cacheTime    time.Time
+	cacheDuration time.Duration
+	ciLoading    bool
 }
 
 // NewBranchesView creates a new branches view.
 func NewBranchesView(repoPath string) *BranchesView {
 	v := &BranchesView{
-		repoPath: repoPath,
-		width:    80,
-		height:   24,
+		repoPath:     repoPath,
+		width:        80,
+		height:       24,
+		pipelines:    make(map[string]*git.PipelineInfo),
+		cacheDuration: 2 * time.Minute, // Cache CI status for 2 minutes
 	}
 
 	// Initialize the filter with branch items
@@ -80,7 +90,36 @@ func (v *BranchesView) loadData() {
 	// Update filter with new branch list
 	v.filter.SetItems(v.branches)
 
+	// Load CI statuses (use cache if fresh)
+	v.loadCIPipelineStatuses()
+
 	v.loading = false
+}
+
+// loadCIPipelineStatuses loads CI pipeline statuses with caching
+func (v *BranchesView) loadCIPipelineStatuses() {
+	// Check if cache is still valid
+	if time.Since(v.cacheTime) < v.cacheDuration && len(v.pipelines) > 0 {
+		return
+	}
+
+	// Check for forge auth first
+	auth, err := git.DetectForgeAuth()
+	if err != nil || !auth.Valid {
+		return
+	}
+
+	// Fetch pipeline statuses for all branches
+	v.ciLoading = true
+	pipelines, err := git.GetBranchPipelineStatuses(v.repoPath, v.branches)
+	if err != nil {
+		v.ciLoading = false
+		return
+	}
+
+	v.pipelines = pipelines
+	v.cacheTime = time.Now()
+	v.ciLoading = false
 }
 
 // Update handles update events.
@@ -106,6 +145,11 @@ func (v *BranchesView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				v.loadData()
 				return RefreshDoneMsg{}
 			}
+		case "R":
+			// Force refresh CI statuses (clear cache)
+			v.cacheTime = time.Time{} // Force cache refresh
+			v.loadCIPipelineStatuses()
+			return v, nil
 		case "/":
 			// Activate filter mode
 			if v.filter != nil {
@@ -291,6 +335,12 @@ func (v *BranchesView) renderBranchItem(branch git.BranchInfo, index int, select
 		line.WriteString(th.DashboardAccentStyle.Render(" (current)"))
 	}
 
+	// CI status badge
+	ciStatus := v.getCIStatusIcon(branch.Name)
+	if ciStatus != "" {
+		line.WriteString(ciStatus)
+	}
+
 	// Ahead/behind with color coding
 	if branch.Upstream != "" {
 		line.WriteString(fmt.Sprintf(" → %s", th.StatsStyle.Render(branch.Upstream)))
@@ -306,6 +356,45 @@ func (v *BranchesView) renderBranchItem(branch git.BranchInfo, index int, select
 	}
 
 	return line.String()
+}
+
+// getCIStatusIcon returns the CI status icon and color for a branch
+func (v *BranchesView) getCIStatusIcon(branchName string) string {
+	th := theme.GetTheme()
+	info, ok := v.pipelines[branchName]
+
+	if !ok || info == nil || !info.HasPipeline {
+		return th.MutedTextStyle.Render(" ○")
+	}
+
+	var icon string
+	var style lipgloss.Style
+
+	switch info.Status {
+	case git.PipelineSuccess:
+		icon = " ✓"
+		style = lipgloss.NewStyle().Foreground(th.Info)
+	case git.PipelineFailed:
+		icon = " ✗"
+		style = lipgloss.NewStyle().Foreground(th.Error)
+	case git.PipelineRunning:
+		icon = " ●"
+		style = lipgloss.NewStyle().Foreground(th.Warning)
+	case git.PipelinePending:
+		icon = " ○"
+		style = th.MutedTextStyle
+	case git.PipelineCanceled:
+		icon = " ⊘"
+		style = th.MutedTextStyle
+	case git.PipelineSkipped:
+		icon = " ⊝"
+		style = th.MutedTextStyle
+	default:
+		icon = " ○"
+		style = th.MutedTextStyle
+	}
+
+	return style.Render(icon)
 }
 
 // View renders the branches view.
@@ -351,7 +440,7 @@ func (v *BranchesView) View() string {
 		s.WriteString(v.filter.View())
 	} else {
 		// Show filter hint first line
-		s.WriteString(th.Help.Render(" Press / to search • ↑/k: Select • Enter: Compare • c: Checkout • d: Delete • n: New "))
+		s.WriteString(th.Help.Render(" Press / to search • ↑/k: Select • Enter: Compare • c: Checkout • d: Delete • n: New • R: Refresh CI "))
 		s.WriteString("\n\n")
 		s.WriteString(v.filter.View())
 	}
@@ -417,14 +506,14 @@ func (v *BranchesView) View() string {
 	s.WriteString("\n")
 	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
 	s.WriteString("\n")
-	s.WriteString(th.Help.Render(" r: Refresh   /: Search   ↑↓: Navigate   Enter: Compare   c: Checkout   d: Delete   n: Create "))
+	s.WriteString(th.Help.Render(" r: Refresh   /: Search   ↑↓: Navigate   Enter: Compare   c: Checkout   d: Delete   n: Create   R: Refresh CI "))
 
 	return s.String()
 }
 
 // ShortHelp returns a short help string.
 func (v *BranchesView) ShortHelp() string {
-	return "/: Search  ↑↓: Navigate  Enter: Compare  c: Checkout  d: Delete  n: Create"
+	return "/: Search  ↑↓: Navigate  Enter: Compare  c: Checkout  d: Delete  n: Create  R: Refresh CI"
 }
 
 // SetSize updates the view dimensions.
@@ -451,6 +540,7 @@ func (v *BranchesView) Refresh() error {
 func (v *BranchesView) KeyBindings() []components.KeyBinding {
 	return []components.KeyBinding{
 		{Key: "r", Description: "Refresh branch list"},
+		{Key: "R", Description: "Refresh CI statuses"},
 		{Key: "/", Description: "Activate search filter"},
 		{Key: "↑/k", Description: "Navigate up"},
 		{Key: "↓/j", Description: "Navigate down"},
