@@ -115,6 +115,10 @@ func (m *Model) initRouter() {
 	pipelineView := views.NewPipelineView(m.repoPath)
 	router.Register("Pipeline", pipelineView)
 
+	// Register PR/MR creation view
+	prView := views.NewPRView(m.repoPath)
+	router.Register("CreatePR", prView)
+
 	// Register stub views for testing routing
 	stub1 := NewStubView1(m.repoPath)
 	stub2 := NewStubView2(m.repoPath)
