@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"git-frontend/internal/git"
@@ -18,6 +19,14 @@ const (
 	DiffModeBranch DiffViewMode = iota
 	DiffModeWorkdir
 )
+
+// DiffLine represents a single line in a parsed diff
+type DiffLine struct {
+	Content    string
+	LineType   string // "+", "-", " ", "@" (hunk header), "" (header)
+	OldLineNum int    // Line number in old file (0 if not applicable)
+	NewLineNum int    // Line number in new file (0 if not applicable)
+}
 
 // DiffView provides a split-panel diff viewer interface.
 // Left panel: scrollable file list with status indicators
@@ -51,6 +60,13 @@ type DiffView struct {
 
 	// Current file diff content
 	currentDiff string
+
+	// Parsed diff lines for viewport scrolling
+	parsedDiffLines []DiffLine
+	diffScrollOffset int
+
+	// Navigation mode: when viewing diff content, j/k navigate diff lines
+	diffNavMode bool
 }
 
 // NewDiffView creates a new diff view for branch comparison.
@@ -174,16 +190,50 @@ func (v *DiffView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "up", "k":
-			if v.selectedIdx > 0 {
+			if v.showDiff && v.diffNavMode {
+				// Scroll up in diff view
+				if v.diffScrollOffset > 0 {
+					v.diffScrollOffset--
+				}
+			} else if v.selectedIdx > 0 {
 				v.selectedIdx--
 				v.showDiff = false
 				v.currentDiff = ""
+				v.parsedDiffLines = nil
+				v.diffScrollOffset = 0
+				v.diffNavMode = false
 			}
 		case "down", "j":
-			if v.selectedIdx < len(v.files)-1 {
+			if v.showDiff && v.diffNavMode {
+				// Scroll down in diff view
+				maxScroll := len(v.parsedDiffLines) - (v.height - 20)
+				if maxScroll < 0 {
+					maxScroll = 0
+				}
+				if v.diffScrollOffset < maxScroll {
+					v.diffScrollOffset++
+				}
+			} else if v.selectedIdx < len(v.files)-1 {
 				v.selectedIdx++
 				v.showDiff = false
 				v.currentDiff = ""
+				v.parsedDiffLines = nil
+				v.diffScrollOffset = 0
+				v.diffNavMode = false
+			}
+		case "g":
+			// g = go to top
+			if v.showDiff && v.diffNavMode {
+				v.diffScrollOffset = 0
+			}
+		case "G":
+			// G = go to bottom
+			if v.showDiff && v.diffNavMode {
+				maxScroll := len(v.parsedDiffLines) - (v.height - 20)
+				if maxScroll < 0 {
+					maxScroll = 0
+				}
+				v.diffScrollOffset = maxScroll
 			}
 		case "enter":
 			// Toggle diff content view
@@ -191,17 +241,28 @@ func (v *DiffView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if v.showDiff {
 					v.showDiff = false
 					v.currentDiff = ""
+					v.parsedDiffLines = nil
+					v.diffScrollOffset = 0
+					v.diffNavMode = false
 				} else {
 					v.loadFileDiff()
 					v.showDiff = true
+					v.diffNavMode = true
+					v.diffScrollOffset = 0
 				}
 			}
 		case "tab":
 			// Switch focus between file list and diff
 			v.focusFileList = !v.focusFileList
+			if v.showDiff {
+				v.diffNavMode = !v.focusFileList
+			}
 		case "shift+tab":
 			// Also switch focus (reverse)
 			v.focusFileList = !v.focusFileList
+			if v.showDiff {
+				v.diffNavMode = !v.focusFileList
+			}
 		case "r":
 			// Refresh
 			v.loading = true
@@ -210,9 +271,14 @@ func (v *DiffView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return RefreshDoneMsg{}
 			}
 		case "esc":
-			// Close diff view - signal parent to switch view
-			return v, func() tea.Msg {
-				return ViewChangeMsg{ViewName: "Overview"}
+			// Close diff content and return to file list (don't exit to Overview)
+			if v.showDiff {
+				v.showDiff = false
+				v.currentDiff = ""
+				v.parsedDiffLines = nil
+				v.diffScrollOffset = 0
+				v.diffNavMode = false
+				v.focusFileList = true
 			}
 		case "1":
 			// Switch to staged changes mode (workdir only)
@@ -248,6 +314,7 @@ func (v *DiffView) loadFileDiff() {
 			return
 		}
 		v.currentDiff = diff
+		v.parsedDiffLines = v.parseDiff(diff)
 	} else {
 		// Workdir mode - check if file is staged or unstaged
 		var diff string
@@ -277,7 +344,73 @@ func (v *DiffView) loadFileDiff() {
 			return
 		}
 		v.currentDiff = diff
+		v.parsedDiffLines = v.parseDiff(diff)
 	}
+}
+
+// parseDiff parses raw diff output into structured DiffLine slices with line numbers
+func (v *DiffView) parseDiff(rawDiff string) []DiffLine {
+	var lines []DiffLine
+	var oldLineNum, newLineNum int
+
+	for _, line := range strings.Split(rawDiff, "\n") {
+		diffLine := DiffLine{Content: line}
+
+		// Detect line type and track line numbers
+		if strings.HasPrefix(line, "@@") {
+			// Hunk header: @@ -old,new +old,new @@
+			diffLine.LineType = "@"
+			// Parse line numbers from hunk header
+			parts := strings.Fields(line)
+			for i, p := range parts {
+				if strings.HasPrefix(p, "-") && !strings.HasPrefix(p, "--") {
+					// Old line number
+					numStr := strings.TrimPrefix(p, "-")
+					if idx := strings.Index(numStr, ","); idx > 0 {
+						numStr = numStr[:idx]
+					}
+					if n, err := strconv.Atoi(numStr); err == nil {
+						oldLineNum = n
+					}
+				} else if strings.HasPrefix(p, "+") && !strings.HasPrefix(p, "++") {
+					// New line number
+					numStr := strings.TrimPrefix(p, "+")
+					if idx := strings.Index(numStr, ","); idx > 0 {
+						numStr = numStr[:idx]
+					}
+					if n, err := strconv.Atoi(numStr); err == nil {
+						newLineNum = n
+					}
+				}
+				_ = i // suppress unused variable warning
+			}
+		} else if strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++") {
+			// File header
+			diffLine.LineType = "H"
+			oldLineNum = 0
+			newLineNum = 0
+		} else if strings.HasPrefix(line, "+") {
+			diffLine.LineType = "+"
+			diffLine.NewLineNum = newLineNum
+			newLineNum++
+		} else if strings.HasPrefix(line, "-") {
+			diffLine.LineType = "-"
+			diffLine.OldLineNum = oldLineNum
+			oldLineNum++
+		} else if strings.HasPrefix(line, " ") {
+			diffLine.LineType = " "
+			diffLine.OldLineNum = oldLineNum
+			diffLine.NewLineNum = newLineNum
+			oldLineNum++
+			newLineNum++
+		} else {
+			diffLine.LineType = ""
+		}
+
+		lines = append(lines, diffLine)
+	}
+
+	return lines
 }
 
 // View renders the diff view.
@@ -477,7 +610,11 @@ func (v *DiffView) renderDetailPanel(width int) string {
 	if !v.focusFileList {
 		focusIndicator = " [FOCUS]"
 	}
-	s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" Details %s ", focusIndicator)))
+	navIndicator := ""
+	if v.showDiff && v.diffNavMode {
+		navIndicator = " [j/k scroll]"
+	}
+	s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" Details %s %s ", focusIndicator, navIndicator)))
 	s.WriteString("\n")
 
 	dividerLen := width - 2
@@ -572,8 +709,11 @@ func (v *DiffView) renderDetailPanel(width int) string {
 	s.WriteString(th.StatsStyle.Render(fmt.Sprintf(" %s ", strings.Repeat("─", dividerLen-2))))
 	s.WriteString("\n")
 
-	if v.showDiff && v.currentDiff != "" {
-		// Show diff content
+	if v.showDiff && len(v.parsedDiffLines) > 0 {
+		// Render scrollable diff with line numbers
+		s.WriteString(v.renderDiffWithGutter(width))
+	} else if v.showDiff && v.currentDiff != "" {
+		// Fallback to old-style rendering if no parsed lines
 		diffLines := strings.Split(v.currentDiff, "\n")
 		maxLines := v.height - 20
 		if maxLines < 5 {
@@ -589,7 +729,7 @@ func (v *DiffView) renderDetailPanel(width int) string {
 				lineStyle = th.DashboardAccentStyle
 			} else if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
 				lineStyle = th.DashboardErrorStyle
-			} else if strings.HasPrefix(line, "@") {
+			} else if strings.HasPrefix(line, "@@") {
 				lineStyle = th.InfoStyle
 			}
 
@@ -610,7 +750,121 @@ func (v *DiffView) renderDetailPanel(width int) string {
 		s.WriteString(th.Help.Render(" No diff content available"))
 		s.WriteString("\n")
 	} else {
-		s.WriteString(th.Help.Render(" Press Enter to view diff content"))
+		s.WriteString(th.Help.Render(" Enter: View diff | g/G: Top/Bottom | Esc: Back to list"))
+		s.WriteString("\n")
+	}
+
+	return s.String()
+}
+
+// renderDiffWithGutter renders the diff content with line numbers in a gutter
+func (v *DiffView) renderDiffWithGutter(width int) string {
+	th := theme.GetTheme()
+	var s strings.Builder
+
+	// Gutter width - enough for line numbers and spacing
+	gutterWidth := 6
+	diffWidth := width - gutterWidth - 1
+	if diffWidth < 10 {
+		diffWidth = 10
+	}
+
+	// Calculate visible range based on scroll offset
+	headerLines := 12 // Lines above diff content in this panel
+	footerLines := 2  // Lines below diff content
+	visibleLines := v.height - headerLines - footerLines
+	if visibleLines < 5 {
+		visibleLines = 5
+	}
+
+	startIdx := v.diffScrollOffset
+	endIdx := startIdx + visibleLines
+	if endIdx > len(v.parsedDiffLines) {
+		endIdx = len(v.parsedDiffLines)
+		startIdx = endIdx - visibleLines
+		if startIdx < 0 {
+			startIdx = 0
+		}
+	}
+
+	// Render visible lines
+	for i := startIdx; i < endIdx; i++ {
+		line := v.parsedDiffLines[i]
+		gutter := ""
+		lineStyle := th.Help
+
+		// Build gutter with line numbers
+		switch line.LineType {
+		case "+":
+			// Addition - green
+			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
+			if line.NewLineNum > 0 {
+				gutter = fmt.Sprintf(" %4d ", line.NewLineNum)
+			} else {
+				gutter = "     "
+			}
+		case "-":
+			// Deletion - red
+			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+			if line.OldLineNum > 0 {
+				gutter = fmt.Sprintf(" %4d ", line.OldLineNum)
+			} else {
+				gutter = "     "
+			}
+		case "@":
+			// Hunk header - blue/info color
+			lineStyle = th.InfoStyle
+			gutter = "      "
+		case "H":
+			// File header
+			lineStyle = th.Help
+			gutter = "      "
+		case " ":
+			// Context line
+			lineStyle = th.Help
+			if line.NewLineNum > 0 {
+				gutter = fmt.Sprintf(" %4d ", line.NewLineNum)
+			} else if line.OldLineNum > 0 {
+				gutter = fmt.Sprintf(" %4d ", line.OldLineNum)
+			} else {
+				gutter = "     "
+			}
+		default:
+			// Other (empty, etc)
+			lineStyle = th.Help
+			gutter = "     "
+		}
+
+		// Format content with gutter
+		content := line.Content
+		if len(content) > diffWidth-2 {
+			content = content[:diffWidth-5] + "..."
+		}
+
+		// Use + prefix for additions, - for deletions to match unified diff style
+		prefix := " "
+		if line.LineType == "+" {
+			prefix = "+"
+		} else if line.LineType == "-" {
+			prefix = "-"
+		}
+
+		s.WriteString(th.Help.Render(gutter))
+		s.WriteString(lineStyle.Render(prefix + content))
+		s.WriteString("\n")
+	}
+
+	// Scroll indicator if needed
+	totalLines := len(v.parsedDiffLines)
+	if totalLines > visibleLines {
+		scrollInfo := fmt.Sprintf(" %d-%d of %d ", startIdx+1, endIdx, totalLines)
+		if v.diffNavMode {
+			s.WriteString(th.Help.Render(scrollInfo))
+			s.WriteString(th.Help.Render(" [j/k scroll, g/G top/bottom]"))
+		} else {
+			s.WriteString(th.Help.Render(scrollInfo))
+			s.WriteString(th.Help.Render(" [Enter to navigate]"))
+		}
 		s.WriteString("\n")
 	}
 
@@ -619,7 +873,7 @@ func (v *DiffView) renderDetailPanel(width int) string {
 
 // ShortHelp returns a short help string.
 func (v *DiffView) ShortHelp() string {
-	return "↑↓: Navigate  Enter: Toggle diff  Tab: Switch panel  Esc: Back  r: Refresh"
+	return "↑↓: Navigate files  Enter: View diff  j/k: Scroll diff  g/G: Top/Bottom  Esc: Back"
 }
 
 // SetSize updates the view dimensions.
