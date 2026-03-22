@@ -107,6 +107,10 @@ func (m *Model) initRouter() {
 	worktreeView := views.NewWorktreeView(m.repoPath)
 	router.Register("Worktrees", worktreeView)
 
+	// Register commit log view
+	logView := views.NewLogView(m.repoPath)
+	router.Register("Log", logView)
+
 	// Register stub views for testing routing
 	stub1 := NewStubView1(m.repoPath)
 	stub2 := NewStubView2(m.repoPath)
