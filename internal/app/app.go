@@ -103,6 +103,10 @@ func (m *Model) initRouter() {
 	rebaseView := views.NewRebaseView(m.repoPath)
 	router.Register("Rebase", rebaseView)
 
+	// Register worktree view
+	worktreeView := views.NewWorktreeView(m.repoPath)
+	router.Register("Worktrees", worktreeView)
+
 	// Register stub views for testing routing
 	stub1 := NewStubView1(m.repoPath)
 	stub2 := NewStubView2(m.repoPath)
