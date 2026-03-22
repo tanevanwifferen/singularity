@@ -1,4 +1,4 @@
-package app
+package theme
 
 import (
 	"github.com/charmbracelet/lipgloss"

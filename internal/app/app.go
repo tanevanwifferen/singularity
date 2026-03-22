@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
+	"git-frontend/internal/app/views"
 	"git-frontend/internal/git"
+	"git-frontend/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -76,7 +78,7 @@ func (m *Model) loadRepo() {
 // initRouter initializes the view router with available views.
 func (m *Model) initRouter() {
 	// Create the overview view as the first view (landing page)
-	overview := NewOverviewView(m.repoPath)
+	overview := views.NewOverviewView(m.repoPath)
 	router := NewRouter(overview, "Overview")
 
 	// Register branch dashboard view
@@ -135,7 +137,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loadRepo()
 		case "t":
 			// Toggle theme
-			ToggleTheme()
+			theme.ToggleTheme()
 			m.statusMsg = "Theme toggled"
 		}
 	case tea.WindowSizeMsg:
@@ -156,48 +158,48 @@ func (m Model) View() string {
 	}
 
 	// Fallback to basic view if router not initialized
-	theme := GetTheme()
+	th := theme.GetTheme()
 
 	if m.quitting {
 		return "Goodbye!\n"
 	}
 
 	// Build the view
-	view := theme.Title.Render("Git Frontend") + "\n"
-	view += theme.Version.Render("v" + version) + "\n\n"
+	view := th.Title.Render("Git Frontend") + "\n"
+	view += th.Version.Render("v" + version) + "\n\n"
 
 	if m.errorMsg != "" {
 		view += lipgloss.NewStyle().
-			Foreground(theme.Error).
+			Foreground(th.Error).
 			Render("Error: "+m.errorMsg+"\n\n")
 	}
 
 	if m.statusMsg != "" {
-		view += theme.InfoStyle.Render(m.statusMsg) + "\n\n"
+		view += th.InfoStyle.Render(m.statusMsg) + "\n\n"
 	}
 
 	// Show repo info
 	if m.repoInfo != nil {
 		view += m.renderRepoInfo()
 	} else {
-		view += theme.Help.Render("No repository loaded") + "\n"
+		view += th.Help.Render("No repository loaded") + "\n"
 	}
 
-	view += "\n" + theme.Help.Render("Press q or Ctrl+C to quit, r to refresh, t to toggle theme") + "\n"
+	view += "\n" + th.Help.Render("Press q or Ctrl+C to quit, r to refresh, t to toggle theme") + "\n"
 
 	return view
 }
 
 // renderRepoInfo renders repository information
 func (m Model) renderRepoInfo() string {
-	theme := GetTheme()
+	th := theme.GetTheme()
 	repo := m.repoInfo
 
 	var view string
 
 	// Branch info
 	if repo.CurrentBranch != "" {
-		branchStyle := lipgloss.NewStyle().Foreground(theme.Accent2).Bold(true)
+		branchStyle := lipgloss.NewStyle().Foreground(th.Accent2).Bold(true)
 		view += branchStyle.Render("Branch: ") + repo.CurrentBranch + "\n"
 	} else {
 		view += "Branch: (detached)\n"
@@ -205,12 +207,12 @@ func (m Model) renderRepoInfo() string {
 
 	// HEAD
 	if len(repo.HEAD) >= 7 {
-		view += "HEAD: " + theme.InfoStyle.Render(repo.HEAD[:7]) + "\n"
+		view += "HEAD: " + th.InfoStyle.Render(repo.HEAD[:7]) + "\n"
 	}
 
 	// Status
 	if repo.IsDirty {
-		dirtyStyle := lipgloss.NewStyle().Foreground(theme.Modified)
+		dirtyStyle := lipgloss.NewStyle().Foreground(th.Modified)
 		view += dirtyStyle.Render("Status: dirty (+uncommitted changes)") + "\n"
 	} else {
 		view += "Status: clean\n"
@@ -232,15 +234,15 @@ func (m Model) renderRepoInfo() string {
 			isCurrent := m.repoInfo != nil && m.repoInfo.CurrentBranch == branch.Name
 			if isCurrent {
 				// Highlight current branch using theme accent
-				branchName = lipgloss.NewStyle().Foreground(theme.Accent2).Render(branch.Name)
+				branchName = lipgloss.NewStyle().Foreground(th.Accent2).Render(branch.Name)
 			}
 
 			view += fmt.Sprintf("  %s", branchName)
 
 			// Ahead/behind
 			if branch.Ahead > 0 || branch.Behind > 0 {
-				aheadStyle := lipgloss.NewStyle().Foreground(theme.Added)
-				behindStyle := lipgloss.NewStyle().Foreground(theme.Removed)
+				aheadStyle := lipgloss.NewStyle().Foreground(th.Added)
+				behindStyle := lipgloss.NewStyle().Foreground(th.Removed)
 
 				if branch.Ahead > 0 {
 					view += aheadStyle.Render(fmt.Sprintf(" +%d", branch.Ahead))

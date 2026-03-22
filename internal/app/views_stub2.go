@@ -3,6 +3,8 @@ package app
 import (
 	"fmt"
 
+	"git-frontend/internal/theme"
+
 	"github.com/charmbracelet/bubbletea"
 )
 
@@ -35,16 +37,16 @@ func (v *StubView2) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the view.
 func (v *StubView2) View() string {
-	theme := GetTheme()
-	s := theme.DashboardTitle.Render(" Stub View 2 ")
+	th := theme.GetTheme()
+	s := th.DashboardTitle.Render(" Stub View 2 ")
 	s += "\n\n"
-	s += theme.StatsStyle.Render(fmt.Sprintf(" Repository: %s", v.repoPath))
+	s += th.StatsStyle.Render(fmt.Sprintf(" Repository: %s", v.repoPath))
 	s += "\n\n"
-	s += theme.InfoStyle.Render(" This is Stub View 2 - used for testing the router.")
+	s += th.InfoStyle.Render(" This is Stub View 2 - used for testing the router.")
 	s += "\n\n"
-	s += theme.Help.Render(" Press 1 to switch to Stub View 1")
+	s += th.Help.Render(" Press 1 to switch to Stub View 1")
 	s += "\n"
-	s += theme.Help.Render(" Press 2 to stay on Stub View 2")
+	s += th.Help.Render(" Press 2 to stay on Stub View 2")
 	return s
 }
 

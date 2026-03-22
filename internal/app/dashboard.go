@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	"git-frontend/internal/git"
+	"git-frontend/internal/theme"
+
 	"github.com/charmbracelet/bubbletea"
 )
 
@@ -62,7 +64,7 @@ func (d *BranchDashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			d.comparing = false
 		case "t":
-			ToggleTheme()
+			theme.ToggleTheme()
 		case "q", "ctrl+c":
 			return d, tea.Quit
 		}
@@ -75,46 +77,46 @@ func (d *BranchDashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the dashboard
 func (d *BranchDashboard) View() string {
-	theme := GetTheme()
+	th := theme.GetTheme()
 
 	if d.err != nil {
-		return theme.DashboardErrorStyle.Render(fmt.Sprintf("Error: %v", d.err))
+		return th.DashboardErrorStyle.Render(fmt.Sprintf("Error: %v", d.err))
 	}
 
 	var s string
 
 	// Header
-	s += theme.DashboardTitle.Render(" Git Frontend - Branch Dashboard ")
+	s += th.DashboardTitle.Render(" Git Frontend - Branch Dashboard ")
 	s += "\n\n"
 
 	// Repo info
-	s += theme.StatsStyle.Render(fmt.Sprintf(" Repository: %s ", d.repo.Path))
+	s += th.StatsStyle.Render(fmt.Sprintf(" Repository: %s ", d.repo.Path))
 	s += "\n"
-	s += theme.StatsStyle.Render(fmt.Sprintf(" Branch: %s ", d.repo.CurrentBranch))
+	s += th.StatsStyle.Render(fmt.Sprintf(" Branch: %s ", d.repo.CurrentBranch))
 	if d.repo.IsDirty {
-		s += theme.DashboardErrorStyle.Render(" ●")
+		s += th.DashboardErrorStyle.Render(" ●")
 	}
 	s += "\n\n"
 
 	// Branches header
-	s += theme.StatsStyle.Render(" Branches ")
+	s += th.StatsStyle.Render(" Branches ")
 	s += "\n"
-	s += theme.StatsStyle.Render(" ─────────────────────────────────────────────── ")
+	s += th.StatsStyle.Render(" ─────────────────────────────────────────────── ")
 	s += "\n"
 
 	// List branches
 	for i, branch := range d.branches {
 		prefix := "  "
 		if i == d.selected {
-			prefix = theme.SelectedBranchStyle.Render(" >")
+			prefix = th.SelectedBranchStyle.Render(" >")
 		}
 
 		branchStr := fmt.Sprintf("%s %s", prefix, branch.Name)
 
 		if i == d.selected {
-			branchStr = theme.SelectedBranchStyle.Render(branchStr)
+			branchStr = th.SelectedBranchStyle.Render(branchStr)
 		} else {
-			branchStr = theme.BranchStyle.Render(branchStr)
+			branchStr = th.BranchStyle.Render(branchStr)
 		}
 
 		s += branchStr
@@ -124,9 +126,9 @@ func (d *BranchDashboard) View() string {
 			behindAhead := fmt.Sprintf(" ↑%d ↓%d (%s)",
 				branch.Ahead, branch.Behind, branch.Upstream)
 			if branch.Ahead > 0 || branch.Behind > 0 {
-				s += theme.StatsStyle.Render(behindAhead)
+				s += th.StatsStyle.Render(behindAhead)
 			} else {
-				s += theme.StatsStyle.Render(fmt.Sprintf(" (%s)", branch.Upstream))
+				s += th.StatsStyle.Render(fmt.Sprintf(" (%s)", branch.Upstream))
 			}
 		}
 
@@ -136,54 +138,54 @@ func (d *BranchDashboard) View() string {
 	// Comparison view
 	if d.comparing && d.compareIdx < len(d.branches) {
 		s += "\n"
-		s += theme.StatsStyle.Render(" ─────────────────────────────────────────────── ")
+		s += th.StatsStyle.Render(" ─────────────────────────────────────────────── ")
 		s += "\n"
-		s += theme.DashboardTitle.Render(" Branch Comparison ")
+		s += th.DashboardTitle.Render(" Branch Comparison ")
 		s += "\n\n"
 
 		branch := d.branches[d.compareIdx]
 		comparison, err := git.CompareBranches(d.repo.Path, d.repo.CurrentBranch, branch.Name)
 		if err != nil {
-			s += theme.DashboardErrorStyle.Render(fmt.Sprintf(" Error: %v", err))
+			s += th.DashboardErrorStyle.Render(fmt.Sprintf(" Error: %v", err))
 		} else {
-			s += theme.StatsStyle.Render(fmt.Sprintf(" %s...%s:", d.repo.CurrentBranch, branch.Name))
+			s += th.StatsStyle.Render(fmt.Sprintf(" %s...%s:", d.repo.CurrentBranch, branch.Name))
 			s += "\n"
 			if comparison.Diverged {
-				s += theme.StatsStyle.Render(fmt.Sprintf("   Diverged: %d ahead, %d behind",
+				s += th.StatsStyle.Render(fmt.Sprintf("   Diverged: %d ahead, %d behind",
 					comparison.Ahead, comparison.Behind))
 			} else if comparison.Ahead > 0 {
-				s += theme.StatsStyle.Render(fmt.Sprintf("   Ahead by %d commits", comparison.Ahead))
+				s += th.StatsStyle.Render(fmt.Sprintf("   Ahead by %d commits", comparison.Ahead))
 			} else if comparison.Behind > 0 {
-				s += theme.StatsStyle.Render(fmt.Sprintf("   Behind by %d commits", comparison.Behind))
+				s += th.StatsStyle.Render(fmt.Sprintf("   Behind by %d commits", comparison.Behind))
 			} else {
-				s += theme.StatsStyle.Render("   Identical")
+				s += th.StatsStyle.Render("   Identical")
 			}
 
 			// Also show tree comparison
 			s += "\n\n"
 			treeComp, treeErr := git.CompareBranchesByTree(d.repo.Path, d.repo.CurrentBranch, branch.Name)
 			if treeErr != nil {
-				s += theme.DashboardErrorStyle.Render(fmt.Sprintf("   Tree comparison error: %v", treeErr))
+				s += th.DashboardErrorStyle.Render(fmt.Sprintf("   Tree comparison error: %v", treeErr))
 			} else {
-				s += theme.StatsStyle.Render(" Tree Status: ")
+				s += th.StatsStyle.Render(" Tree Status: ")
 				if treeComp.SquashDetected {
-					s += theme.DashboardAccentStyle.Render(" Squash merge detected!")
+					s += th.DashboardAccentStyle.Render(" Squash merge detected!")
 				} else if treeComp.TreeDiverged {
-					s += theme.StatsStyle.Render(" Trees differ")
+					s += th.StatsStyle.Render(" Trees differ")
 				} else {
-					s += theme.StatsStyle.Render(" Trees identical")
+					s += th.StatsStyle.Render(" Trees identical")
 				}
 			}
 		}
 		s += "\n\n"
-		s += theme.StatsStyle.Render(" Press ESC to close comparison ")
+		s += th.StatsStyle.Render(" Press ESC to close comparison ")
 	}
 
 	// Footer
 	s += "\n"
-	s += theme.StatsStyle.Render(" ─────────────────────────────────────────────── ")
+	s += th.StatsStyle.Render(" ─────────────────────────────────────────────── ")
 	s += "\n"
-	s += theme.StatsStyle.Render(" ↑/k: Select   Enter: Compare   t: Toggle Theme   q: Quit ")
+	s += th.StatsStyle.Render(" ↑/k: Select   Enter: Compare   t: Toggle Theme   q: Quit ")
 
 	return s
 }

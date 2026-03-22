@@ -1,4 +1,4 @@
-package app
+package views
 
 import (
 	"bufio"
@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"git-frontend/internal/git"
+	"git-frontend/internal/theme"
+
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -151,7 +153,7 @@ func (v *OverviewView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the overview.
 func (v *OverviewView) View() string {
-	theme := GetTheme()
+	theme := theme.GetTheme()
 
 	if v.err != nil && v.repo == nil {
 		return theme.DashboardErrorStyle.Render(fmt.Sprintf("Error: %v", v.err))

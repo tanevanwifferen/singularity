@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"git-frontend/internal/theme"
+
 	"github.com/charmbracelet/lipgloss"
 	"git-frontend/internal/git"
 )
@@ -28,33 +30,33 @@ type Layout struct {
 
 // NewLayout creates a new layout manager.
 func NewLayout() *Layout {
-	theme := GetTheme()
+	th := theme.GetTheme()
 	return &Layout{
 		width:  80,
 		height: 24,
 		tabBarStyle: lipgloss.NewStyle().
-			Foreground(theme.MutedText).
-			Background(theme.Surface),
+			Foreground(th.MutedText).
+			Background(th.Surface),
 		statusBarStyle: lipgloss.NewStyle().
-			Foreground(theme.MutedText).
-			Background(theme.Surface),
+			Foreground(th.MutedText).
+			Background(th.Surface),
 		activeTabStyle: lipgloss.NewStyle().
-			Foreground(theme.Accent).
-			Background(theme.Surface).
+			Foreground(th.Accent).
+			Background(th.Surface).
 			Bold(true),
 		inactiveTabStyle: lipgloss.NewStyle().
-			Foreground(theme.MutedText).
-			Background(theme.Surface),
+			Foreground(th.MutedText).
+			Background(th.Surface),
 		dividerStyle: lipgloss.NewStyle().
-			Foreground(theme.Border),
+			Foreground(th.Border),
 		primaryTextStyle: lipgloss.NewStyle().
-			Foreground(theme.PrimaryText),
+			Foreground(th.PrimaryText),
 		mutedTextStyle: lipgloss.NewStyle().
-			Foreground(theme.MutedText),
+			Foreground(th.MutedText),
 		accent2TextStyle: lipgloss.NewStyle().
-			Foreground(theme.Accent2),
+			Foreground(th.Accent2),
 		modifiedTextStyle: lipgloss.NewStyle().
-			Foreground(theme.Modified),
+			Foreground(th.Modified),
 	}
 }
 
@@ -158,7 +160,7 @@ func (l *Layout) AvailableViewDimensions() (width, height int) {
 
 // Render renders the complete layout with the active view content.
 func (l *Layout) Render(router *Router, repoInfo *git.RepoInfo, activeViewContent string) string {
-	theme := GetTheme()
+	th := theme.GetTheme()
 
 	var output string
 
@@ -171,7 +173,7 @@ func (l *Layout) Render(router *Router, repoInfo *git.RepoInfo, activeViewConten
 	for i := 0; i < l.width; i++ {
 		divider += "─"
 	}
-	output += theme.BorderStyle.Render(divider)
+	output += th.BorderStyle.Render(divider)
 	output += "\n"
 
 	// Active view content
@@ -181,7 +183,7 @@ func (l *Layout) Render(router *Router, repoInfo *git.RepoInfo, activeViewConten
 	}
 
 	// Status bar divider
-	output += theme.BorderStyle.Render(divider)
+	output += th.BorderStyle.Render(divider)
 	output += "\n"
 
 	// Status bar
