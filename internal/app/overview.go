@@ -222,7 +222,7 @@ func (v *OverviewView) View() string {
 		}
 
 		// Stash and worktree counts
-		s.WriteString(fmt.Sprintf(" %s %d   %s %d\n",
+		s.WriteString(fmt.Sprintf(" %s %s   %s %s\n",
 			th.BranchStyle.Render("Stashes:"),
 			th.StatsStyle.Render(fmt.Sprintf("%d", v.stashCount)),
 			th.BranchStyle.Render("Worktrees:"),

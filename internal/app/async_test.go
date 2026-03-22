@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"git-frontend/internal/git"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // TestAsyncManager_Creation tests basic AsyncManager creation
@@ -286,7 +284,7 @@ func TestRunAsyncGit_Cancellation(t *testing.T) {
 
 	// Test that cancellation works by checking the operation is tracked
 	// and can be cancelled
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := context.WithCancel(context.Background())
 	m.RegisterOperation("test-op-cancel", OpLoadRepo, cancel)
 
 	// Verify operation is registered
