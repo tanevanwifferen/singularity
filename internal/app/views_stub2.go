@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 
+	"git-frontend/internal/app/components"
 	"git-frontend/internal/theme"
 
 	"github.com/charmbracelet/bubbletea"
@@ -58,4 +59,13 @@ func (v *StubView2) ShortHelp() string {
 // SetSize updates the view dimensions (stub implementation).
 func (v *StubView2) SetSize(width, height int) {
 	// Stub views don't need to track dimensions
+}
+
+// KeyBindings returns the keybindings for this view.
+func (v *StubView2) KeyBindings() []components.KeyBinding {
+	return []components.KeyBinding{
+		{Key: "1", Description: "Switch to Stub View 1"},
+		{Key: "2", Description: "Switch to Stub View 2"},
+		{Key: "r", Description: "Refresh"},
+	}
 }

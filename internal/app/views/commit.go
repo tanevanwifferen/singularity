@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"git-frontend/internal/app/components"
 	"git-frontend/internal/git"
 	"git-frontend/internal/theme"
 
@@ -957,4 +958,19 @@ func (v *CommitView) GetRepoPath() string {
 func (v *CommitView) Refresh() error {
 	v.loadFiles()
 	return v.err
+}
+
+// KeyBindings returns the keybindings for this view.
+func (v *CommitView) KeyBindings() []components.KeyBinding {
+	return []components.KeyBinding{
+		{Key: "r", Description: "Refresh staging area"},
+		{Key: "Tab", Description: "Switch between staged/unstaged sections"},
+		{Key: "↑/k", Description: "Navigate up"},
+		{Key: "↓/j", Description: "Navigate down"},
+		{Key: "Space", Description: "Stage/unstage selected file"},
+		{Key: "a", Description: "Stage all files"},
+		{Key: "u", Description: "Unstage all files"},
+		{Key: "Enter", Description: "Write commit message (when files staged)"},
+		{Key: "Esc", Description: "Cancel / Go back"},
+	}
 }

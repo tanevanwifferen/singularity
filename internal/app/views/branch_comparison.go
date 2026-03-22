@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"git-frontend/internal/app/components"
 	"git-frontend/internal/git"
 	"git-frontend/internal/theme"
 
@@ -526,4 +527,21 @@ func (v *BranchComparisonView) GetRepoPath() string {
 func (v *BranchComparisonView) Refresh() error {
 	v.loadData()
 	return v.err
+}
+
+// KeyBindings returns the keybindings for this view.
+func (v *BranchComparisonView) KeyBindings() []components.KeyBinding {
+	return []components.KeyBinding{
+		{Key: "↑/k", Description: "Select previous branch"},
+		{Key: "↓/j", Description: "Select next branch"},
+		{Key: "Enter", Description: "Compare with selected branch"},
+		{Key: "Tab", Description: "Switch to next branch for comparison"},
+		{Key: "Shift+Tab", Description: "Switch to previous branch for comparison"},
+		{Key: "r", Description: "Refresh comparison data"},
+		{Key: "Esc", Description: "Back to Branches view"},
+		{Key: "1", Description: "Switch to Overview"},
+		{Key: "2", Description: "Switch to Branches"},
+		{Key: "3", Description: "Switch to Stashes"},
+		{Key: "4", Description: "Switch to Worktrees"},
+	}
 }

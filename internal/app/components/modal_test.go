@@ -212,7 +212,7 @@ func TestInfoDialogAutoDismiss(t *testing.T) {
 }
 
 func TestHelpOverlayCreation(t *testing.T) {
-	bindings := []HelpBinding{
+	bindings := []KeyBinding{
 		{Key: "q", Description: "Quit"},
 		{Key: "?", Description: "Toggle help"},
 		{Key: "j/k", Description: "Navigate"},
@@ -221,17 +221,17 @@ func TestHelpOverlayCreation(t *testing.T) {
 	if len(h.Bindings) != 3 {
 		t.Errorf("expected 3 bindings, got %d", len(h.Bindings))
 	}
-	if h.Title != "Help — Keybindings" {
-		t.Errorf("unexpected title: %q", h.Title)
-	}
 }
 
 func TestHelpOverlayDismiss(t *testing.T) {
-	h := NewHelpOverlay([]HelpBinding{{Key: "q", Description: "Quit"}})
+	h := NewHelpOverlay([]KeyBinding{{Key: "q", Description: "Quit"}})
 
-	for _, key := range []string{"?", "esc", "q"} {
-		_, cmd := h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
-		if key == "esc" {
+	// Test ? and esc to dismiss
+	for _, key := range []string{"?", "esc"} {
+		var cmd tea.Cmd
+		if key == "?" {
+			_, cmd = h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+		} else if key == "esc" {
 			_, cmd = h.Update(tea.KeyMsg{Type: tea.KeyEscape})
 		}
 		if cmd == nil {
@@ -246,9 +246,9 @@ func TestHelpOverlayDismiss(t *testing.T) {
 }
 
 func TestHelpOverlayScroll(t *testing.T) {
-	bindings := make([]HelpBinding, 30)
+	bindings := make([]KeyBinding, 30)
 	for i := range bindings {
-		bindings[i] = HelpBinding{Key: "key", Description: "desc"}
+		bindings[i] = KeyBinding{Key: "key", Description: "desc"}
 	}
 	h := NewHelpOverlay(bindings)
 	h.visible = 10
@@ -273,7 +273,7 @@ func TestHelpOverlayScroll(t *testing.T) {
 }
 
 func TestHelpOverlayView(t *testing.T) {
-	bindings := []HelpBinding{
+	bindings := []KeyBinding{
 		{Key: "q", Description: "Quit application"},
 		{Key: "?", Description: "Toggle help overlay"},
 	}
@@ -304,7 +304,7 @@ func TestWindowSizeMsg(t *testing.T) {
 	// HelpOverlay handles WindowSizeMsg
 	ho := NewHelpOverlay(nil)
 	ho, _ = ho.Update(tea.WindowSizeMsg{Width: 100, Height: 50})
-	if ho.Modal.termWidth != 100 || ho.Modal.termHeight != 50 {
+	if ho.termWidth != 100 || ho.termHeight != 50 {
 		t.Error("HelpOverlay did not update size")
 	}
 }

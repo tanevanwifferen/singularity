@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"git-frontend/internal/app/components"
 	"git-frontend/internal/git"
 	"git-frontend/internal/theme"
 
@@ -891,4 +892,21 @@ func (v *DiffView) GetRepoPath() string {
 func (v *DiffView) Refresh() error {
 	v.loadData()
 	return v.err
+}
+
+// KeyBindings returns the keybindings for this view.
+func (v *DiffView) KeyBindings() []components.KeyBinding {
+	return []components.KeyBinding{
+		{Key: "↑/k", Description: "Navigate up in file list"},
+		{Key: "↓/j", Description: "Navigate down in file list"},
+		{Key: "g", Description: "Go to top (when viewing diff)"},
+		{Key: "G", Description: "Go to bottom (when viewing diff)"},
+		{Key: "Enter", Description: "Toggle diff content view"},
+		{Key: "Tab", Description: "Switch focus between panels"},
+		{Key: "Shift+Tab", Description: "Switch focus (reverse)"},
+		{Key: "r", Description: "Refresh diff data"},
+		{Key: "Esc", Description: "Close diff content / Go back"},
+		{Key: "1", Description: "Switch to staged changes (workdir mode)"},
+		{Key: "2", Description: "Switch to unstaged changes (workdir mode)"},
+	}
 }

@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 
+	"git-frontend/internal/app/components"
 	"git-frontend/internal/git"
 	"git-frontend/internal/theme"
 
@@ -226,4 +227,20 @@ func (d *BranchDashboard) Refresh() error {
 func (d *BranchDashboard) SetSize(width, height int) {
 	d.width = width
 	d.height = height
+}
+
+// KeyBindings returns the keybindings for this view.
+func (d *BranchDashboard) KeyBindings() []components.KeyBinding {
+	return []components.KeyBinding{
+		{Key: "↑/k", Description: "Select previous branch"},
+		{Key: "↓/j", Description: "Select next branch"},
+		{Key: "Enter/Space", Description: "Compare selected branch with current"},
+		{Key: "Esc", Description: "Close comparison panel"},
+		{Key: "t", Description: "Toggle light/dark theme"},
+		{Key: "r", Description: "Refresh branch data"},
+		{Key: "1", Description: "Switch to Overview"},
+		{Key: "2", Description: "Switch to Branches"},
+		{Key: "3", Description: "Switch to Stashes"},
+		{Key: "4", Description: "Switch to Worktrees"},
+	}
 }

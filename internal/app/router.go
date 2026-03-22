@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 
+	"git-frontend/internal/app/components"
 	"git-frontend/internal/app/views"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -35,6 +36,10 @@ type Router struct {
 	views      map[string]View
 	activeName string
 	active     View
+
+	// Help overlay state
+	showHelp   bool
+	helpOverlay components.HelpOverlay
 }
 
 // NewRouter creates a new router with the given initial view.
@@ -92,6 +97,26 @@ func (r *Router) Init() tea.Cmd {
 // Update handles messages and delegates to the active view.
 // It handles view switching messages.
 func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Handle help overlay first if visible
+	if r.showHelp {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "?", "esc":
+				r.showHelp = false
+				return r, nil
+			}
+			// Pass other keys to help overlay
+			updated := components.HelpOverlay{}
+			updated, _ = r.helpOverlay.Update(msg)
+			r.helpOverlay = updated
+			return r, nil
+		case tea.WindowSizeMsg:
+			r.helpOverlay.SetSize(msg.Width, msg.Height)
+			return r, nil
+		}
+	}
+
 	// Handle SwitchViewMsg (defined in this package)
 	if swMsg, ok := msg.(SwitchViewMsg); ok {
 		if err := r.SwitchTo(swMsg.ViewName); err != nil {
@@ -117,17 +142,20 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Handle number key switching (1-9)
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
-		if keyMsg.Type == tea.KeyRunes {
-			switch keyMsg.String() {
-			case "1", "2", "3", "4", "5", "6", "7", "8", "9":
-				names := r.ViewNames()
-				idx := int(keyMsg.String()[0] - '1')
-				if idx < len(names) {
-					if err := r.SwitchTo(names[idx]); err != nil {
-						return r, nil
-					}
-					return r, r.active.Init()
+		switch keyMsg.String() {
+		case "?":
+			// Show help overlay with combined global and view-specific bindings
+			r.showHelp = true
+			r.buildHelpOverlay()
+			return r, nil
+		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+			names := r.ViewNames()
+			idx := int(keyMsg.String()[0] - '1')
+			if idx < len(names) {
+				if err := r.SwitchTo(names[idx]); err != nil {
+					return r, nil
 				}
+				return r, r.active.Init()
 			}
 		}
 	}
@@ -137,8 +165,30 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return r, cmd
 }
 
+// buildHelpOverlay constructs the help overlay from global and view-specific bindings.
+func (r *Router) buildHelpOverlay() {
+	// Get global bindings
+	bindings := components.GlobalBindings()
+
+	// Add view-specific bindings if the active view implements KeyBindings
+	if kb, ok := r.active.(components.KeyBindings); ok {
+		bindings = append(bindings, KeyBinding{Key: "---", Description: "--- View: " + r.activeName + " ---"})
+		bindings = append(bindings, kb.KeyBindings()...)
+	}
+
+	r.helpOverlay = components.NewHelpOverlay(bindings)
+}
+
+// KeyBinding represents a single keybinding for help display.
+type KeyBinding = components.KeyBinding
+
 // View delegates to the active view's View.
 func (r *Router) View() string {
+	if r.showHelp {
+		// Render help overlay with the active view as background
+		background := r.active.View()
+		return r.helpOverlay.View(background)
+	}
 	return r.active.View()
 }
 
@@ -170,6 +220,10 @@ func (r *Router) NotifySize(width, height int) {
 	// Forward to active view if it supports sizing
 	if sized, ok := r.active.(SizableView); ok {
 		sized.SetSize(width, height)
+	}
+	// Also update help overlay size if visible
+	if r.showHelp {
+		r.helpOverlay.SetSize(width, height)
 	}
 }
 

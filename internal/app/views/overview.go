@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"git-frontend/internal/app/components"
 	"git-frontend/internal/git"
 	"git-frontend/internal/theme"
 
@@ -297,4 +298,15 @@ func (v *OverviewView) GetRepoPath() string {
 func (v *OverviewView) Refresh() error {
 	v.loadData()
 	return v.err
+}
+
+// KeyBindings returns the keybindings for this view.
+func (v *OverviewView) KeyBindings() []components.KeyBinding {
+	return []components.KeyBinding{
+		{Key: "r", Description: "Refresh repository data"},
+		{Key: "1", Description: "Switch to Overview"},
+		{Key: "2", Description: "Switch to Branches"},
+		{Key: "3", Description: "Switch to Stashes"},
+		{Key: "4", Description: "Switch to Worktrees"},
+	}
 }

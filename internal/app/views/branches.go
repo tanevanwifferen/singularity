@@ -446,3 +446,22 @@ func (v *BranchesView) Refresh() error {
 	v.loadData()
 	return v.err
 }
+
+// KeyBindings returns the keybindings for this view.
+func (v *BranchesView) KeyBindings() []components.KeyBinding {
+	return []components.KeyBinding{
+		{Key: "r", Description: "Refresh branch list"},
+		{Key: "/", Description: "Activate search filter"},
+		{Key: "↑/k", Description: "Navigate up"},
+		{Key: "↓/j", Description: "Navigate down"},
+		{Key: "Enter", Description: "Compare selected branch"},
+		{Key: "c", Description: "Checkout selected branch"},
+		{Key: "d", Description: "Delete selected branch"},
+		{Key: "n", Description: "Create new branch"},
+		{Key: "Esc", Description: "Clear filter / Cancel"},
+		{Key: "1", Description: "Switch to Overview"},
+		{Key: "2", Description: "Switch to Branches"},
+		{Key: "3", Description: "Switch to Stashes"},
+		{Key: "4", Description: "Switch to Worktrees"},
+	}
+}
