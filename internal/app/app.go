@@ -85,7 +85,7 @@ func (m *Model) initRouter() {
 		m.router.Register("stub2", stub2)
 		return
 	}
-	router := NewRouter(dashboard, "dashboard")
+	router := NewRouter(dashboard, "Branches")
 
 	// Register stub views for testing routing
 	stub1 := NewStubView1(m.repoPath)
