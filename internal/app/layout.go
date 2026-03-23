@@ -91,7 +91,10 @@ func (l *Layout) RenderTabBar(router *Router) string {
 			tabBar += l.dividerStyle.Render(" │ ")
 		}
 
-		key := tabKeyLabel(i)
+		key := router.ViewKey(name)
+		if key == "" {
+			key = "-"
+		}
 		if name == activeName {
 			// Active tab
 			tabBar += l.activeTabStyle.Render(fmt.Sprintf("[%s] %s", key, name))

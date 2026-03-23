@@ -92,25 +92,27 @@ func TestRouterSwitchToMessage(t *testing.T) {
 func TestRouterKeybindSwitching(t *testing.T) {
 	stub1 := NewStubView1("/test/repo")
 	router := NewRouter(stub1, "stub1")
+	router.viewKeys["stub1"] = "a"
+	router.keyToView["alt+a"] = "stub1"
 
 	stub2 := NewStubView2("/test/repo")
-	router.Register("stub2", stub2)
+	router.Register("stub2", stub2, "b")
 
-	// Press "2" to switch to second view
-	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}}
+	// Press "alt+b" to switch to second view
+	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}, Alt: true}
 	_, cmd := router.Update(keyMsg)
 
 	if router.ActiveName() != "stub2" {
-		t.Errorf("Expected active name 'stub2' after pressing 2, got %q", router.ActiveName())
+		t.Errorf("Expected active name 'stub2' after pressing alt+b, got %q", router.ActiveName())
 	}
 	_ = cmd
 
-	// Press "1" to switch back to first view
-	keyMsg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}}
+	// Press "alt+a" to switch back to first view
+	keyMsg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}, Alt: true}
 	router.Update(keyMsg)
 
 	if router.ActiveName() != "stub1" {
-		t.Errorf("Expected active name 'stub1' after pressing 1, got %q", router.ActiveName())
+		t.Errorf("Expected active name 'stub1' after pressing alt+a, got %q", router.ActiveName())
 	}
 }
 

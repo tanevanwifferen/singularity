@@ -70,6 +70,8 @@ type Agent struct {
 	// PTY mode fields
 	interactive bool     // true = PTY mode, false = pipe/print mode
 	ptmx        *os.File // PTY master fd (only in interactive mode)
+	attached    bool     // true when user is attached to PTY (pauses background capture)
+	attachMu    sync.Mutex
 
 	// Configuration
 	model        string
@@ -206,7 +208,7 @@ func (a *Agent) buildPrintArgs() []string {
 		"--print",
 		"--verbose",
 		"--output-format", "text",
-		"--dangerously-skip-permissions",
+		"--permission-mode", "bypassPermissions",
 	}
 
 	if a.model != "" {
@@ -228,7 +230,7 @@ func (a *Agent) buildPrintArgs() []string {
 }
 
 // buildInteractiveArgs constructs args for interactive PTY mode.
-// Claude runs in its normal interactive TUI - no --print, no --dangerously-skip-permissions.
+// Claude runs in its normal interactive TUI with the prompt as a positional arg.
 func (a *Agent) buildInteractiveArgs() []string {
 	args := []string{
 		"--verbose",
@@ -246,8 +248,8 @@ func (a *Agent) buildInteractiveArgs() []string {
 		args = append(args, "--allowedTools", tool)
 	}
 
-	// The task/prompt is passed via -p (prompt) for interactive mode
-	args = append(args, "-p", a.Task)
+	// Pass the task as a positional prompt argument (NOT -p which is --print mode)
+	args = append(args, a.Task)
 
 	return args
 }
@@ -262,13 +264,19 @@ func (a *Agent) buildEnv() []string {
 }
 
 // streamPTYOutput reads from the PTY master and appends to the output buffer.
-// This runs in the background so we always capture output even when detached.
+// Pauses automatically when a user is attached (to avoid competing reads on the fd).
 func (a *Agent) streamPTYOutput() {
 	buf := make([]byte, 4096)
 	for {
+		// When user is attached, the PTYProxy reads the fd directly.
+		// We must not compete — sleep and check again.
+		if a.IsAttached() {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
 		n, err := a.ptmx.Read(buf)
 		if n > 0 {
-			// Store raw output lines for the detached preview
 			content := string(buf[:n])
 			for _, line := range strings.Split(content, "\n") {
 				if line != "" {
@@ -349,6 +357,30 @@ func (a *Agent) PTY() *os.File {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.ptmx
+}
+
+// Attach marks the agent as attached, pausing background output capture.
+// The caller (PTYProxy) will handle I/O directly.
+func (a *Agent) Attach() {
+	a.attachMu.Lock()
+	a.attached = true
+	a.attachMu.Unlock()
+	a.appendOutput("system", "User attached to PTY")
+}
+
+// Detach marks the agent as detached, resuming background output capture.
+func (a *Agent) Detach() {
+	a.attachMu.Lock()
+	a.attached = false
+	a.attachMu.Unlock()
+	a.appendOutput("system", "User detached from PTY")
+}
+
+// IsAttached returns whether a user is currently attached to this agent's PTY.
+func (a *Agent) IsAttached() bool {
+	a.attachMu.Lock()
+	defer a.attachMu.Unlock()
+	return a.attached
 }
 
 // IsInteractive returns true if the agent runs in PTY/interactive mode.

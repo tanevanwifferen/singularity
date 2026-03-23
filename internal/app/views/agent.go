@@ -9,6 +9,7 @@ import (
 	"git-frontend/internal/engine"
 	"git-frontend/internal/theme"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -33,7 +34,15 @@ type AgentInfo struct {
 	Interactive bool
 }
 
-// AgentView displays the agent console for server mode.
+// agentFocus tracks which pane has focus
+type agentFocus int
+
+const (
+	focusList   agentFocus = iota
+	focusOutput
+)
+
+// AgentView displays the agent console with a split-pane layout.
 type AgentView struct {
 	repoPath string
 	engine   *engine.Engine
@@ -44,22 +53,25 @@ type AgentView struct {
 	height   int
 	err      error
 
+	// Split pane focus
+	focus agentFocus
+
 	// Selected agent output
-	selectedAgent *AgentInfo
-	outputOffset  int
-	outputEntries []engine.OutputEntry
+	selectedAgent   *AgentInfo
+	outputEntries   []engine.OutputEntry
+	outputViewport  viewport.Model
+	outputAutoScroll bool
 
 	// New agent input state
 	showNewAgent        bool
 	newAgentTask        string
-	newAgentInput       components.Filter[byte]
-	newAgentInteractive bool // toggle for interactive mode
+	newAgentInteractive bool
 
 	// Kill confirmation state
 	showKillConfirm bool
 	killAgentID     string
 
-	// Refresh ticker for streaming output
+	// Refresh ticker
 	refreshInterval time.Duration
 	lastRefresh     time.Time
 }
@@ -67,18 +79,37 @@ type AgentView struct {
 // NewAgentView creates a new agent console view.
 func NewAgentView(repoPath string, eng *engine.Engine) *AgentView {
 	v := &AgentView{
-		repoPath:        repoPath,
-		engine:          eng,
-		width:           80,
-		height:          24,
-		refreshInterval: 500 * time.Millisecond,
+		repoPath:         repoPath,
+		engine:           eng,
+		width:            80,
+		height:           24,
+		refreshInterval:  500 * time.Millisecond,
+		outputAutoScroll: true,
+		focus:            focusList,
 	}
 
-	// Initialize with empty agent list
 	v.filter = components.NewFilter([]AgentInfo{}, v.renderAgentItem)
-	v.filter.SetHeight(v.height)
+	v.filter.SetHeight(v.listHeight())
+	v.outputViewport = viewport.New(80, 10)
 
 	return v
+}
+
+// listHeight returns the height available for the agent list pane.
+func (v *AgentView) listHeight() int {
+	if v.selectedAgent != nil {
+		// Split: list gets top 40%, output gets bottom 60%
+		return max(v.height*2/5-3, 4) // -3 for header/stats/help
+	}
+	return max(v.height-5, 4) // full height minus chrome
+}
+
+// outputHeight returns the height available for the output pane.
+func (v *AgentView) outputHeight() int {
+	if v.selectedAgent == nil {
+		return 0
+	}
+	return max(v.height-v.listHeight()-5, 4) // -5 for divider, header, etc
 }
 
 // SetEngine sets the agent engine (allows late binding)
@@ -123,10 +154,8 @@ func (v *AgentView) loadAgents() {
 		v.agents = append(v.agents, info)
 	}
 
-	// Update filter with new list
 	v.filter.SetItems(v.agents)
 
-	// Update selected agent output if one is selected
 	if v.selectedAgent != nil {
 		v.refreshSelectedAgentOutput()
 	}
@@ -140,11 +169,55 @@ func (v *AgentView) refreshSelectedAgentOutput() {
 		return
 	}
 
-	entries, err := v.engine.GetOutputEntries(v.selectedAgent.ID, v.outputOffset)
+	entries, err := v.engine.GetOutputEntries(v.selectedAgent.ID, 0)
 	if err != nil {
 		return
 	}
 	v.outputEntries = entries
+	v.rebuildOutputViewport()
+}
+
+// rebuildOutputViewport rebuilds the viewport content from output entries.
+func (v *AgentView) rebuildOutputViewport() {
+	var lines []string
+	for _, entry := range v.outputEntries {
+		if entry.Source == "system" {
+			continue
+		}
+		lines = append(lines, entry.Content)
+	}
+
+	content := strings.Join(lines, "\n")
+	v.outputViewport.SetContent(content)
+
+	if v.outputAutoScroll {
+		v.outputViewport.GotoBottom()
+	}
+}
+
+// selectAgent selects an agent and opens the output pane.
+func (v *AgentView) selectAgent(info AgentInfo) {
+	v.selectedAgent = &info
+	v.outputAutoScroll = true
+	v.refreshSelectedAgentOutput()
+	v.recalcLayout()
+}
+
+// deselectAgent closes the output pane.
+func (v *AgentView) deselectAgent() {
+	v.selectedAgent = nil
+	v.outputEntries = nil
+	v.focus = focusList
+	v.recalcLayout()
+}
+
+// recalcLayout recalculates the split pane sizes.
+func (v *AgentView) recalcLayout() {
+	v.filter.SetHeight(v.listHeight())
+	if v.selectedAgent != nil {
+		v.outputViewport.Width = v.width
+		v.outputViewport.Height = v.outputHeight()
+	}
 }
 
 // Update handles update events.
@@ -161,8 +234,53 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, v.handleNewAgentInput(msg)
 		}
 
-		// Main view keys
-		switch msg.String() {
+		key := msg.String()
+
+		// Output pane navigation when focused
+		if v.focus == focusOutput && v.selectedAgent != nil {
+			switch key {
+			case "tab":
+				v.focus = focusList
+				return v, nil
+			case "esc", "q":
+				v.deselectAgent()
+				return v, nil
+			case "j", "down":
+				v.outputAutoScroll = false
+				v.outputViewport.LineDown(1)
+				return v, nil
+			case "k", "up":
+				v.outputAutoScroll = false
+				v.outputViewport.LineUp(1)
+				return v, nil
+			case "g":
+				v.outputAutoScroll = false
+				v.outputViewport.GotoTop()
+				return v, nil
+			case "G":
+				v.outputAutoScroll = true
+				v.outputViewport.GotoBottom()
+				return v, nil
+			case "ctrl+d":
+				v.outputAutoScroll = false
+				v.outputViewport.HalfViewDown()
+				return v, nil
+			case "ctrl+u":
+				v.outputAutoScroll = false
+				v.outputViewport.HalfViewUp()
+				return v, nil
+			case "a":
+				// Attach from output pane
+				if v.selectedAgent.Interactive && (v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting) {
+					return v, v.attachToAgent(v.selectedAgent.ID)
+				}
+				return v, nil
+			}
+			return v, nil
+		}
+
+		// List pane keys
+		switch key {
 		case "r":
 			v.loading = true
 			return v, func() tea.Msg {
@@ -171,17 +289,13 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "n":
-			// Start new agent - show task input
 			v.showNewAgent = true
 			v.newAgentTask = ""
-			v.newAgentInteractive = true // default to interactive
-			v.newAgentInput = *components.NewFilter([]byte{}, func(b byte, i int, s bool) string {
-				return string(b)
-			})
+			v.newAgentInteractive = true
 			return v, nil
 
-		case "k":
-			// Kill selected agent
+		case "K":
+			// Kill selected agent (capital K to not conflict with vim nav)
 			if item, idx := v.filter.SelectedItem(); idx >= 0 {
 				if item.State == engine.AgentRunning || item.State == engine.AgentStarting {
 					v.showKillConfirm = true
@@ -191,7 +305,7 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, nil
 
 		case "a":
-			// Attach to selected agent's PTY (interactive agents only)
+			// Attach to selected agent's PTY
 			if item, idx := v.filter.SelectedItem(); idx >= 0 {
 				if item.Interactive && (item.State == engine.AgentRunning || item.State == engine.AgentStarting) {
 					return v, v.attachToAgent(item.ID)
@@ -200,25 +314,31 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, nil
 
 		case "enter":
-			// Attach to interactive agents, show output for non-interactive
 			if item, idx := v.filter.SelectedItem(); idx >= 0 {
 				if item.Interactive && (item.State == engine.AgentRunning || item.State == engine.AgentStarting) {
 					return v, v.attachToAgent(item.ID)
 				}
-				v.selectedAgent = &item
-				v.outputOffset = 0
-				v.refreshSelectedAgentOutput()
+				v.selectAgent(item)
 			}
 			return v, nil
 
-		case "d":
-			// Deselect agent (clear detail view)
-			v.selectedAgent = nil
-			v.outputEntries = nil
-			return v, nil
+		case "tab":
+			if v.selectedAgent != nil {
+				v.focus = focusOutput
+				return v, nil
+			}
+
+		case "d", "esc":
+			if key == "esc" && v.filter.IsActive() {
+				v.filter.Update(msg)
+				return v, nil
+			}
+			if v.selectedAgent != nil {
+				v.deselectAgent()
+				return v, nil
+			}
 
 		case "c":
-			// Clear completed/stopped agents from view
 			if v.engine != nil {
 				for _, a := range v.agents {
 					if a.State != engine.AgentRunning && a.State != engine.AgentStarting {
@@ -230,45 +350,20 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, nil
 
 		case "/":
-			// Activate filter/search mode
 			if v.filter != nil {
 				v.filter.Update(msg)
 			}
 
-		case "esc":
-			// Clear filter if active, otherwise deselect
-			if v.filter.IsActive() {
-				v.filter.Update(msg)
-			} else if v.selectedAgent != nil {
-				v.selectedAgent = nil
-				v.outputEntries = nil
-			}
-
-		case "j", "down":
-			// Move down in list
-			v.filter.Update(msg)
-			// Clear selection when navigating
-			if v.selectedAgent != nil {
-				v.selectedAgent = nil
-				v.outputEntries = nil
-			}
-
-		case "g":
-			// Go to top (vim-style)
-			v.filter.Update(msg)
-
-		case "G":
-			// Go to bottom (vim-style)
+		case "j", "down", "k", "up", "g", "G":
 			v.filter.Update(msg)
 		}
 
-		// Pass to filter for navigation
+		// Pass remaining keys to filter
 		if v.filter != nil {
 			v.filter.Update(msg)
 		}
 
 	case AgentDetachedMsg:
-		// Returned from PTY attach - refresh the agent list
 		v.loadAgents()
 		return v, nil
 
@@ -278,12 +373,9 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		v.width = msg.Width
 		v.height = msg.Height
-		if v.filter != nil {
-			v.filter.SetHeight(msg.Height)
-		}
+		v.recalcLayout()
 
 	case tea.MouseMsg:
-		// Handle mouse events for the filter/list
 		if v.filter != nil {
 			if v.filter.HandleMouse(msg) {
 				return v, nil
@@ -291,7 +383,6 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case StreamTickMsg:
-		// Periodic refresh for streaming output
 		if v.selectedAgent != nil {
 			v.refreshSelectedAgentOutput()
 		}
@@ -309,11 +400,10 @@ func (v *AgentView) attachToAgent(agentID string) tea.Cmd {
 
 	proxy := v.engine.GetPTYProxy(agentID)
 	if proxy == nil {
-		v.err = fmt.Errorf("cannot attach: agent %s has no PTY (not interactive or not running)", agentID)
+		v.err = fmt.Errorf("cannot attach: agent %s has no PTY", agentID)
 		return nil
 	}
 
-	// Resize the agent's PTY to match our terminal
 	v.engine.ResizeAgent(agentID, v.height, v.width)
 
 	return tea.Exec(proxy, func(err error) tea.Msg {
@@ -359,10 +449,8 @@ func (v *AgentView) handleNewAgentInput(msg tea.KeyMsg) tea.Cmd {
 		v.showNewAgent = false
 		v.newAgentTask = ""
 	case "ctrl+i":
-		// Toggle interactive mode
 		v.newAgentInteractive = !v.newAgentInteractive
 	default:
-		// Handle text input for task description
 		if len(msg.Runes) == 1 {
 			r := msg.Runes[0]
 			if r >= 32 && r <= 126 {
@@ -379,7 +467,6 @@ func (v *AgentView) handleNewAgentInput(msg tea.KeyMsg) tea.Cmd {
 func (v *AgentView) renderAgentItem(agent AgentInfo, index int, selected bool) string {
 	th := theme.GetTheme()
 
-	// Status icon and color based on state
 	var statusIcon string
 	var statusStyle lipgloss.Style
 
@@ -407,188 +494,182 @@ func (v *AgentView) renderAgentItem(agent AgentInfo, index int, selected bool) s
 		statusStyle = th.MutedTextStyle
 	}
 
-	// Agent ID and status
-	namePrefix := "  "
+	prefix := "  "
 	if selected {
-		namePrefix = " >"
+		prefix = " >"
 	}
 
 	var line strings.Builder
-	line.WriteString(fmt.Sprintf("%s%s ", namePrefix, statusStyle.Render(statusIcon)))
+	line.WriteString(fmt.Sprintf("%s%s ", prefix, statusStyle.Render(statusIcon)))
 
-	// Agent ID (short)
 	shortID := agent.ID
 	if len(shortID) > 12 {
 		shortID = shortID[:12]
 	}
 	line.WriteString(th.BranchStyle.Render(shortID))
 
-	// Mode indicator
 	if agent.Interactive {
 		line.WriteString(lipgloss.NewStyle().Foreground(th.Info).Render(" [PTY]"))
 	}
 
-	// Task (truncated)
 	task := agent.Task
-	maxTask := 35
+	maxTask := v.width - 45 // dynamic based on terminal width
+	if maxTask < 15 {
+		maxTask = 15
+	}
 	if agent.Interactive {
-		maxTask = 29 // shorter to account for [PTY] label
+		maxTask -= 6
 	}
 	if len(task) > maxTask {
 		task = task[:maxTask-3] + "..."
 	}
 	line.WriteString(fmt.Sprintf(" %s", th.StatsStyle.Render(task)))
 
-	// Elapsed time for running agents
+	// Time info
 	if agent.State == engine.AgentRunning || agent.State == engine.AgentStarting {
 		if agent.StartedAt != nil {
 			elapsed := time.Since(*agent.StartedAt)
-			line.WriteString(th.MutedTextStyle.Render(fmt.Sprintf(" [%s]", elapsed.Round(time.Second))))
+			line.WriteString(th.MutedTextStyle.Render(fmt.Sprintf(" %s", formatDuration(elapsed))))
 		}
-	}
-
-	// Duration for completed agents
-	if agent.EndedAt != nil && agent.StartedAt != nil {
+	} else if agent.EndedAt != nil && agent.StartedAt != nil {
 		duration := agent.EndedAt.Sub(*agent.StartedAt)
-		line.WriteString(th.MutedTextStyle.Render(fmt.Sprintf(" [%s]", duration.Round(time.Second))))
+		line.WriteString(th.MutedTextStyle.Render(fmt.Sprintf(" %s", formatDuration(duration))))
 	}
 
-	// State label
 	stateLabel := agent.State.String()
-	stateStyle := statusStyle
 	if agent.State == engine.AgentRunning {
 		stateLabel = "running"
-		stateStyle = lipgloss.NewStyle().Foreground(th.Info)
 	} else if agent.State == engine.AgentComplete {
 		stateLabel = "done"
-		stateStyle = lipgloss.NewStyle().Foreground(th.Info)
 	}
-	line.WriteString(fmt.Sprintf(" %s", stateStyle.Render(stateLabel)))
+	line.WriteString(fmt.Sprintf(" %s", statusStyle.Render(stateLabel)))
 
 	return line.String()
+}
+
+// formatDuration formats a duration concisely.
+func formatDuration(d time.Duration) string {
+	d = d.Round(time.Second)
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm%ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
 }
 
 // View renders the agent console.
 func (v *AgentView) View() string {
 	th := theme.GetTheme()
-
 	var s strings.Builder
 
-	// Header
-	s.WriteString(th.DashboardTitle.Render(" Agent Console "))
-	s.WriteString("\n\n")
-
-	// Engine stats
+	// Stats line
 	if v.engine != nil {
 		stats := v.engine.Stats()
-		s.WriteString(th.StatsStyle.Render(fmt.Sprintf(" Agents: %d/%d active | %d completed | %d errors ",
+		s.WriteString(th.StatsStyle.Render(fmt.Sprintf(" Agents: %d/%d active  %d done  %d errors",
 			stats.Active, stats.MaxAgents, stats.Completed, stats.Errored)))
-		s.WriteString("\n\n")
 	}
 
-	// New agent hint
+	// Help hint
 	if !v.showNewAgent && !v.showKillConfirm {
-		s.WriteString(th.Help.Render(" n: New agent | a: Attach PTY | k: Kill | Enter: View/Attach | d: Deselect | c: Clear | /: Search | r: Refresh "))
-		s.WriteString("\n\n")
+		s.WriteString("  ")
+		s.WriteString(th.Help.Render("n:new  a:attach  K:kill  enter:view  d:close  c:clear  r:refresh"))
 	}
+	s.WriteString("\n")
 
-	// Agent list
+	// Divider
+	divider := strings.Repeat("─", v.width)
+
+	// Agent list pane
+	listFocusStyle := lipgloss.NewStyle()
+	if v.focus == focusList && v.selectedAgent != nil {
+		listFocusStyle = listFocusStyle.BorderLeft(true).BorderStyle(lipgloss.NormalBorder()).
+			BorderForeground(th.Accent)
+	}
 	s.WriteString(v.filter.View())
 
-	// Agent output panel
+	// Output pane (when agent selected)
 	if v.selectedAgent != nil {
 		s.WriteString("\n")
-		s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
+		s.WriteString(th.BorderStyle.Render(divider))
 		s.WriteString("\n")
-		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" Agent: %s ", v.selectedAgent.ID)))
+
+		// Output pane header
+		header := fmt.Sprintf(" %s", v.selectedAgent.ID)
 		if v.selectedAgent.Interactive {
-			s.WriteString(lipgloss.NewStyle().Foreground(th.Info).Render(" [PTY - press 'a' to attach]"))
+			header += " [PTY]"
 		}
-		s.WriteString("\n\n")
-
-		// Agent details
-		s.WriteString(fmt.Sprintf(" %s %s\n", th.BranchStyle.Render("Task:"), th.StatsStyle.Render(v.selectedAgent.Task)))
-		s.WriteString(fmt.Sprintf(" %s %s\n", th.BranchStyle.Render("State:"), th.StatsStyle.Render(v.selectedAgent.State.String())))
-
-		if v.selectedAgent.StartedAt != nil {
-			s.WriteString(fmt.Sprintf(" %s %s\n", th.BranchStyle.Render("Started:"), th.StatsStyle.Render(v.selectedAgent.StartedAt.Format("15:04:05"))))
-		}
-		if v.selectedAgent.EndedAt != nil {
-			s.WriteString(fmt.Sprintf(" %s %s\n", th.BranchStyle.Render("Ended:"), th.StatsStyle.Render(v.selectedAgent.EndedAt.Format("15:04:05"))))
-		}
-		if v.selectedAgent.Error != "" {
-			s.WriteString(fmt.Sprintf(" %s %s\n", th.BranchStyle.Render("Error:"), th.DashboardErrorStyle.Render(v.selectedAgent.Error)))
+		header += fmt.Sprintf("  %s", v.selectedAgent.State.String())
+		if v.selectedAgent.Interactive && (v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting) {
+			header += "  a:attach"
 		}
 
-		s.WriteString("\n")
-		s.WriteString(th.StatsStyle.Render(" Output "))
-		s.WriteString("\n")
-		s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-		s.WriteString("\n")
+		scrollPct := ""
+		if v.outputViewport.TotalLineCount() > v.outputViewport.Height {
+			pct := v.outputViewport.ScrollPercent() * 100
+			scrollPct = fmt.Sprintf(" %d%%", int(pct))
+		}
 
-		// Output entries
+		focusIndicator := " "
+		if v.focus == focusOutput {
+			focusIndicator = lipgloss.NewStyle().Foreground(th.Accent).Bold(true).Render(">")
+		}
+
+		s.WriteString(fmt.Sprintf("%s%s%s\n",
+			focusIndicator,
+			th.DashboardTitle.Render(header),
+			th.MutedTextStyle.Render(scrollPct),
+		))
+
+		// Viewport content
 		if len(v.outputEntries) == 0 {
-			s.WriteString(th.MutedTextStyle.Render(" No output yet..."))
+			s.WriteString(th.MutedTextStyle.Render(" Waiting for output..."))
+			s.WriteString("\n")
 		} else {
-			for _, entry := range v.outputEntries {
-				// Only show stdout and stderr, skip system messages in compact view
-				if entry.Source == "system" {
-					continue
-				}
+			s.WriteString(v.outputViewport.View())
+			s.WriteString("\n")
+		}
 
-				content := entry.Content
-				// Truncate long lines
-				if len(content) > 120 {
-					content = content[:117] + "..."
-				}
-
-				var sourceStyle lipgloss.Style
-				switch entry.Source {
-				case "stderr":
-					sourceStyle = th.DashboardErrorStyle
-				default:
-					sourceStyle = th.StatsStyle
-				}
-
-				s.WriteString(fmt.Sprintf(" %s\n", sourceStyle.Render(content)))
-			}
+		// Output pane hint
+		if v.focus == focusOutput {
+			s.WriteString(th.Help.Render(" j/k:scroll  g/G:top/bottom  ctrl+d/u:page  tab:list  esc:close"))
+		} else {
+			s.WriteString(th.Help.Render(" tab:focus output  esc/d:close"))
 		}
 	}
 
 	// Kill confirmation modal
 	if v.showKillConfirm {
-		s.WriteString("\n\n")
-		s.WriteString(th.DashboardErrorStyle.Render(" ┌─────────────────────────────────────────────┐"))
 		s.WriteString("\n")
-		s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf(" │ Kill agent '%s'?  (y/n)                  │", v.killAgentID)))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardErrorStyle.Render(" └─────────────────────────────────────────────┘"))
+		shortID := v.killAgentID
+		if len(shortID) > 12 {
+			shortID = shortID[:12]
+		}
+		s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf(" Kill agent %s? (y/n) ", shortID)))
 	}
 
 	// New agent input modal
 	if v.showNewAgent {
+		s.WriteString("\n")
 		boxWidth := v.width - 4
 		if boxWidth < 30 {
 			boxWidth = 30
 		}
-		innerWidth := boxWidth - 4 // account for " │ " padding on each side
+		innerWidth := boxWidth - 4
 
-		s.WriteString("\n\n")
 		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" ┌%s┐", strings.Repeat("─", boxWidth-2))))
 		s.WriteString("\n")
 
-		// Mode indicator
-		modeLabel := "autonomous (--print)"
+		modeLabel := "autonomous"
 		if v.newAgentInteractive {
 			modeLabel = "interactive (PTY)"
 		}
-		modeLine := fmt.Sprintf("Mode: %s  [Ctrl+I to toggle]", modeLabel)
+		modeLine := fmt.Sprintf("Mode: %s  [Ctrl+I toggle]", modeLabel)
 		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" │ %-*s │", innerWidth, modeLine)))
 		s.WriteString("\n")
 
-		// Word-wrap the task text within the box
-		prompt := "Task: "
-		taskText := prompt + v.newAgentTask + "█"
+		taskText := "Task: " + v.newAgentTask + "█"
 		for len(taskText) > 0 {
 			line := taskText
 			if len(line) > innerWidth {
@@ -601,39 +682,30 @@ func (v *AgentView) View() string {
 			s.WriteString("\n")
 		}
 
-		hint := "(Enter: start, Esc: cancel)"
-		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" │ %-*s │", innerWidth, hint)))
+		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" │ %-*s │", innerWidth, "Enter: start  Esc: cancel")))
 		s.WriteString("\n")
 		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" └%s┘", strings.Repeat("─", boxWidth-2))))
 	}
 
 	// Error display
 	if v.err != nil {
-		s.WriteString("\n\n")
+		s.WriteString("\n")
 		s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf(" Error: %v", v.err)))
 	}
-
-	// Footer
-	s.WriteString("\n")
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
-	s.WriteString(th.Help.Render(" n: New | a: Attach | k: Kill | Enter: View/Attach | d: Deselect | c: Clear | r: Refresh "))
 
 	return s.String()
 }
 
 // ShortHelp returns a short help string.
 func (v *AgentView) ShortHelp() string {
-	return "n: New  a: Attach  k: Kill  Enter: View/Attach  d: Deselect  r: Refresh"
+	return "n:new  a:attach  K:kill  enter:view  d:close  c:clear  r:refresh"
 }
 
 // SetSize updates the view dimensions.
 func (v *AgentView) SetSize(width, height int) {
 	v.width = width
 	v.height = height
-	if v.filter != nil {
-		v.filter.SetHeight(height)
-	}
+	v.recalcLayout()
 }
 
 // GetRepoPath returns the repository path.
@@ -647,11 +719,9 @@ func (v *AgentView) Refresh() error {
 	return v.err
 }
 
-// CapturesInput returns true when the view is in an input mode
-// (new agent task input or kill confirmation) where global keybindings
-// should not intercept keystrokes.
+// CapturesInput returns true when the view is in an input mode.
 func (v *AgentView) CapturesInput() bool {
-	return v.showNewAgent || v.showKillConfirm
+	return v.showNewAgent || v.showKillConfirm || v.focus == focusOutput
 }
 
 // KeyBindings returns the keybindings for this view.
@@ -660,14 +730,13 @@ func (v *AgentView) KeyBindings() []components.KeyBinding {
 		{Key: "r", Description: "Refresh agent list"},
 		{Key: "n", Description: "Start new agent task"},
 		{Key: "a", Description: "Attach to agent PTY (Ctrl+] to detach)"},
-		{Key: "k", Description: "Kill selected agent"},
+		{Key: "K", Description: "Kill selected agent"},
 		{Key: "Enter", Description: "View output / Attach PTY"},
-		{Key: "d", Description: "Deselect / clear detail view"},
+		{Key: "d/Esc", Description: "Close output pane"},
 		{Key: "c", Description: "Clear stopped agents"},
+		{Key: "Tab", Description: "Switch focus between list and output"},
 		{Key: "/", Description: "Search agents"},
-		{Key: "↑/k", Description: "Navigate up"},
-		{Key: "↓/j", Description: "Navigate down"},
-		{Key: "Esc", Description: "Cancel / Clear"},
+		{Key: "j/k", Description: "Navigate"},
 	}
 }
 

@@ -216,6 +216,7 @@ func (e *Engine) ResizeAgent(sessionID string, rows, cols int) error {
 
 // GetPTYProxy returns a PTYProxy for attaching to an interactive agent.
 // Returns nil if the agent is not interactive or not running.
+// Marks the agent as attached (pausing background capture).
 func (e *Engine) GetPTYProxy(sessionID string) *PTYProxy {
 	agent := e.getAgent(sessionID)
 	if agent == nil || !agent.IsInteractive() || !agent.IsActive() {
@@ -225,7 +226,8 @@ func (e *Engine) GetPTYProxy(sessionID string) *PTYProxy {
 	if ptmx == nil {
 		return nil
 	}
-	return NewPTYProxy(ptmx, agent.Done())
+	agent.Attach()
+	return NewPTYProxy(ptmx, agent.Done(), func() { agent.Detach() })
 }
 
 // IsInteractive returns whether an agent is in interactive PTY mode

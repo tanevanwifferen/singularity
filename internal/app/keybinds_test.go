@@ -226,9 +226,9 @@ func TestKeybindManagerLoadConfigPartial(t *testing.T) {
 		t.Errorf("Expected 'Q' for ActionQuit after partial config load, got %q", key)
 	}
 
-	// Other defaults should remain unchanged (refresh should still be 'r')
-	if key := km.GetActionKey(ActionRefresh); key != "r" {
-		t.Errorf("Expected 'r' for ActionRefresh (default), got %q", key)
+	// Other defaults should remain unchanged (refresh should still be 'R')
+	if key := km.GetActionKey(ActionRefresh); key != "R" {
+		t.Errorf("Expected 'R' for ActionRefresh (default), got %q", key)
 	}
 }
 

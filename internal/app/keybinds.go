@@ -36,11 +36,11 @@ const (
 // These are used when no config file exists or on invalid config.
 var DefaultKeybinds = map[Action][]string{
 	ActionQuit:          {"q", "ctrl+c"},
-	ActionRefresh:       {"r"},
-	ActionToggleTheme:   {"t"},
+	ActionRefresh:       {"R"},
+	ActionToggleTheme:   {"T"},
 	ActionShowHelp:      {"?"},
 	ActionGoBack:        {"esc"},
-	ActionSwitchView:    {"1", "2", "3", "4", "5", "6", "7", "8", "9"},
+	ActionSwitchView:    {"alt+o", "alt+b", "alt+c", "alt+s", "alt+d", "alt+x", "alt+r", "alt+w", "alt+l", "alt+p", "alt+m", "alt+a"},
 	ActionNavigateUp:    {"up", "k"},
 	ActionNavigateDown:  {"down", "j"},
 	ActionNavigateLeft:  {"left", "h"},

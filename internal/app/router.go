@@ -33,6 +33,7 @@ type InputCapturer interface {
 	CapturesInput() bool
 }
 
+
 // SwitchViewMsg is a message to switch to a different view.
 type SwitchViewMsg struct {
 	ViewName string
@@ -42,6 +43,8 @@ type SwitchViewMsg struct {
 type Router struct {
 	views      map[string]View
 	viewOrder  []string // deterministic ordering of view names
+	viewKeys   map[string]string // view name → shortcut key (e.g. "Overview" → "o")
+	keyToView  map[string]string // shortcut key → view name (e.g. "o" → "Overview")
 	activeName string
 	active     View
 
@@ -61,23 +64,35 @@ func NewRouter(initial View, name string) *Router {
 	return &Router{
 		views:      views,
 		viewOrder:  []string{name},
+		viewKeys:   make(map[string]string),
+		keyToView:  make(map[string]string),
 		activeName: name,
 		active:     initial,
 	}
 }
 
-// Register adds a view to the router under the given name.
-func (r *Router) Register(name string, view View) {
+// Register adds a view to the router under the given name with an optional shortcut key.
+func (r *Router) Register(name string, view View, keys ...string) {
 	if _, exists := r.views[name]; !exists {
 		r.viewOrder = append(r.viewOrder, name)
 	}
 	r.views[name] = view
+	// Assign shortcut key if provided (displayed as the letter, routed as alt+letter)
+	if len(keys) > 0 && keys[0] != "" {
+		r.viewKeys[name] = keys[0]
+		r.keyToView["alt+"+keys[0]] = name
+	}
 	// Apply current dimensions to newly registered views
 	if r.viewWidth > 0 && r.viewHeight > 0 {
 		if sized, ok := view.(SizableView); ok {
 			sized.SetSize(r.viewWidth, r.viewHeight)
 		}
 	}
+}
+
+// ViewKey returns the shortcut key for a view, or "" if none assigned.
+func (r *Router) ViewKey(name string) string {
+	return r.viewKeys[name]
 }
 
 // GetView returns a view by name, or nil if not found.
@@ -180,35 +195,14 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Handle key-based navigation (skip when active view is capturing input)
 	if keyMsg, ok := msg.(tea.KeyMsg); ok && !r.ActiveViewCapturesInput() {
-		switch keyMsg.String() {
+		key := keyMsg.String()
+		switch key {
 		case "?":
 			// Show help overlay with combined global and view-specific bindings
 			r.showHelp = true
 			r.buildHelpOverlay()
 			return r, nil
-		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
-			names := r.ViewNames()
-			idx := int(keyMsg.String()[0] - '1')
-			if idx < len(names) {
-				if err := r.SwitchTo(names[idx]); err != nil {
-					return r, nil
-				}
-				return r, r.active.Init()
-			}
-		case "0":
-			// "0" switches to the 11th view (Agents), or 10th if only 10 views
-			names := r.ViewNames()
-			idx := 10 // Agents at index 10 (11th view)
-			if len(names) <= idx {
-				idx = 9 // fallback to 10th view (CreatePR)
-			}
-			if len(names) > idx {
-				if err := r.SwitchTo(names[idx]); err != nil {
-					return r, nil
-				}
-				return r, r.active.Init()
-			}
-		case "tab", "l":
+		case "tab":
 			// Cycle to next view
 			names := r.ViewNames()
 			for i, name := range names {
@@ -220,7 +214,7 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return r, r.active.Init()
 				}
 			}
-		case "shift+tab", "h":
+		case "shift+tab":
 			// Cycle to previous view
 			names := r.ViewNames()
 			for i, name := range names {
@@ -231,6 +225,14 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					return r, r.active.Init()
 				}
+			}
+		default:
+			// Alt+letter view switching (e.g. alt+o for Overview)
+			if viewName, ok := r.keyToView[key]; ok {
+				if err := r.SwitchTo(viewName); err != nil {
+					return r, nil
+				}
+				return r, r.active.Init()
 			}
 		}
 	}
@@ -299,7 +301,10 @@ func (r *Router) HelpText() string {
 		if i > 0 {
 			help += "  "
 		}
-		key := tabKeyLabel(i)
+		key := r.viewKeys[name]
+		if key == "" {
+			key = "-"
+		}
 		if name == r.activeName {
 			help += fmt.Sprintf("[%s: %s]", key, name)
 		} else {
@@ -307,17 +312,6 @@ func (r *Router) HelpText() string {
 		}
 	}
 	return help
-}
-
-// tabKeyLabel returns the keyboard shortcut label for tab at the given index.
-func tabKeyLabel(i int) string {
-	if i < 9 {
-		return fmt.Sprintf("%d", i+1)
-	}
-	if i == 9 {
-		return "0"
-	}
-	return "-"
 }
 
 // tabAtX returns the view name at the given x position in the tab bar, or "" if none.
@@ -328,7 +322,10 @@ func (r *Router) tabAtX(x int) string {
 		if i > 0 {
 			pos += 3 // separator " │ "
 		}
-		key := tabKeyLabel(i)
+		key := r.viewKeys[name]
+		if key == "" {
+			key = "-"
+		}
 		var tabWidth int
 		if name == r.activeName {
 			// Active: "[K] Name"

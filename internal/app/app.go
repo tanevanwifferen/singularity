@@ -163,57 +163,50 @@ func (m *Model) loadRepo() {
 // initRouter initializes the view router with available views.
 func (m *Model) initRouter() {
 	// Create the overview view as the first view (landing page)
+	// Views use Alt+letter shortcuts for switching (shown in tab bar)
 	overview := views.NewOverviewView(m.repoPath)
 	router := NewRouter(overview, "Overview")
+	router.viewKeys["Overview"] = "o"
+	router.keyToView["alt+o"] = "Overview"
 
-	// Register branch dashboard view
 	dashboard, err := NewBranchDashboard(m.repoPath)
 	if err == nil {
-		router.Register("Branches", dashboard)
+		router.Register("Branches", dashboard, "b")
 	}
 
-	// Register commit view
 	commitView := views.NewCommitView(m.repoPath)
-	router.Register("commit", commitView)
+	router.Register("commit", commitView, "c")
 
-	// Register sync view (push, pull, fetch, rebase)
 	syncView := views.NewSyncView(m.repoPath)
-	router.Register("Sync", syncView)
+	router.Register("Sync", syncView, "s")
 
-	// Register branch comparison view (split panel with diff summary)
 	branchCompareView := views.NewBranchComparisonView(m.repoPath)
-	router.Register("BranchCompare", branchCompareView)
+	router.Register("BranchCompare", branchCompareView, "d")
 
-	// Register stash view
 	stashView := views.NewStashView(m.repoPath)
-	router.Register("Stashes", stashView)
+	router.Register("Stashes", stashView, "x")
 
-	// Register rebase planner view
 	rebaseView := views.NewRebaseView(m.repoPath)
-	router.Register("Rebase", rebaseView)
+	router.Register("Rebase", rebaseView, "r")
 
-	// Register worktree view
 	worktreeView := views.NewWorktreeView(m.repoPath)
-	router.Register("Worktrees", worktreeView)
+	router.Register("Worktrees", worktreeView, "w")
 
-	// Register commit log view
 	logView := views.NewLogView(m.repoPath)
-	router.Register("Log", logView)
+	router.Register("Log", logView, "l")
 
-	// Register pipeline dashboard view
 	pipelineView := views.NewPipelineView(m.repoPath)
-	router.Register("Pipeline", pipelineView)
+	router.Register("Pipeline", pipelineView, "p")
 
-	// Register PR/MR creation view
 	prView := views.NewPRView(m.repoPath)
-	router.Register("CreatePR", prView)
+	router.Register("CreatePR", prView, "m")
 
-	// Register agent console view - create engine if not set
+	// Register agent console view
 	if m.engine == nil {
 		m.engine = engine.New(10)
 	}
 	agentView := views.NewAgentView(m.repoPath, m.engine)
-	router.Register("Agents", agentView)
+	router.Register("Agents", agentView, "a")
 
 	m.router = router
 
@@ -350,13 +343,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, tea.Quit
 			}
-		case "r":
+		case "R":
 			if !viewCapturesInput {
-				// Refresh repo
+				// Refresh repo (capital R — lowercase r used by views)
 				m.loadRepo()
 				return m, nil
 			}
-		case "t":
+		case "T":
 			if !viewCapturesInput {
 				// Toggle theme
 				theme.ToggleTheme()

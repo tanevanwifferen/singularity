@@ -13,19 +13,22 @@ import (
 // allowing the user to "attach" to a running agent.
 // The detach sequence is Ctrl+] (0x1d).
 type PTYProxy struct {
-	ptmx   *os.File
-	stdin  io.Reader
-	stdout io.Writer
-	stderr io.Writer
-	done   <-chan struct{} // agent done signal
+	ptmx     *os.File
+	stdin    io.Reader
+	stdout   io.Writer
+	stderr   io.Writer
+	done     <-chan struct{} // agent done signal
+	onDetach func()         // called when proxy stops (to resume background capture)
 }
 
 // NewPTYProxy creates a proxy for the given PTY file descriptor.
 // done should be the agent's Done() channel.
-func NewPTYProxy(ptmx *os.File, done <-chan struct{}) *PTYProxy {
+// onDetach is called when the proxy finishes (user detaches or agent exits).
+func NewPTYProxy(ptmx *os.File, done <-chan struct{}, onDetach func()) *PTYProxy {
 	return &PTYProxy{
-		ptmx: ptmx,
-		done: done,
+		ptmx:     ptmx,
+		done:     done,
+		onDetach: onDetach,
 	}
 }
 
@@ -51,7 +54,14 @@ func (p *PTYProxy) Run() error {
 	var once sync.Once
 	doStop := func() { once.Do(func() { close(stop) }) }
 
-	// Copy PTY output → terminal stdout
+	// Always call onDetach when we're done to resume background capture
+	defer func() {
+		if p.onDetach != nil {
+			p.onDetach()
+		}
+	}()
+
+	// Copy PTY output -> terminal stdout
 	go func() {
 		buf := make([]byte, 4096)
 		for {
@@ -71,7 +81,7 @@ func (p *PTYProxy) Run() error {
 		}
 	}()
 
-	// Copy terminal stdin → PTY, watching for detach (Ctrl+])
+	// Copy terminal stdin -> PTY, watching for detach (Ctrl+])
 	go func() {
 		buf := make([]byte, 256)
 		for {
