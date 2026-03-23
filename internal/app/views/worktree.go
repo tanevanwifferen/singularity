@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"git-frontend/internal/app/components"
+	"git-frontend/internal/engine"
 	"git-frontend/internal/git"
 	"git-frontend/internal/theme"
 
@@ -24,11 +25,16 @@ type WorktreeView struct {
 	width       int
 	height      int
 
+	// Agent engine for starting merge agents
+	engine *engine.Engine
+
 	// Modal states
-	showCreate      bool
+	showCreate        bool
 	showRemoveConfirm bool
 	showPruneConfirm  bool
 	showNewBranchInput bool
+	showAgentConfirm  bool
+	agentWorktree     *git.Worktree
 
 	// Create worktree input state
 	newWorktreePath  string
@@ -61,6 +67,11 @@ func NewWorktreeView(repoPath string) *WorktreeView {
 	v.filter.SetHeight(v.height)
 
 	return v
+}
+
+// SetEngine sets the agent engine used to start merge agents.
+func (v *WorktreeView) SetEngine(eng *engine.Engine) {
+	v.engine = eng
 }
 
 // Init initializes the worktree view.
@@ -106,6 +117,9 @@ func (v *WorktreeView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		// Handle modal states first
+		if v.showAgentConfirm {
+			return v, v.handleAgentConfirm(msg)
+		}
 		if v.showPruneConfirm {
 			return v, v.handlePruneConfirm(msg)
 		}
@@ -166,6 +180,20 @@ func (v *WorktreeView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "p":
 			// Show prune confirmation
 			v.showPruneConfirm = true
+		case "a":
+			// Start agent to merge this worktree branch into main
+			if item, idx := v.filter.SelectedItem(); idx >= 0 && item.Branch != "" {
+				v.agentWorktree = &item
+				v.showAgentConfirm = true
+			}
+		case "m":
+			// Open PR/MR creation view with this branch pre-selected
+			if item, idx := v.filter.SelectedItem(); idx >= 0 && item.Branch != "" {
+				branch := item.Branch
+				return v, func() tea.Msg {
+					return OpenPRForBranchMsg{Branch: branch}
+				}
+			}
 		case "enter":
 			// Navigate to worktree path
 			if item, idx := v.filter.SelectedItem(); idx >= 0 {
@@ -247,6 +275,36 @@ func (v *WorktreeView) handlePruneConfirm(msg tea.KeyMsg) tea.Cmd {
 		v.showPruneConfirm = false
 	case "n", "esc":
 		v.showPruneConfirm = false
+	}
+	return nil
+}
+
+// handleAgentConfirm handles key events during agent-merge confirmation.
+func (v *WorktreeView) handleAgentConfirm(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "y", "enter":
+		wt := v.agentWorktree
+		eng := v.engine
+		v.showAgentConfirm = false
+		v.agentWorktree = nil
+		if wt != nil && eng != nil {
+			path := wt.Path
+			branch := wt.Branch
+			return func() tea.Msg {
+				task := fmt.Sprintf(
+					"You are in a git worktree for branch '%s'. "+
+						"Merge this branch into the main branch (main or master): "+
+						"1) fetch origin, 2) checkout main/master, 3) merge '%s', "+
+						"4) push to remote. Resolve any merge conflicts carefully.",
+					branch, branch,
+				)
+				id, err := eng.StartAgent(path, task, engine.AgentOptions{SmartRoute: true})
+				return AgentCreatedMsg{ID: id, Err: err}
+			}
+		}
+	case "n", "esc":
+		v.showAgentConfirm = false
+		v.agentWorktree = nil
 	}
 	return nil
 }
@@ -481,9 +539,23 @@ func (v *WorktreeView) View() string {
 		s.WriteString(v.filter.View())
 	} else {
 		// Show filter hint first line
-		s.WriteString(th.Help.Render(" Press / to search • ↑/k: Select • Enter: Navigate • n: Create • d: Remove • l: Lock • u: Unlock • p: Prune "))
+		s.WriteString(th.Help.Render(" Press / to search • ↑/k: Select • Enter: Navigate • n: Create • d: Remove • a: Merge (agent) • m: Create MR • p: Prune "))
 		s.WriteString("\n\n")
 		s.WriteString(v.filter.View())
+	}
+
+	// Agent merge confirmation modal
+	if v.showAgentConfirm && v.agentWorktree != nil {
+		s.WriteString("\n\n")
+		s.WriteString(th.DashboardAccentStyle.Render(" ┌─────────────────────────────────────────────────┐"))
+		s.WriteString("\n")
+		s.WriteString(th.DashboardAccentStyle.Render(fmt.Sprintf(" │ Start agent to merge '%s' into main?  │", fitStr(v.agentWorktree.Branch, 26))))
+		s.WriteString("\n")
+		s.WriteString(th.DashboardAccentStyle.Render(" │ The agent will fetch, merge, and push.         │"))
+		s.WriteString("\n")
+		s.WriteString(th.DashboardAccentStyle.Render(" │                        (y/n)                   │"))
+		s.WriteString("\n")
+		s.WriteString(th.DashboardAccentStyle.Render(" └─────────────────────────────────────────────────┘"))
 	}
 
 	// Remove confirmation modal
@@ -542,14 +614,23 @@ func (v *WorktreeView) View() string {
 	s.WriteString("\n")
 	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
 	s.WriteString("\n")
-	s.WriteString(th.Help.Render(" r: Refresh   /: Search   ↑↓: Navigate   Enter: Navigate   n: Create   d: Remove   l: Lock   u: Unlock   p: Prune "))
+	s.WriteString(th.Help.Render(" r: Refresh   /: Search   ↑↓: Navigate   Enter: Navigate   n: Create   d: Remove   a: Merge (agent)   m: Create MR   p: Prune "))
 
 	return s.String()
 }
 
 // ShortHelp returns a short help string.
 func (v *WorktreeView) ShortHelp() string {
-	return "/: Search  ↑↓: Navigate  Enter: Navigate  n: Create  d: Remove  l: Lock  u: Unlock  p: Prune"
+	return "/: Search  ↑↓: Navigate  Enter: Navigate  n: Create  d: Remove  a: Merge (agent)  m: Create MR  p: Prune"
+}
+
+// fitStr pads or truncates s to exactly n runes.
+func fitStr(s string, n int) string {
+	r := []rune(s)
+	if len(r) >= n {
+		return string(r[:n])
+	}
+	return s + strings.Repeat(" ", n-len(r))
 }
 
 // SetSize updates the view dimensions.
@@ -587,6 +668,8 @@ func (v *WorktreeView) KeyBindings() []components.KeyBinding {
 		{Key: "d", Description: "Remove selected worktree"},
 		{Key: "L", Description: "Lock selected worktree"},
 		{Key: "u", Description: "Unlock selected worktree"},
+		{Key: "a", Description: "Start agent to merge branch into main"},
+		{Key: "m", Description: "Create MR/PR for this worktree branch"},
 		{Key: "p", Description: "Prune stale worktrees"},
 		{Key: "Esc", Description: "Clear filter / Cancel"},
 		{Key: "1", Description: "Switch to Overview"},

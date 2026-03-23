@@ -82,6 +82,9 @@ type Agent struct {
 
 	// Smart routing result (nil if not routed)
 	RouteResult *RouteResult `json:"route_result,omitempty"`
+
+	// sessionID is the actual session ID assigned by Claude (from system/init event)
+	sessionID string
 }
 
 // OutputEntry represents a single output chunk from the agent.
@@ -284,6 +287,11 @@ func (a *Agent) processEvent(event map[string]interface{}) {
 			if model != "" {
 				a.appendOutput("system", fmt.Sprintf("Model: %s", model))
 			}
+			if sid, _ := event["session_id"].(string); sid != "" {
+				a.mu.Lock()
+				a.sessionID = sid
+				a.mu.Unlock()
+			}
 		// Skip hook_started, hook_response — noisy
 		}
 
@@ -452,18 +460,39 @@ func (a *Agent) sendInput(message string) error {
 		a.mu.Unlock()
 		return fmt.Errorf("agent %s is in state %s, cannot send input", a.ID, a.State)
 	}
+
+	// Check if the subprocess is still alive before resuming
+	if a.cmd == nil || a.cmd.Process == nil {
+		a.mu.Unlock()
+		return fmt.Errorf("agent %s process is no longer running", a.ID)
+	}
+
+	// Remember previous state so we can revert on failure
+	prevState := a.State
+	prevEndedAt := a.EndedAt
+
 	// Resume agent back to running when sending a follow-up
 	if a.State == AgentComplete || a.State == AgentKilled {
 		a.State = AgentRunning
 		a.EndedAt = nil
 	}
+
+	sid := a.sessionID
 	a.mu.Unlock()
+	if sid == "" {
+		sid = a.ID
+	}
 
 	a.stdinMu.Lock()
 	defer a.stdinMu.Unlock()
 
 	if a.stdin == nil {
-		return fmt.Errorf("agent %s stdin not available", a.ID)
+		// Revert state — stdin was closed (process exited or was killed)
+		a.mu.Lock()
+		a.State = prevState
+		a.EndedAt = prevEndedAt
+		a.mu.Unlock()
+		return fmt.Errorf("agent %s stdin not available (process exited)", a.ID)
 	}
 
 	// stream-json input format requires a structured message envelope
@@ -473,7 +502,7 @@ func (a *Agent) sendInput(message string) error {
 			"role":    "user",
 			"content": message,
 		},
-		"session_id":         a.ID,
+		"session_id":         sid,
 		"parent_tool_use_id": nil,
 	}
 	data, err := json.Marshal(msg)
@@ -484,7 +513,12 @@ func (a *Agent) sendInput(message string) error {
 
 	_, err = a.stdin.Write(data)
 	if err != nil {
-		return fmt.Errorf("write to stdin: %w", err)
+		// Revert state — write failed (broken pipe, process exited, etc.)
+		a.mu.Lock()
+		a.State = prevState
+		a.EndedAt = prevEndedAt
+		a.mu.Unlock()
+		return fmt.Errorf("write to stdin: %w (process may have exited)", err)
 	}
 
 	a.appendOutput("user_input", message)

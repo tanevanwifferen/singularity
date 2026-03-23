@@ -220,6 +220,7 @@ func (m *Model) initRouter() {
 	router.Register("Rebase", rebaseView)
 
 	worktreeView := views.NewWorktreeView(m.repoPath)
+	worktreeView.SetEngine(m.engine)
 	router.Register("Worktrees", worktreeView)
 
 	pipelineView := views.NewPipelineView(m.repoPath)
@@ -294,20 +295,66 @@ func (m *Model) initProjectRouter() {
 	router.viewKeys["Project"] = "f1"
 	router.keyToView["f1"] = "Project"
 
+	// Use the first repo's path as the default for single-repo views.
+	// Fall back to the project directory itself.
+	defaultRepoPath := m.projectPath
+	if m.proj != nil && len(m.proj.Repos) > 0 {
+		defaultRepoPath = m.proj.Repos[0].Path
+	}
+
+	// Register single-repo views that are also useful in project mode
+	dashboard, err := NewBranchDashboard(defaultRepoPath)
+	if err == nil {
+		router.Register("Branches", dashboard, "f2")
+	}
+
+	commitView := views.NewCommitView(defaultRepoPath)
+	router.Register("Commit", commitView, "f3")
+
+	logView := views.NewLogView(defaultRepoPath)
+	router.Register("Log", logView, "f4")
+
 	// Register agent console view (shared engine so agents spawned from
 	// ProjectView are visible in the AgentView)
 	var contextFiles []string
 	if m.proj != nil {
 		contextFiles = m.proj.ContextFiles
 	}
-	// Use the project directory as the base repo path for the agent view.
-	// Fall back to the first repo's path if available.
-	agentRepoPath := m.projectPath
-	if m.proj != nil && len(m.proj.Repos) > 0 {
-		agentRepoPath = m.proj.Repos[0].Path
-	}
-	agentView := views.NewAgentView(agentRepoPath, m.engine, contextFiles)
+	agentView := views.NewAgentView(defaultRepoPath, m.engine, contextFiles)
 	router.Register("Agents", agentView, "f5")
+
+	// Git operations submenu (accessible via "g" key)
+	syncView := views.NewSyncView(defaultRepoPath)
+	router.Register("Sync", syncView)
+
+	branchCompareView := views.NewBranchComparisonView(defaultRepoPath)
+	router.Register("BranchCompare", branchCompareView)
+
+	stashView := views.NewStashView(defaultRepoPath)
+	router.Register("Stashes", stashView)
+
+	rebaseView := views.NewRebaseView(defaultRepoPath)
+	router.Register("Rebase", rebaseView)
+
+	worktreeView := views.NewWorktreeView(defaultRepoPath)
+	worktreeView.SetEngine(m.engine)
+	router.Register("Worktrees", worktreeView)
+
+	pipelineView := views.NewPipelineView(defaultRepoPath)
+	router.Register("Pipeline", pipelineView)
+
+	prView := views.NewPRView(defaultRepoPath)
+	router.Register("CreatePR", prView)
+
+	router.RegisterSubmenu("g", "Git", []components.SubmenuItem{
+		{Key: "s", Label: "Sync (push/pull/fetch)", ViewName: "Sync"},
+		{Key: "b", Label: "Branch Compare", ViewName: "BranchCompare"},
+		{Key: "t", Label: "Stashes", ViewName: "Stashes"},
+		{Key: "r", Label: "Rebase", ViewName: "Rebase"},
+		{Key: "w", Label: "Worktrees", ViewName: "Worktrees"},
+		{Key: "p", Label: "Pipeline", ViewName: "Pipeline"},
+		{Key: "c", Label: "Create PR", ViewName: "CreatePR"},
+	})
 
 	m.router = router
 
@@ -497,6 +544,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Project update, could show a notification or refresh overview
 		m.statusMsg = fmt.Sprintf("Project updated: %s", msg.Status)
 		return m, nil
+	case views.OpenPRForBranchMsg:
+		// Navigate to PR creation view with the worktree branch pre-selected
+		if m.router != nil {
+			view := m.router.GetView("CreatePR")
+			if prv, ok := view.(*views.PRView); ok {
+				prv.SetPendingSourceBranch(msg.Branch)
+			}
+			m.router.SwitchTo("CreatePR")
+		}
+		return m, func() tea.Msg { return views.RefreshMsg{} }
 	case views.RefreshMsg:
 		// Forward refresh to active view
 		if m.router != nil {

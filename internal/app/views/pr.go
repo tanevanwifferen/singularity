@@ -20,8 +20,9 @@ type PRView struct {
 	height   int
 
 	// Branch selection state
-	sourceBranchIdx int
-	targetBranchIdx int
+	sourceBranchIdx     int
+	targetBranchIdx     int
+	pendingSourceBranch string // pre-select this branch as source on next load
 
 	// Forge detection
 	forgeAuth *git.ForgeAuth
@@ -63,6 +64,11 @@ func NewPRView(repoPath string) *PRView {
 	}
 }
 
+// SetPendingSourceBranch pre-selects a branch as the source on the next data load.
+func (v *PRView) SetPendingSourceBranch(name string) {
+	v.pendingSourceBranch = name
+}
+
 // Init initializes the PR view.
 func (v *PRView) Init() tea.Cmd {
 	v.loading = true
@@ -94,9 +100,14 @@ func (v *PRView) loadData() {
 		v.forgeAuth = auth
 	}
 
-	// Set default source branch to current branch
+	// Set source branch: use pending (from worktree view) if set, else current branch
+	sourceName := v.pendingSourceBranch
+	if sourceName == "" {
+		sourceName = v.repo.CurrentBranch
+	}
+	v.pendingSourceBranch = ""
 	for i, b := range v.branches {
-		if b.Name == v.repo.CurrentBranch {
+		if b.Name == sourceName {
 			v.sourceBranchIdx = i
 			break
 		}

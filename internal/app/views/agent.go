@@ -789,25 +789,39 @@ func (v *AgentView) View() string {
 			s.WriteString("\n")
 		}
 
-		// Message input field
+		// Message input modal (box overlay below viewport)
 		if v.showMessageInput {
-			inputStyle := lipgloss.NewStyle().Foreground(th.Accent)
-			prefix := "> "
-			cursor := "█"
-			fullText := prefix + v.messageInput + cursor
-			maxW := v.width - 2
-			if maxW < 10 {
-				maxW = 10
+			boxWidth := v.width - 4
+			if boxWidth < 30 {
+				boxWidth = 30
 			}
-			for _, wl := range wrapLine(fullText, maxW, "  ") {
-				s.WriteString(inputStyle.Render(wl))
+			innerWidth := boxWidth - 4
+
+			s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" ┌%s┐", strings.Repeat("─", boxWidth-2))))
+			s.WriteString("\n")
+
+			msgText := "Message: " + v.messageInput + "█"
+			for len(msgText) > 0 {
+				line := msgText
+				if len(line) > innerWidth {
+					line = msgText[:innerWidth]
+					msgText = msgText[innerWidth:]
+				} else {
+					msgText = ""
+				}
+				s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" │ %-*s │", innerWidth, line)))
 				s.WriteString("\n")
 			}
+
+			s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" │ %-*s │", innerWidth, "Enter: send  Esc: cancel")))
+			s.WriteString("\n")
+			s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" └%s┘", strings.Repeat("─", boxWidth-2))))
+			s.WriteString("\n")
 		}
 
 		// Output pane hint
 		if v.showMessageInput {
-			s.WriteString(th.Help.Render(" enter:send  esc:cancel"))
+			// hint already inside the box
 		} else if v.focus == focusOutput {
 			hint := " j/k:scroll  g/G:top/bottom  ctrl+d/u:page  tab:list  esc:close"
 			if v.selectedAgent != nil &&
