@@ -50,6 +50,18 @@ type ProjectView struct {
 	branchCheckName string
 	branchExistence *project.BranchExistence
 
+	// New branch creation state
+	showNewBranch   bool
+	newBranchName   string
+	newBranchResult string // flash message for results
+
+	// MR creation state
+	showMRConfirm   bool
+	mrConfirmRepo   string // repo name for confirmation
+	mrConfirmPath   string // repo path
+	mrConfirmBranch string // branch name
+	mrResult        string // flash message for MR result
+
 	// Filter for tree list
 	filter *components.Filter[treeNode]
 }
@@ -242,6 +254,17 @@ func (v *ProjectView) renderTreeNode(node treeNode, index int, selected bool) st
 
 		// Branch count
 		line.WriteString(th.MutedTextStyle.Render(fmt.Sprintf("  (%d branches)", node.Repo.BranchCount)))
+
+		// Ahead branch count
+		aheadCount := 0
+		for _, b := range node.Repo.Branches {
+			if b.Ahead > 0 {
+				aheadCount++
+			}
+		}
+		if aheadCount > 0 {
+			line.WriteString(th.DashboardAccentStyle.Render(fmt.Sprintf("  %d ahead", aheadCount)))
+		}
 	} else {
 		// Branch row: indented under repo
 		prefix := "     "
@@ -253,30 +276,41 @@ func (v *ProjectView) renderTreeNode(node treeNode, index int, selected bool) st
 		// Current branch marker
 		isCurrent := node.Repo.CurrentBranch == node.Branch.Name
 		if isCurrent {
-			line.WriteString(th.DashboardAccentStyle.Render("* "))
+			line.WriteString(th.DashboardAccentStyle.Render("⚡"))
 		} else {
 			line.WriteString("  ")
 		}
 
-		// Branch name
+		// Branch name with color based on status
 		if selected {
 			line.WriteString(th.SelectedBranchStyle.Render(node.Branch.Name))
 		} else if isCurrent {
 			line.WriteString(th.DashboardAccentStyle.Render(node.Branch.Name))
+		} else if node.Branch.Ahead > 0 {
+			line.WriteString(th.StatsStyle.Render(node.Branch.Name))
+		} else if node.Branch.Behind > 0 {
+			line.WriteString(th.DashboardErrorStyle.Render(node.Branch.Name))
 		} else {
 			line.WriteString(th.BranchStyle.Render(node.Branch.Name))
 		}
 
-		// Ahead/behind indicators
-		if node.Branch.Ahead > 0 || node.Branch.Behind > 0 {
-			var ab []string
-			if node.Branch.Ahead > 0 {
-				ab = append(ab, fmt.Sprintf("↑%d", node.Branch.Ahead))
-			}
-			if node.Branch.Behind > 0 {
-				ab = append(ab, fmt.Sprintf("↓%d", node.Branch.Behind))
-			}
-			line.WriteString(th.MutedTextStyle.Render(fmt.Sprintf("  %s", strings.Join(ab, " "))))
+		// Status icons after branch name
+		hasUpstream := node.Branch.Upstream != ""
+		if node.Branch.Ahead > 0 && node.Branch.Behind > 0 {
+			line.WriteString("  ")
+			line.WriteString(th.DashboardAccentStyle.Render(fmt.Sprintf("↑%d↓%d", node.Branch.Ahead, node.Branch.Behind)))
+		} else if node.Branch.Ahead > 0 {
+			line.WriteString("  ")
+			line.WriteString(th.StatsStyle.Render(fmt.Sprintf("↑%d", node.Branch.Ahead)))
+		} else if node.Branch.Behind > 0 {
+			line.WriteString("  ")
+			line.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf("↓%d", node.Branch.Behind)))
+		} else if hasUpstream {
+			line.WriteString("  ")
+			line.WriteString(th.StatsStyle.Render("✓"))
+		} else {
+			line.WriteString("  ")
+			line.WriteString(th.MutedTextStyle.Render("⊘"))
 		}
 	}
 
@@ -287,6 +321,45 @@ func (v *ProjectView) renderTreeNode(node treeNode, index int, selected bool) st
 func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Clear flash messages on any key press
+		if v.newBranchResult != "" {
+			v.newBranchResult = ""
+		}
+		if v.mrResult != "" {
+			v.mrResult = ""
+		}
+
+		// Handle new branch creation mode
+		if v.showNewBranch {
+			switch msg.Type {
+			case tea.KeyBackspace:
+				if len(v.newBranchName) > 0 {
+					v.newBranchName = v.newBranchName[:len(v.newBranchName)-1]
+				}
+			case tea.KeyEnter:
+				if v.newBranchName != "" && v.proj != nil {
+					var results []string
+					for _, repo := range v.proj.Repos {
+						err := git.CreateBranch(repo.Path, v.newBranchName, repo.DefaultBranch)
+						if err != nil {
+							results = append(results, fmt.Sprintf("✗ %s: %v", repo.Name, err))
+						} else {
+							results = append(results, fmt.Sprintf("✓ %s: created '%s'", repo.Name, v.newBranchName))
+						}
+					}
+					v.newBranchResult = strings.Join(results, "\n")
+					v.loadData()
+				}
+				v.showNewBranch = false
+			case tea.KeyEsc:
+				v.showNewBranch = false
+				v.newBranchName = ""
+			case tea.KeyRunes:
+				v.newBranchName += string(msg.Runes)
+			}
+			return v, nil
+		}
+
 		// Handle branch check mode
 		if v.showBranchCheck {
 			switch msg.Type {
@@ -304,6 +377,24 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				v.branchCheckName = ""
 			case tea.KeyRunes:
 				v.branchCheckName += string(msg.Runes)
+			}
+			return v, nil
+		}
+
+		// Handle MR confirmation mode
+		if v.showMRConfirm {
+			switch msg.String() {
+			case "y", "enter":
+				provider := git.DetectRemoteProvider(v.mrConfirmPath)
+				result, err := git.CreateMergeRequestCLI(v.mrConfirmPath, provider)
+				if err != nil {
+					v.mrResult = fmt.Sprintf("MR creation failed: %v", err)
+				} else {
+					v.mrResult = fmt.Sprintf("MR created: %s", result)
+				}
+				v.showMRConfirm = false
+			case "n", "esc":
+				v.showMRConfirm = false
 			}
 			return v, nil
 		}
@@ -345,6 +436,36 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if node != nil {
 				return v, func() tea.Msg {
 					return ViewChangeMsg{ViewName: "Overview", RepoPath: node.Repo.Path}
+				}
+			}
+		case "c":
+			// Checkout the selected branch
+			node := v.selectedNode()
+			if node != nil && !node.IsRepo && node.Branch != nil {
+				err := git.Checkout(node.Repo.Path, node.Branch.Name)
+				if err != nil {
+					v.newBranchResult = fmt.Sprintf("✗ %s: %v", node.Repo.Name, err)
+				} else {
+					v.newBranchResult = fmt.Sprintf("✓ %s: checked out '%s'", node.Repo.Name, node.Branch.Name)
+				}
+				v.loadData()
+			}
+		case "n":
+			// Enter new branch creation mode
+			v.showNewBranch = true
+			v.newBranchName = ""
+		case "m":
+			// Create MR/PR for the selected branch
+			node := v.selectedNode()
+			if node != nil && !node.IsRepo && node.Branch != nil {
+				defaultBranch := node.Repo.DefaultBranch
+				if node.Branch.Name == defaultBranch {
+					v.mrResult = fmt.Sprintf("Cannot create MR from default branch '%s'", defaultBranch)
+				} else {
+					v.showMRConfirm = true
+					v.mrConfirmRepo = node.Repo.Name
+					v.mrConfirmPath = node.Repo.Path
+					v.mrConfirmBranch = node.Branch.Name
 				}
 			}
 		case "b":
@@ -462,6 +583,55 @@ func (v *ProjectView) View() string {
 		}
 	}
 
+	// New branch creation section
+	if v.showNewBranch {
+		s.WriteString(th.StatsStyle.Render(" Create Branch Across All Repos "))
+		s.WriteString("\n")
+		s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
+		s.WriteString("\n\n")
+		s.WriteString(th.Help.Render("Branch name: "))
+		s.WriteString(th.InfoStyle.Render(v.newBranchName))
+		s.WriteString(th.MutedTextStyle.Render("_"))
+		s.WriteString("\n\n")
+		s.WriteString(th.Help.Render("Enter: Create   Esc: Cancel"))
+		s.WriteString("\n\n")
+	}
+
+	// MR confirmation dialog
+	if v.showMRConfirm {
+		s.WriteString(th.DashboardAccentStyle.Render(" Create MR/PR? "))
+		s.WriteString("\n\n")
+		s.WriteString(th.Help.Render("  Repo:   "))
+		s.WriteString(th.InfoStyle.Render(v.mrConfirmRepo))
+		s.WriteString("\n")
+		s.WriteString(th.Help.Render("  Branch: "))
+		s.WriteString(th.InfoStyle.Render(v.mrConfirmBranch))
+		s.WriteString("\n\n")
+		s.WriteString(th.Help.Render("  [y] Yes  [n] No"))
+		s.WriteString("\n\n")
+	}
+
+	// Flash messages
+	if v.newBranchResult != "" {
+		for _, line := range strings.Split(v.newBranchResult, "\n") {
+			if strings.HasPrefix(line, "✓") {
+				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
+			} else {
+				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
+			}
+			s.WriteString("\n")
+		}
+		s.WriteString("\n")
+	}
+	if v.mrResult != "" {
+		if strings.Contains(v.mrResult, "failed") || strings.Contains(v.mrResult, "Cannot") {
+			s.WriteString(th.DashboardErrorStyle.Render(v.mrResult))
+		} else {
+			s.WriteString(th.DashboardAccentStyle.Render(v.mrResult))
+		}
+		s.WriteString("\n\n")
+	}
+
 	// Repos header
 	s.WriteString(th.StatsStyle.Render(" Repositories "))
 	s.WriteString("\n")
@@ -480,14 +650,30 @@ func (v *ProjectView) View() string {
 	// Footer
 	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
 	s.WriteString("\n")
-	s.WriteString(th.Help.Render("↑↓: Navigate  Enter: Expand/collapse  o: Open repo  b: Check branch  /: Filter  r: Refresh"))
+	s.WriteString(th.Help.Render("⚡current  ✓synced  ↑ahead  ↓behind  ⊘no remote  ●dirty  ✗error"))
+	s.WriteString("\n")
+	s.WriteString(th.Help.Render("↑↓: Navigate  Enter: Expand/collapse  o: Open  c: Checkout  n: New branch  m: MR/PR  b: Check  /: Filter  r: Refresh"))
 
 	return s.String()
 }
 
 // ShortHelp returns a short help string.
 func (v *ProjectView) ShortHelp() string {
-	return "↑↓: Navigate  Enter: Expand/collapse  o: Open repo  b: Check branch  /: Filter  r: Refresh"
+	return "↑↓: Navigate  Enter: Expand/collapse  o: Open  c: Checkout  n: New branch  m: MR/PR  b: Check  /: Filter  r: Refresh"
+}
+
+// CapturesInput returns true when the view is in an input mode.
+func (v *ProjectView) CapturesInput() bool {
+	return v.showBranchCheck || v.showNewBranch || v.showMRConfirm
+}
+
+// CapturesKey returns true for keys this view handles directly.
+func (v *ProjectView) CapturesKey(key string) bool {
+	switch key {
+	case "r", "o", "b", "c", "n", "m", "enter", "/", "j", "k", "up", "down":
+		return true
+	}
+	return false
 }
 
 // SetSize updates the view dimensions.
@@ -521,6 +707,9 @@ func (v *ProjectView) KeyBindings() []components.KeyBinding {
 		{Key: "↓/j", Description: "Select next item"},
 		{Key: "enter", Description: "Expand/collapse repo"},
 		{Key: "o", Description: "Open selected repository"},
+		{Key: "c", Description: "Checkout selected branch"},
+		{Key: "n", Description: "Create new branch across all repos"},
+		{Key: "m", Description: "Create MR/PR for selected branch"},
 		{Key: "b", Description: "Check if branch exists in all repos"},
 		{Key: "/", Description: "Filter"},
 		{Key: "r", Description: "Refresh all repos"},

@@ -123,11 +123,12 @@ func (l *Layout) RenderTabBar(router *Router) string {
 }
 
 // RenderStatusBar renders the status bar at the bottom of the screen.
-func (l *Layout) RenderStatusBar(repoInfo *git.RepoInfo, viewName string) string {
+// projectName is an optional fallback displayed when repoInfo is nil (e.g. project mode).
+func (l *Layout) RenderStatusBar(repoInfo *git.RepoInfo, viewName string, projectName string) string {
 	// Build status bar content
 	var status string
 
-	// Left side: repo info
+	// Left side: repo info or project name
 	if repoInfo != nil {
 		repoName := filepath.Base(repoInfo.Path)
 		status += l.primaryTextStyle.Render(repoName)
@@ -143,6 +144,8 @@ func (l *Layout) RenderStatusBar(repoInfo *git.RepoInfo, viewName string) string
 			status += " "
 			status += l.modifiedTextStyle.Render("●")
 		}
+	} else if projectName != "" {
+		status += l.primaryTextStyle.Render(projectName)
 	} else {
 		status += l.mutedTextStyle.Render("No repository")
 	}
@@ -175,7 +178,8 @@ func (l *Layout) AvailableViewDimensions() (width, height int) {
 }
 
 // Render renders the complete layout with the active view content.
-func (l *Layout) Render(router *Router, repoInfo *git.RepoInfo, activeViewContent string) string {
+// projectName is displayed in the status bar when repoInfo is nil (project mode).
+func (l *Layout) Render(router *Router, repoInfo *git.RepoInfo, activeViewContent string, projectName ...string) string {
 	th := theme.GetTheme()
 	l.rebuildStyles()
 
@@ -204,9 +208,13 @@ func (l *Layout) Render(router *Router, repoInfo *git.RepoInfo, activeViewConten
 	output += "\n"
 
 	// Status bar (no trailing newline — avoids scrolling the tab bar off screen)
-	statusBar := l.RenderStatusBar(repoInfo, "")
+	pName := ""
+	if len(projectName) > 0 {
+		pName = projectName[0]
+	}
+	statusBar := l.RenderStatusBar(repoInfo, "", pName)
 	if router != nil {
-		statusBar = l.RenderStatusBar(repoInfo, router.ActiveName())
+		statusBar = l.RenderStatusBar(repoInfo, router.ActiveName(), pName)
 	}
 	output += statusBar
 

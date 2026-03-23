@@ -292,7 +292,7 @@ func TestLayoutRenderTabBarNilRouter(t *testing.T) {
 
 func TestLayoutRenderStatusBar(t *testing.T) {
 	layout := NewLayout()
-	statusBar := layout.RenderStatusBar(nil, "test-view")
+	statusBar := layout.RenderStatusBar(nil, "test-view", "")
 
 	// Should contain the view name
 	if !strings.Contains(statusBar, "test-view") {

@@ -269,6 +269,9 @@ func (m *Model) initProjectRouter() {
 	// Create the project overview view as the first view (landing page)
 	projectView := views.NewProjectView(m.proj)
 	router := NewRouter(projectView, "Project")
+	// Add F1 shortcut for the project view
+	router.viewKeys["Project"] = "f1"
+	router.keyToView["f1"] = "Project"
 
 	m.router = router
 
@@ -461,6 +464,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) View() string {
 	// If router is initialized, use layout composition
 	if m.router != nil && m.layout != nil {
+		if m.projectMode && m.proj != nil {
+			return m.layout.Render(m.router, m.repoInfo, m.router.View(), m.proj.Name)
+		}
 		return m.layout.Render(m.router, m.repoInfo, m.router.View())
 	}
 

@@ -57,3 +57,23 @@ func CompareBranchesSimple(repoPath, branchA, branchB string) (ahead, behind int
 	}
 	return result.Ahead, result.Behind, nil
 }
+
+// Checkout checks out an existing branch in the given repo
+func Checkout(repoPath, branch string) error {
+	cmd := exec.Command("git", "-C", repoPath, "checkout", branch)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("checkout failed: %s", strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// CreateBranch creates and checks out a new branch from the default branch
+func CreateBranch(repoPath, branch, fromBranch string) error {
+	cmd := exec.Command("git", "-C", repoPath, "checkout", "-b", branch, fromBranch)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("create branch failed: %s", strings.TrimSpace(string(output)))
+	}
+	return nil
+}
