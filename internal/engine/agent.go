@@ -403,7 +403,11 @@ func (a *Agent) processResultEvent(event map[string]interface{}) {
 	a.mu.Unlock()
 
 	if isError {
-		a.appendOutput("error", fmt.Sprintf("Error: %s", result))
+		errMsg := result
+		if errMsg == "" {
+			errMsg = "agent exited with error (no message provided)"
+		}
+		a.appendOutput("error", fmt.Sprintf("Error: %s", errMsg))
 	} else {
 		status := "completed"
 		if subtype != "" {
@@ -453,6 +457,7 @@ func (a *Agent) waitForExit() {
 		a.EndedAt = &now
 	}
 
+	var exitErrMsg string
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			a.ExitCode = exitErr.ExitCode()
@@ -461,6 +466,11 @@ func (a *Agent) waitForExit() {
 		if a.State == AgentRunning || a.State == AgentStarting {
 			a.State = AgentError
 			a.Error = err.Error()
+			exitErrMsg = err.Error()
+		} else if a.State == AgentError && a.Error == "" {
+			// processResultEvent set error state but captured no message; fill it in now
+			a.Error = err.Error()
+			exitErrMsg = err.Error()
 		}
 	} else {
 		if a.State == AgentRunning {
@@ -469,6 +479,10 @@ func (a *Agent) waitForExit() {
 	}
 
 	a.mu.Unlock()
+
+	if exitErrMsg != "" {
+		a.appendOutput("error", fmt.Sprintf("Process exit: %s", exitErrMsg))
+	}
 
 	close(a.done)
 }
