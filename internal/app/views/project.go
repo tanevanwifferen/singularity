@@ -17,6 +17,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// pushDoneMsg signals that batch push has completed.
+type pushDoneMsg struct{}
+
+// mrDoneMsg signals that batch MR creation has completed.
+type mrDoneMsg struct{}
+
 // treeNode represents a row in the project tree (either a repo or a branch).
 type treeNode struct {
 	IsRepo   bool
@@ -73,6 +79,14 @@ type ProjectView struct {
 	workflowStatusMsg    string // flash message
 	workflowBaseDir      string // default ~/.worktrees/<projectName>/
 	showWorkflowStatus   bool   // toggle for status panel
+
+	// Batch push state
+	showPushConfirm bool   // confirmation for batch push
+	pushResults     string // flash message with push results
+
+	// Batch MR creation state
+	showBatchMRConfirm bool   // confirmation for batch MR creation
+	mrResults          string // flash message with MR results
 
 	// Agent orchestration
 	engine            *engine.Engine
@@ -429,6 +443,12 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.agentSpawnResults != "" {
 			v.agentSpawnResults = ""
 		}
+		if v.pushResults != "" {
+			v.pushResults = ""
+		}
+		if v.mrResults != "" {
+			v.mrResults = ""
+		}
 
 		// Handle workflow start modal
 		if v.showWorkflowStart {
@@ -512,6 +532,38 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case "n", "esc":
 				v.showWorkflowCleanup = false
+			}
+			return v, nil
+		}
+
+		// Handle batch push confirmation
+		if v.showPushConfirm {
+			switch msg.String() {
+			case "y":
+				wf := v.activeWorkflow
+				v.showPushConfirm = false
+				return v, func() tea.Msg {
+					wf.PushAll()
+					return pushDoneMsg{}
+				}
+			case "n", "esc":
+				v.showPushConfirm = false
+			}
+			return v, nil
+		}
+
+		// Handle batch MR creation confirmation
+		if v.showBatchMRConfirm {
+			switch msg.String() {
+			case "y":
+				wf := v.activeWorkflow
+				v.showBatchMRConfirm = false
+				return v, func() tea.Msg {
+					wf.CreateAllMRs()
+					return mrDoneMsg{}
+				}
+			case "n", "esc":
+				v.showBatchMRConfirm = false
 			}
 			return v, nil
 		}
@@ -686,6 +738,44 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					v.agentSpawnResults = "No worktrees created yet -- create worktrees first"
 				}
 			}
+		case "p":
+			// Batch push all repos in the workflow
+			if v.activeWorkflow == nil {
+				v.pushResults = "No active workflow"
+			} else {
+				// Check if any worktree has been created
+				hasWorktree := false
+				for _, wr := range v.activeWorkflow.Repos {
+					if wr.WorktreeCreated {
+						hasWorktree = true
+						break
+					}
+				}
+				if !hasWorktree {
+					v.pushResults = "Nothing to push - no worktrees created"
+				} else {
+					v.showPushConfirm = true
+				}
+			}
+		case "M":
+			// Batch create MRs for all pushed repos
+			if v.activeWorkflow == nil {
+				v.mrResults = "No active workflow"
+			} else {
+				// Check if any repo has been pushed
+				hasPushed := false
+				for _, wr := range v.activeWorkflow.Repos {
+					if wr.Pushed {
+						hasPushed = true
+						break
+					}
+				}
+				if !hasPushed {
+					v.mrResults = "No repos have been pushed yet"
+				} else {
+					v.showBatchMRConfirm = true
+				}
+			}
 		case "W":
 			// Toggle workflow status panel
 			v.showWorkflowStatus = !v.showWorkflowStatus
@@ -732,6 +822,50 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				v.activeWorkflow = nil
 				v.showWorkflowStatus = false
 			}
+		}
+
+	case pushDoneMsg:
+		if v.activeWorkflow != nil {
+			var lines []string
+			names := make([]string, 0, len(v.activeWorkflow.Repos))
+			for name := range v.activeWorkflow.Repos {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			for _, name := range names {
+				wr := v.activeWorkflow.Repos[name]
+				if wr.Error != "" {
+					lines = append(lines, fmt.Sprintf("  ✗ %s: %s", name, wr.Error))
+				} else if wr.Pushed {
+					lines = append(lines, fmt.Sprintf("  ✓ %s: pushed", name))
+				} else {
+					lines = append(lines, fmt.Sprintf("  ⊘ %s: nothing to push", name))
+				}
+			}
+			v.pushResults = strings.Join(lines, "\n")
+		}
+
+	case mrDoneMsg:
+		if v.activeWorkflow != nil {
+			var lines []string
+			names := make([]string, 0, len(v.activeWorkflow.Repos))
+			for name := range v.activeWorkflow.Repos {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			for _, name := range names {
+				wr := v.activeWorkflow.Repos[name]
+				if !wr.Pushed {
+					lines = append(lines, fmt.Sprintf("  ⊘ %s: skipped (not pushed)", name))
+				} else if wr.Error != "" {
+					lines = append(lines, fmt.Sprintf("  ✗ %s: %s", name, wr.Error))
+				} else if wr.MRURL != "" {
+					lines = append(lines, fmt.Sprintf("  ✓ %s: %s", name, wr.MRURL))
+				} else {
+					lines = append(lines, fmt.Sprintf("  ⊘ %s: no MR URL returned", name))
+				}
+			}
+			v.mrResults = strings.Join(lines, "\n")
 		}
 
 	case tea.MouseMsg:
@@ -884,6 +1018,29 @@ func (v *ProjectView) View() string {
 		s.WriteString("\n\n")
 	}
 
+	// Batch push confirmation
+	if v.showPushConfirm && v.activeWorkflow != nil {
+		s.WriteString(th.DashboardAccentStyle.Render(" Push all repos? "))
+		s.WriteString("\n\n")
+		s.WriteString(th.Help.Render("  Branch: "))
+		s.WriteString(th.InfoStyle.Render(v.activeWorkflow.BranchName))
+		s.WriteString("\n\n")
+		s.WriteString(th.Help.Render(fmt.Sprintf("  Push all repos on branch '%s'? [y] Yes [n] No", v.activeWorkflow.BranchName)))
+		s.WriteString("\n\n")
+	}
+
+	// Batch MR creation confirmation
+	if v.showBatchMRConfirm && v.activeWorkflow != nil {
+		st := v.activeWorkflow.Status()
+		s.WriteString(th.DashboardAccentStyle.Render(" Create MRs/PRs? "))
+		s.WriteString("\n\n")
+		s.WriteString(th.Help.Render("  Branch: "))
+		s.WriteString(th.InfoStyle.Render(v.activeWorkflow.BranchName))
+		s.WriteString("\n\n")
+		s.WriteString(th.Help.Render(fmt.Sprintf("  Create MRs/PRs for %d pushed repos? [y] Yes [n] No", st.Pushed)))
+		s.WriteString("\n\n")
+	}
+
 	// Workflow status panel
 	if v.showWorkflowStatus && v.activeWorkflow != nil {
 		st := v.activeWorkflow.Status()
@@ -921,6 +1078,16 @@ func (v *ProjectView) View() string {
 			if wr.Error != "" {
 				s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf("  %s", wr.Error)))
 			}
+			// Push status
+			if wr.Pushed {
+				s.WriteString("  ")
+				s.WriteString(th.StatsStyle.Render("pushed"))
+			}
+			// MR status
+			if wr.MRURL != "" {
+				s.WriteString("  ")
+				s.WriteString(th.DashboardAccentStyle.Render(wr.MRURL))
+			}
 			// Agent status
 			if wr.AgentID != "" && v.engine != nil {
 				agentStatus := v.renderAgentStatus(wr.AgentID)
@@ -955,6 +1122,36 @@ func (v *ProjectView) View() string {
 				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
 			} else {
 				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
+			}
+			s.WriteString("\n")
+		}
+		s.WriteString("\n")
+	}
+
+	// Push results flash message
+	if v.pushResults != "" {
+		for _, line := range strings.Split(v.pushResults, "\n") {
+			if strings.Contains(line, "✓") {
+				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
+			} else if strings.Contains(line, "✗") {
+				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
+			} else {
+				s.WriteString(th.MutedTextStyle.Render(" " + line))
+			}
+			s.WriteString("\n")
+		}
+		s.WriteString("\n")
+	}
+
+	// MR results flash message
+	if v.mrResults != "" {
+		for _, line := range strings.Split(v.mrResults, "\n") {
+			if strings.Contains(line, "✓") {
+				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
+			} else if strings.Contains(line, "✗") {
+				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
+			} else {
+				s.WriteString(th.MutedTextStyle.Render(" " + line))
 			}
 			s.WriteString("\n")
 		}
@@ -1016,7 +1213,7 @@ func (v *ProjectView) View() string {
 	s.WriteString("\n")
 	s.WriteString(th.Help.Render("⚡current  ✓synced  ↑ahead  ↓behind  ⊘no remote  ●dirty  ✗error"))
 	s.WriteString("\n")
-	s.WriteString(th.Help.Render("↑↓: Navigate  Enter: Expand/collapse  o: Open  c: Checkout  n: New branch  m: MR/PR  b: Check  w: Workflow  a: Agents  D: Cleanup  W: Status  /: Filter  r: Refresh"))
+	s.WriteString(th.Help.Render("↑↓: Navigate  Enter: Expand/collapse  o: Open  c: Checkout  n: New branch  m: MR/PR  b: Check  w: Workflow  a: Agents  p: Push all  M: Create MRs  D: Cleanup  W: Status  /: Filter  r: Refresh"))
 
 	return s.String()
 }
@@ -1051,18 +1248,18 @@ func (v *ProjectView) renderAgentStatus(agentID string) string {
 
 // ShortHelp returns a short help string.
 func (v *ProjectView) ShortHelp() string {
-	return "↑↓: Navigate  Enter: Expand/collapse  o: Open  c: Checkout  n: New branch  m: MR/PR  b: Check  w: Workflow  a: Agents  D: Cleanup  W: Status  /: Filter  r: Refresh"
+	return "↑↓: Navigate  Enter: Expand/collapse  o: Open  c: Checkout  n: New branch  m: MR/PR  b: Check  w: Workflow  a: Agents  p: Push all  M: Create MRs  D: Cleanup  W: Status  /: Filter  r: Refresh"
 }
 
 // CapturesInput returns true when the view is in an input mode.
 func (v *ProjectView) CapturesInput() bool {
-	return v.showBranchCheck || v.showNewBranch || v.showMRConfirm || v.showWorkflowStart || v.showWorkflowCleanup || v.showAgentPrompt
+	return v.showBranchCheck || v.showNewBranch || v.showMRConfirm || v.showWorkflowStart || v.showWorkflowCleanup || v.showAgentPrompt || v.showPushConfirm || v.showBatchMRConfirm
 }
 
 // CapturesKey returns true for keys this view handles directly.
 func (v *ProjectView) CapturesKey(key string) bool {
 	switch key {
-	case "r", "o", "b", "c", "n", "m", "w", "a", "D", "W", "enter", "/", "j", "k", "up", "down":
+	case "r", "o", "b", "c", "n", "m", "w", "a", "p", "D", "M", "W", "enter", "/", "j", "k", "up", "down":
 		return true
 	}
 	return false
@@ -1105,6 +1302,8 @@ func (v *ProjectView) KeyBindings() []components.KeyBinding {
 		{Key: "b", Description: "Check if branch exists in all repos"},
 		{Key: "w", Description: "Start feature workflow (create worktrees)"},
 		{Key: "a", Description: "Spawn agents into worktrees"},
+		{Key: "p", Description: "Push all repos in workflow"},
+		{Key: "M", Description: "Create MRs/PRs for all pushed repos"},
 		{Key: "D", Description: "Cleanup feature workflow (remove worktrees)"},
 		{Key: "W", Description: "Toggle workflow status panel"},
 		{Key: "/", Description: "Filter"},
