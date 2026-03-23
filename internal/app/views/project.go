@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -79,7 +78,6 @@ type ProjectView struct {
 	showWorkflowCleanup  bool   // confirmation modal
 	workflowStatusMsg    string // flash message
 	workflowBaseDir      string // default ~/.worktrees/<projectName>/
-	showWorkflowStatus   bool   // toggle for status panel
 
 	// Batch push state
 	showPushConfirm bool   // confirmation for batch push
@@ -312,7 +310,7 @@ func (v *ProjectView) spawnAgentForWorkflow(task string) {
 		v.workflowStatusMsg = fmt.Sprintf("Agent spawn failed: %v", err)
 	} else {
 		wf.SetWorkflowAgentID(id)
-		v.workflowStatusMsg = fmt.Sprintf("Agent %s spawned for workflow '%s'", id, wf.BranchName)
+		v.workflowStatusMsg = fmt.Sprintf(" Agent spawned for '%s'\n   Next: press F5 for Agent view, or 'p' to push when ready", wf.BranchName)
 	}
 }
 
@@ -458,7 +456,6 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					wf := project.NewFeatureWorkflow(v.proj, branchName, baseDir)
 					v.workflows = append(v.workflows, wf)
 					v.selectedWorkflow = len(v.workflows) - 1
-					v.showWorkflowStatus = true
 					v.recalcFilterHeight()
 					return v, func() tea.Msg {
 						wf.CreateAllWorktrees()
@@ -801,10 +798,6 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				v.selectedWorkflow++
 				v.refreshWorkflowAgentSnap()
 			}
-		case "W":
-			// Toggle workflow status panel
-			v.showWorkflowStatus = !v.showWorkflowStatus
-			v.recalcFilterHeight()
 		case "/":
 			if v.filter != nil {
 				v.filter.Update(msg)
@@ -827,24 +820,13 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch st.State {
 			case project.WorkflowActive:
 				// Just finished creating worktrees
-				var lines []string
-				// Sort repo names for deterministic output
-				names := make([]string, 0, len(wf.Repos))
-				for name := range wf.Repos {
-					names = append(names, name)
-				}
-				sort.Strings(names)
-				for _, name := range names {
-					wr := wf.Repos[name]
-					if wr.Error != "" {
-						lines = append(lines, fmt.Sprintf("  ✗ %s: %s", name, wr.Error))
-					} else if wr.WorktreeCreated {
-						lines = append(lines, fmt.Sprintf("  ✓ %s: worktree created", name))
+				created := 0
+				for _, wr := range wf.Repos {
+					if wr.WorktreeCreated {
+						created++
 					}
 				}
-				if len(lines) > 0 {
-					v.workflowStatusMsg = strings.Join(lines, "\n")
-				}
+				v.workflowStatusMsg = fmt.Sprintf(" Worktrees created for '%s' across %d repos\n   Next: press 'a' to spawn an agent, or start working in the worktrees", wf.BranchName, created)
 			case project.WorkflowDone:
 				// Cleanup finished -- remove this workflow from the slice
 				v.workflowStatusMsg = fmt.Sprintf("Worktrees for '%s' removed", wf.BranchName)
@@ -855,47 +837,26 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pushDoneMsg:
 		wf := v.currentWorkflow()
 		if wf != nil {
-			var lines []string
-			names := make([]string, 0, len(wf.Repos))
-			for name := range wf.Repos {
-				names = append(names, name)
-			}
-			sort.Strings(names)
-			for _, name := range names {
-				wr := wf.Repos[name]
-				if wr.Error != "" {
-					lines = append(lines, fmt.Sprintf("  ✗ %s: %s", name, wr.Error))
-				} else if wr.Pushed {
-					lines = append(lines, fmt.Sprintf("  ✓ %s: pushed", name))
-				} else {
-					lines = append(lines, fmt.Sprintf("  ⊘ %s: nothing to push", name))
+			pushed := 0
+			total := len(wf.Repos)
+			for _, wr := range wf.Repos {
+				if wr.Pushed {
+					pushed++
 				}
 			}
-			v.pushResults = strings.Join(lines, "\n")
+			v.pushResults = fmt.Sprintf(" Pushed %d/%d repos\n   Next: press 'M' to create merge requests", pushed, total)
 		}
 
 	case mrDoneMsg:
 		wf := v.currentWorkflow()
 		if wf != nil {
-			var lines []string
-			names := make([]string, 0, len(wf.Repos))
-			for name := range wf.Repos {
-				names = append(names, name)
-			}
-			sort.Strings(names)
-			for _, name := range names {
-				wr := wf.Repos[name]
-				if !wr.Pushed {
-					lines = append(lines, fmt.Sprintf("  ⊘ %s: skipped (not pushed)", name))
-				} else if wr.Error != "" {
-					lines = append(lines, fmt.Sprintf("  ✗ %s: %s", name, wr.Error))
-				} else if wr.MRURL != "" {
-					lines = append(lines, fmt.Sprintf("  ✓ %s: %s", name, wr.MRURL))
-				} else {
-					lines = append(lines, fmt.Sprintf("  ⊘ %s: no MR URL returned", name))
+			created := 0
+			for _, wr := range wf.Repos {
+				if wr.MRURL != "" {
+					created++
 				}
 			}
-			v.mrResults = strings.Join(lines, "\n")
+			v.mrResults = fmt.Sprintf(" Created %d MRs\n   Next: press 'D' to cleanup worktrees when merged", created)
 		}
 
 	case WorkflowTickMsg:
@@ -958,39 +919,28 @@ func (v *ProjectView) View() string {
 		th.DashboardAccentStyle.Render("●"), v.status.DirtyCount,
 		th.DashboardErrorStyle.Render("✗"), v.status.ErrorCount))
 
-	// Branch check section
+	// Branch check modal
 	if v.showBranchCheck {
-		s.WriteString(th.StatsStyle.Render(" Cross-Repo Branch Check "))
-		s.WriteString("\n")
-		s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-		s.WriteString("\n\n")
-		s.WriteString(th.Help.Render("Branch name: "))
-		s.WriteString(th.InfoStyle.Render(v.branchCheckName))
-		s.WriteString(th.MutedTextStyle.Render("_"))
-		s.WriteString("\n\n")
-		s.WriteString(th.Help.Render("Enter: Check   Esc: Cancel"))
-		s.WriteString("\n\n")
+		var lines []string
+		lines = append(lines, "")
+		lines = append(lines, fmt.Sprintf("  Branch name: %s%s", th.InfoStyle.Render(v.branchCheckName), th.MutedTextStyle.Render("_")))
+		lines = append(lines, "")
 
 		if v.proj != nil && v.branchCheckName != "" && v.branchExistence != nil {
-			s.WriteString(th.StatsStyle.Render(" Results "))
-			s.WriteString("\n")
-
 			allHave := true
 			for name, exists := range v.branchExistence.Repos {
 				if !exists {
 					allHave = false
 				}
 				if exists {
-					s.WriteString(fmt.Sprintf("  %s %s\n", th.DashboardAccentStyle.Render("✓"), name))
+					lines = append(lines, fmt.Sprintf("  %s %s", th.DashboardAccentStyle.Render("✓"), name))
 				} else {
-					s.WriteString(fmt.Sprintf("  %s %s\n", th.DashboardErrorStyle.Render("✗"), name))
+					lines = append(lines, fmt.Sprintf("  %s %s", th.DashboardErrorStyle.Render("✗"), name))
 				}
 			}
-
-			s.WriteString("\n")
+			lines = append(lines, "")
 			if allHave {
-				s.WriteString(th.DashboardAccentStyle.Render(fmt.Sprintf(" Branch '%s' exists in ALL repos ✓",
-					v.branchCheckName)))
+				lines = append(lines, th.DashboardAccentStyle.Render(fmt.Sprintf("  Branch '%s' exists in ALL repos", v.branchCheckName)))
 			} else {
 				missingCount := 0
 				for _, exists := range v.branchExistence.Repos {
@@ -998,159 +948,158 @@ func (v *ProjectView) View() string {
 						missingCount++
 					}
 				}
-				s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf(" Branch '%s' missing in %d/%d repos",
+				lines = append(lines, th.DashboardErrorStyle.Render(fmt.Sprintf("  Branch '%s' missing in %d/%d repos",
 					v.branchCheckName, missingCount, len(v.branchExistence.Repos))))
 			}
-			s.WriteString("\n\n")
 		}
+		lines = append(lines, "")
+		lines = append(lines, "  Enter: Check  Esc: Cancel")
+		s.WriteString(renderModal("Cross-Repo Branch Check", lines, v.modalWidth()))
+		s.WriteString("\n")
 	}
 
-	// New branch creation section
+	// New branch creation modal
 	if v.showNewBranch {
-		s.WriteString(th.StatsStyle.Render(" Create Branch Across All Repos "))
+		lines := []string{
+			"",
+			fmt.Sprintf("  Branch name: %s%s", th.InfoStyle.Render(v.newBranchName), th.MutedTextStyle.Render("_")),
+			"",
+			"  Creates the branch in all project repos",
+			fmt.Sprintf("  from each repo's default branch."),
+			"",
+			"  Enter: Create  Esc: Cancel",
+		}
+		s.WriteString(renderModal("Create Branch Across All Repos", lines, v.modalWidth()))
 		s.WriteString("\n")
-		s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-		s.WriteString("\n\n")
-		s.WriteString(th.Help.Render("Branch name: "))
-		s.WriteString(th.InfoStyle.Render(v.newBranchName))
-		s.WriteString(th.MutedTextStyle.Render("_"))
-		s.WriteString("\n\n")
-		s.WriteString(th.Help.Render("Enter: Create   Esc: Cancel"))
-		s.WriteString("\n\n")
 	}
 
 	// Workflow start modal
 	if v.showWorkflowStart {
-		s.WriteString(th.StatsStyle.Render(" Start Feature Workflow "))
+		lines := []string{
+			"",
+			fmt.Sprintf("  Branch name: %s%s", th.InfoStyle.Render(v.workflowBranchName), th.MutedTextStyle.Render("_")),
+			"",
+			"  This creates worktrees for all repos in the",
+			fmt.Sprintf("  project under %s/<branch>/", v.workflowBaseDir),
+			"",
+			"  Enter: Create  Esc: Cancel",
+		}
+		s.WriteString(renderModal("Start Feature Workflow", lines, v.modalWidth()))
 		s.WriteString("\n")
-		s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-		s.WriteString("\n\n")
-		s.WriteString(th.Help.Render("Branch name: "))
-		s.WriteString(th.InfoStyle.Render(v.workflowBranchName))
-		s.WriteString(th.MutedTextStyle.Render("_"))
-		s.WriteString("\n\n")
-		s.WriteString(th.Help.Render("Enter: Create worktrees   Esc: Cancel   Ctrl+W: Delete word"))
-		s.WriteString("\n\n")
 	}
 
 	// Agent prompt modal
 	if v.showAgentPrompt {
-		s.WriteString(th.StatsStyle.Render(" Spawn Agent for Workflow "))
+		wf := v.currentWorkflow()
+		wfName := ""
+		wfDir := ""
+		if wf != nil {
+			wfName = wf.BranchName
+			wfDir = wf.WorkflowDir()
+		}
+		lines := []string{
+			"",
+			fmt.Sprintf("  Workflow: %s", th.InfoStyle.Render(wfName)),
+			fmt.Sprintf("  Working dir: %s", th.MutedTextStyle.Render(wfDir)),
+			"",
+			fmt.Sprintf("  Task: %s%s", th.InfoStyle.Render(v.agentPromptText), th.MutedTextStyle.Render("_")),
+			"",
+			"  The agent will work across all repo worktrees.",
+			"",
+			"  Enter: Spawn  Esc: Cancel",
+		}
+		s.WriteString(renderModal("Spawn Agent", lines, v.modalWidth()))
 		s.WriteString("\n")
-		s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-		s.WriteString("\n\n")
-		s.WriteString(th.Help.Render("Task: "))
-		s.WriteString(th.InfoStyle.Render(v.agentPromptText))
-		s.WriteString(th.MutedTextStyle.Render("_"))
-		s.WriteString("\n\n")
-		s.WriteString(th.Help.Render("Enter: Spawn agent   Esc: Cancel   Ctrl+W: Delete word"))
-		s.WriteString("\n\n")
 	}
 
-	// Workflow cleanup confirmation
+	// Workflow cleanup confirmation modal
 	if v.showWorkflowCleanup {
 		wf := v.currentWorkflow()
 		if wf != nil {
-			s.WriteString(th.DashboardAccentStyle.Render(" Remove all worktrees? "))
-			s.WriteString("\n\n")
-			s.WriteString(th.Help.Render("  Branch: "))
-			s.WriteString(th.InfoStyle.Render(wf.BranchName))
-			s.WriteString("\n\n")
-			s.WriteString(th.Help.Render(fmt.Sprintf("  Remove all worktrees for '%s'? (y/n)", wf.BranchName)))
-			s.WriteString("\n\n")
+			lines := []string{
+				"",
+				fmt.Sprintf("  Branch: %s", th.InfoStyle.Render(wf.BranchName)),
+				fmt.Sprintf("  This will remove all worktrees for '%s'.", wf.BranchName),
+				"",
+				"  y: Confirm  Esc: Cancel",
+			}
+			s.WriteString(renderModal("Remove Worktrees", lines, v.modalWidth()))
+			s.WriteString("\n")
 		}
 	}
 
-	// Batch push confirmation
+	// Batch push confirmation modal
 	if v.showPushConfirm {
 		wf := v.currentWorkflow()
 		if wf != nil {
-			s.WriteString(th.DashboardAccentStyle.Render(" Push all repos? "))
-			s.WriteString("\n\n")
-			s.WriteString(th.Help.Render("  Branch: "))
-			s.WriteString(th.InfoStyle.Render(wf.BranchName))
-			s.WriteString("\n\n")
-			s.WriteString(th.Help.Render(fmt.Sprintf("  Push all repos on branch '%s'? [y] Yes [n] No", wf.BranchName)))
-			s.WriteString("\n\n")
+			lines := []string{
+				"",
+				fmt.Sprintf("  Branch: %s", th.InfoStyle.Render(wf.BranchName)),
+				fmt.Sprintf("  Push all repos on branch '%s'.", wf.BranchName),
+				"",
+				"  y: Confirm  n: Cancel",
+			}
+			s.WriteString(renderModal("Push All Repos", lines, v.modalWidth()))
+			s.WriteString("\n")
 		}
 	}
 
-	// Batch MR creation confirmation
+	// Batch MR creation confirmation modal
 	if v.showBatchMRConfirm {
 		wf := v.currentWorkflow()
 		if wf != nil {
 			st := wf.Status()
-			s.WriteString(th.DashboardAccentStyle.Render(" Create MRs/PRs? "))
-			s.WriteString("\n\n")
-			s.WriteString(th.Help.Render("  Branch: "))
-			s.WriteString(th.InfoStyle.Render(wf.BranchName))
-			s.WriteString("\n\n")
-			s.WriteString(th.Help.Render(fmt.Sprintf("  Create MRs/PRs for %d pushed repos? [y] Yes [n] No", st.Pushed)))
-			s.WriteString("\n\n")
-		}
-	}
-
-	// Workflow status panel (box-drawing bordered)
-	s.WriteString(v.renderWorkflowPanel())
-
-	// Workflow flash message
-	if v.workflowStatusMsg != "" {
-		for _, line := range strings.Split(v.workflowStatusMsg, "\n") {
-			if strings.Contains(line, "✓") || strings.HasPrefix(line, "Worktrees for") {
-				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
-			} else {
-				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
+			lines := []string{
+				"",
+				fmt.Sprintf("  Branch: %s", th.InfoStyle.Render(wf.BranchName)),
+				fmt.Sprintf("  Create MRs/PRs for %d pushed repos.", st.Pushed),
+				"",
+				"  y: Confirm  n: Cancel",
 			}
+			s.WriteString(renderModal("Create MRs/PRs", lines, v.modalWidth()))
 			s.WriteString("\n")
 		}
-		s.WriteString("\n")
 	}
 
-	// Push results flash message
-	if v.pushResults != "" {
-		for _, line := range strings.Split(v.pushResults, "\n") {
-			if strings.Contains(line, "✓") {
-				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
-			} else if strings.Contains(line, "✗") {
-				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
-			} else {
-				s.WriteString(th.MutedTextStyle.Render(" " + line))
-			}
-			s.WriteString("\n")
-		}
-		s.WriteString("\n")
-	}
-
-	// MR results flash message
-	if v.mrResults != "" {
-		for _, line := range strings.Split(v.mrResults, "\n") {
-			if strings.Contains(line, "✓") {
-				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
-			} else if strings.Contains(line, "✗") {
-				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
-			} else {
-				s.WriteString(th.MutedTextStyle.Render(" " + line))
-			}
-			s.WriteString("\n")
-		}
-		s.WriteString("\n")
-	}
-
-	// MR confirmation dialog
+	// MR confirmation modal (single repo)
 	if v.showMRConfirm {
-		s.WriteString(th.DashboardAccentStyle.Render(" Create MR/PR? "))
-		s.WriteString("\n\n")
-		s.WriteString(th.Help.Render("  Repo:   "))
-		s.WriteString(th.InfoStyle.Render(v.mrConfirmRepo))
+		lines := []string{
+			"",
+			fmt.Sprintf("  Repo:   %s", th.InfoStyle.Render(v.mrConfirmRepo)),
+			fmt.Sprintf("  Branch: %s", th.InfoStyle.Render(v.mrConfirmBranch)),
+			"",
+			"  y: Yes  n: No",
+		}
+		s.WriteString(renderModal("Create MR/PR", lines, v.modalWidth()))
 		s.WriteString("\n")
-		s.WriteString(th.Help.Render("  Branch: "))
-		s.WriteString(th.InfoStyle.Render(v.mrConfirmBranch))
-		s.WriteString("\n\n")
-		s.WriteString(th.Help.Render("  [y] Yes  [n] No"))
-		s.WriteString("\n\n")
 	}
 
-	// Flash messages
+	// Compact workflow summary (always shown when workflows exist)
+	s.WriteString(v.renderWorkflowSummary())
+
+	// Flash messages (workflow, push, MR results)
+	flashMsg := v.workflowStatusMsg
+	if flashMsg == "" {
+		flashMsg = v.pushResults
+	}
+	if flashMsg == "" {
+		flashMsg = v.mrResults
+	}
+	if flashMsg != "" {
+		for _, line := range strings.Split(flashMsg, "\n") {
+			if strings.Contains(line, "Next:") {
+				s.WriteString(th.MutedTextStyle.Render(" " + line))
+			} else if strings.Contains(line, "✗") || strings.Contains(line, "failed") || strings.Contains(line, "error") {
+				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
+			} else {
+				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
+			}
+			s.WriteString("\n")
+		}
+		s.WriteString("\n")
+	}
+
+	// Flash messages for branch/MR results
 	if v.newBranchResult != "" {
 		for _, line := range strings.Split(v.newBranchResult, "\n") {
 			if strings.HasPrefix(line, "✓") {
@@ -1191,7 +1140,7 @@ func (v *ProjectView) View() string {
 	s.WriteString("\n")
 	s.WriteString(th.Help.Render("⚡current  ✓synced  ↑ahead  ↓behind  ⊘no remote  ●dirty  ✗error"))
 	s.WriteString("\n")
-	s.WriteString(th.Help.Render("↑↓: Navigate  Enter: Expand/collapse  o: Open  c: Checkout  n: New branch  m: MR/PR  b: Check  w: Workflow  [/]: Switch workflow  a: Agent  p: Push all  M: Create MRs  D: Cleanup  W: Status  /: Filter  r: Refresh"))
+	s.WriteString(v.renderFooterHelp())
 
 	return s.String()
 }
@@ -1261,25 +1210,9 @@ func (v *ProjectView) removeCurrentWorkflow() {
 		v.selectedWorkflow--
 	}
 	if len(v.workflows) == 0 {
-		v.showWorkflowStatus = false
 		v.workflowAgentSnap = nil
 	}
 	v.recalcFilterHeight()
-}
-
-// workflowPanelHeight returns the number of lines the workflow status panel occupies.
-func (v *ProjectView) workflowPanelHeight() int {
-	if !v.showWorkflowStatus || len(v.workflows) == 0 {
-		return 0
-	}
-	// 1 (header) + N (per-workflow line) + 1 (blank separator)
-	// + for the selected workflow: 1 (summary) + 1 (agent) + repos + 1 (border) + 1 (blank)
-	wf := v.currentWorkflow()
-	if wf == nil {
-		return 2 + len(v.workflows)
-	}
-	repoCount := len(wf.Repos)
-	return 3 + len(v.workflows) + repoCount + 3
 }
 
 // ensureWorkflowTick starts the tick loop if agents are running and we aren't already ticking.
@@ -1326,227 +1259,197 @@ func (v *ProjectView) repoWorkflowIndicators(repoName string) string {
 	return "  " + strings.Join(parts, " ")
 }
 
-// renderWorkflowPanel renders the workflow status panel showing all workflows.
-func (v *ProjectView) renderWorkflowPanel() string {
-	if !v.showWorkflowStatus || len(v.workflows) == 0 {
+// renderWorkflowSummary renders a compact one-line-per-workflow summary.
+// Always shown when workflows exist, no toggle needed.
+func (v *ProjectView) renderWorkflowSummary() string {
+	if len(v.workflows) == 0 {
 		return ""
 	}
 
 	th := theme.GetTheme()
-
-	// Calculate inner width
-	innerW := v.width - 4
-	if innerW < 40 {
-		innerW = 40
-	}
-
 	var s strings.Builder
 
-	// Header line with top border
-	headerText := fmt.Sprintf(" Workflows (%d) ", len(v.workflows))
-	dashCount := innerW - len(headerText) - 1
+	// Header
+	headerW := v.width - 4
+	if headerW < 40 {
+		headerW = 40
+	}
+	headerText := " Workflows "
+	dashCount := headerW - len(headerText)
 	if dashCount < 0 {
 		dashCount = 0
 	}
-	s.WriteString(th.BorderStyle.Render(fmt.Sprintf(" ╭%s%s╮", headerText, strings.Repeat("─", dashCount))))
+	s.WriteString(th.MutedTextStyle.Render(fmt.Sprintf(" ── %s%s", headerText, strings.Repeat("─", dashCount))))
 	s.WriteString("\n")
 
-	// List all workflows, highlighting the selected one
 	for i, wf := range v.workflows {
 		st := wf.Status()
 
 		var line strings.Builder
+
 		// Selection indicator
 		if i == v.selectedWorkflow {
-			line.WriteString(" > ")
+			line.WriteString(" ")
+			line.WriteString(th.DashboardAccentStyle.Render("►"))
+			line.WriteString(" ")
 		} else {
 			line.WriteString("   ")
 		}
 
 		// Branch name
-		line.WriteString(st.BranchName)
+		if i == v.selectedWorkflow {
+			line.WriteString(th.DashboardAccentStyle.Render(st.BranchName))
+		} else {
+			line.WriteString(th.BranchStyle.Render(st.BranchName))
+		}
 
-		// State
-		line.WriteString(fmt.Sprintf("  [%s]", st.State.String()))
-
-		// Worktree count
-		line.WriteString(fmt.Sprintf("  W:%d/%d", st.WorktreesCreated, st.TotalRepos))
+		// State indicator
+		switch st.State {
+		case project.WorkflowActive:
+			line.WriteString(th.DashboardAccentStyle.Render("  ● active"))
+		case project.WorkflowDone:
+			line.WriteString(th.StatsStyle.Render("  ✓ done"))
+		case project.WorkflowInitializing:
+			line.WriteString(th.MutedTextStyle.Render("  … init"))
+		case project.WorkflowPushingAll:
+			line.WriteString(th.DashboardAccentStyle.Render("  ↑ pushing"))
+		case project.WorkflowCreatingMRs:
+			line.WriteString(th.DashboardAccentStyle.Render("  MR creating"))
+		case project.WorkflowCleaningUp:
+			line.WriteString(th.MutedTextStyle.Render("  … cleanup"))
+		}
 
 		// Agent status
 		agentID := wf.GetWorkflowAgentID()
-		if agentID != "" {
+		if agentID != "" && v.engine != nil {
 			agent := v.engine.GetAgent(agentID)
 			if agent != nil {
 				snap := agent.Snapshot()
 				switch snap.State {
 				case engine.AgentRunning, engine.AgentStarting, engine.AgentRouting:
-					line.WriteString("  ●")
+					line.WriteString(th.DashboardAccentStyle.Render("  agent running"))
 				case engine.AgentComplete:
-					line.WriteString("  ✓")
+					line.WriteString(th.StatsStyle.Render("  agent done"))
 				case engine.AgentError, engine.AgentKilled:
-					line.WriteString("  ✗")
+					line.WriteString(th.DashboardErrorStyle.Render("  agent failed"))
 				}
 			}
 		}
 
-		// Push/MR counts
+		// Repo count
+		line.WriteString(th.MutedTextStyle.Render(fmt.Sprintf("  %d repos", st.TotalRepos)))
+
+		// Push indicator
 		if st.Pushed > 0 {
-			line.WriteString(fmt.Sprintf("  ↑%d", st.Pushed))
+			line.WriteString(th.StatsStyle.Render(fmt.Sprintf("  ↑ pushed %d", st.Pushed)))
 		}
+
+		// MR indicator
 		if st.MRsCreated > 0 {
-			line.WriteString(fmt.Sprintf("  MR:%d", st.MRsCreated))
+			line.WriteString(th.DashboardAccentStyle.Render(fmt.Sprintf("  MR:%d", st.MRsCreated)))
 		}
 
-		content := line.String()
-		padded := fmt.Sprintf("%-*s", innerW+1, content)
-		if len(padded) > innerW+1 {
-			padded = padded[:innerW+1]
-		}
-
-		s.WriteString(th.BorderStyle.Render(" │"))
-		if i == v.selectedWorkflow {
-			s.WriteString(th.DashboardAccentStyle.Render(padded))
-		} else {
-			s.WriteString(padded)
-		}
-		s.WriteString(th.BorderStyle.Render("│"))
+		s.WriteString(line.String())
 		s.WriteString("\n")
 	}
-
-	// Separator
-	s.WriteString(th.BorderStyle.Render(fmt.Sprintf(" │%-*s│", innerW+1, "")))
-	s.WriteString("\n")
-
-	// Detail for selected workflow
-	wf := v.currentWorkflow()
-	if wf != nil {
-		st := wf.Status()
-
-		// Summary bar: State | Worktrees | Agent | Pushed | MRs
-		summaryParts := []string{
-			fmt.Sprintf("State: %s", st.State.String()),
-			fmt.Sprintf("Worktrees: %d/%d", st.WorktreesCreated, st.TotalRepos),
-		}
-
-		// Agent summary
-		agentID := wf.GetWorkflowAgentID()
-		if agentID != "" {
-			snap := v.workflowAgentSnap
-			if snap != nil {
-				switch snap.State {
-				case engine.AgentRunning, engine.AgentStarting, engine.AgentRouting:
-					elapsed := time.Since(snap.CreatedAt).Truncate(time.Second)
-					summaryParts = append(summaryParts, fmt.Sprintf("Agent: ● %s %s", snap.State.String(), formatDuration(elapsed)))
-				case engine.AgentComplete:
-					costStr := ""
-					if snap.TotalCostUSD > 0 {
-						costStr = fmt.Sprintf(" ($%.2f)", snap.TotalCostUSD)
-					}
-					summaryParts = append(summaryParts, fmt.Sprintf("Agent: ✓ done%s", costStr))
-				case engine.AgentError:
-					summaryParts = append(summaryParts, "Agent: ✗ error")
-				case engine.AgentKilled:
-					summaryParts = append(summaryParts, "Agent: ✗ killed")
-				default:
-					summaryParts = append(summaryParts, fmt.Sprintf("Agent: %s", snap.State.String()))
-				}
-			} else {
-				summaryParts = append(summaryParts, "Agent: - (not found)")
-			}
-		}
-
-		summaryParts = append(summaryParts,
-			fmt.Sprintf("Pushed: %d/%d", st.Pushed, st.TotalRepos),
-			fmt.Sprintf("MRs: %d/%d", st.MRsCreated, st.TotalRepos),
-		)
-
-		summaryLine := strings.Join(summaryParts, "  |  ")
-		padded := fmt.Sprintf(" %-*s", innerW, summaryLine)
-		if len(padded) > innerW+1 {
-			padded = padded[:innerW+1]
-		}
-		s.WriteString(th.BorderStyle.Render(" │"))
-		s.WriteString(th.StatsStyle.Render(padded))
-		s.WriteString(th.BorderStyle.Render("│"))
-		s.WriteString("\n")
-
-		// Per-repo detail lines (sorted)
-		names := make([]string, 0, len(wf.Repos))
-		for name := range wf.Repos {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-
-		for _, name := range names {
-			wr := wf.Repos[name]
-			var line strings.Builder
-
-			// Repo name (left-padded)
-			repoLabel := fmt.Sprintf("  %-16s", name)
-			if len(name) > 16 {
-				repoLabel = "  " + name[:16]
-			}
-			line.WriteString(repoLabel)
-
-			// Worktree icon
-			if wr.WorktreeCreated {
-				line.WriteString(" W")
-			} else {
-				line.WriteString("  ")
-			}
-
-			// Push status
-			if wr.Pushed {
-				line.WriteString("  ↑pushed")
-			}
-
-			// MR status
-			if wr.MRURL != "" {
-				mrLabel := wr.MRURL
-				// Truncate long URLs
-				maxURL := innerW - len(line.String()) - 8
-				if maxURL < 10 {
-					maxURL = 10
-				}
-				if len(mrLabel) > maxURL {
-					mrLabel = mrLabel[:maxURL-3] + "..."
-				}
-				line.WriteString(fmt.Sprintf("  MR %s", mrLabel))
-			}
-
-			// Error
-			if wr.Error != "" && !wr.WorktreeCreated {
-				line.WriteString(fmt.Sprintf("  err: %s", wr.Error))
-			}
-
-			content := line.String()
-			padded := fmt.Sprintf(" %-*s", innerW, content)
-			if len(padded) > innerW+1 {
-				padded = padded[:innerW+1]
-			}
-
-			// Apply per-line styling based on state
-			s.WriteString(th.BorderStyle.Render(" │"))
-			if wr.Error != "" && !wr.WorktreeCreated {
-				s.WriteString(th.DashboardErrorStyle.Render(padded))
-			} else {
-				s.WriteString(padded)
-			}
-			s.WriteString(th.BorderStyle.Render("│"))
-			s.WriteString("\n")
-		}
-	}
-
-	// Bottom border
-	s.WriteString(th.BorderStyle.Render(fmt.Sprintf(" ╰%s╯", strings.Repeat("─", innerW+1))))
 	s.WriteString("\n")
 
 	return s.String()
 }
 
-// ShortHelp returns a short help string.
+// workflowSummaryHeight returns the number of lines the workflow summary occupies.
+func (v *ProjectView) workflowSummaryHeight() int {
+	if len(v.workflows) == 0 {
+		return 0
+	}
+	// 1 (header) + N (per-workflow line) + 1 (blank separator)
+	return 2 + len(v.workflows)
+}
+
+// renderModal renders content inside a box-drawing border.
+func renderModal(title string, lines []string, width int) string {
+	if width < 20 {
+		width = 20
+	}
+	innerW := width - 4 // account for " | " + "|"
+
+	var s strings.Builder
+
+	// Top border
+	titlePart := fmt.Sprintf(" %s ", title)
+	dashCount := innerW - len(titlePart)
+	if dashCount < 0 {
+		dashCount = 0
+	}
+	s.WriteString(fmt.Sprintf(" ╭─%s%s╮\n", titlePart, strings.Repeat("─", dashCount)))
+
+	// Content lines
+	for _, line := range lines {
+		// Pad line to inner width (approximate, since line may contain ANSI)
+		s.WriteString(fmt.Sprintf(" │ %-*s│\n", innerW, line))
+	}
+
+	// Bottom border
+	s.WriteString(fmt.Sprintf(" ╰%s╯\n", strings.Repeat("─", innerW+2)))
+
+	return s.String()
+}
+
+// modalWidth returns the width for modal dialogs.
+func (v *ProjectView) modalWidth() int {
+	w := v.width - 2
+	if w < 50 {
+		w = 50
+	}
+	if w > 72 {
+		w = 72
+	}
+	return w
+}
+
+// renderFooterHelp returns contextual help text based on current state.
+func (v *ProjectView) renderFooterHelp() string {
+	th := theme.GetTheme()
+
+	// During modal: show only modal keys
+	if v.CapturesInput() {
+		return th.Help.Render("Enter: Confirm  Esc: Cancel")
+	}
+
+	// Base navigation keys always shown
+	line1 := " ↑↓ Navigate  Enter Expand  o Open  c Checkout  n Branch  m MR  b Check  / Filter  r Refresh"
+
+	if len(v.workflows) > 0 {
+		// Workflows active: show workflow-specific keys
+		wf := v.currentWorkflow()
+		wfLabel := ""
+		if wf != nil {
+			wfLabel = wf.BranchName
+		}
+		idx := fmt.Sprintf("[%d/%d]", v.selectedWorkflow+1, len(v.workflows))
+		line2 := fmt.Sprintf(" Workflow: %s %s  a Agent  p Push  M Create MRs  D Cleanup  [/] Switch  w New", wfLabel, idx)
+		return th.Help.Render(line1) + "\n" + th.Help.Render(line2)
+	}
+
+	// No workflows: show workflow start hint
+	line2 := " w Start Feature Workflow"
+	return th.Help.Render(line1) + "\n" + th.Help.Render(line2)
+}
+
+// ShortHelp returns a contextual short help string.
 func (v *ProjectView) ShortHelp() string {
-	return "↑↓: Navigate  Enter: Expand/collapse  o: Open  c: Checkout  n: New branch  m: MR/PR  b: Check  w: Workflow  [/]: Switch workflow  a: Agent  p: Push all  M: Create MRs  D: Cleanup  W: Status  /: Filter  r: Refresh"
+	if v.CapturesInput() {
+		return "Enter: Confirm  Esc: Cancel"
+	}
+	if len(v.workflows) > 0 {
+		wf := v.currentWorkflow()
+		wfLabel := ""
+		if wf != nil {
+			wfLabel = wf.BranchName
+		}
+		return fmt.Sprintf("↑↓ Navigate  Enter Expand  o Open  / Filter  r Refresh | Workflow: %s  a Agent  p Push  M MRs  D Cleanup  w New", wfLabel)
+	}
+	return "↑↓ Navigate  Enter Expand  o Open  c Checkout  n Branch  m MR  b Check  / Filter  r Refresh  w Workflow"
 }
 
 // CapturesInput returns true when the view is in an input mode.
@@ -1557,7 +1460,7 @@ func (v *ProjectView) CapturesInput() bool {
 // CapturesKey returns true for keys this view handles directly.
 func (v *ProjectView) CapturesKey(key string) bool {
 	switch key {
-	case "r", "o", "b", "c", "n", "m", "w", "a", "p", "D", "M", "W", "[", "]", "enter", "/", "j", "k", "up", "down":
+	case "r", "o", "b", "c", "n", "m", "w", "a", "p", "D", "M", "[", "]", "enter", "/", "j", "k", "up", "down":
 		return true
 	}
 	return false
@@ -1570,10 +1473,10 @@ func (v *ProjectView) SetSize(width, height int) {
 	v.recalcFilterHeight()
 }
 
-// recalcFilterHeight adjusts the filter height to account for workflow panel.
+// recalcFilterHeight adjusts the filter height to account for workflow summary.
 func (v *ProjectView) recalcFilterHeight() {
 	if v.filter != nil {
-		available := v.height - v.workflowPanelHeight()
+		available := v.height - v.workflowSummaryHeight()
 		if available < 4 {
 			available = 4
 		}
@@ -1613,7 +1516,6 @@ func (v *ProjectView) KeyBindings() []components.KeyBinding {
 		{Key: "p", Description: "Push all repos in selected workflow"},
 		{Key: "M", Description: "Create MRs/PRs for all pushed repos"},
 		{Key: "D", Description: "Cleanup selected workflow (remove worktrees)"},
-		{Key: "W", Description: "Toggle workflow status panel"},
 		{Key: "/", Description: "Filter"},
 		{Key: "r", Description: "Refresh all repos"},
 	}
