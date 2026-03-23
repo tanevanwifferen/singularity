@@ -15,6 +15,7 @@ import (
 	"git-frontend/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // pushDoneMsg signals that batch push has completed.
@@ -93,6 +94,12 @@ type ProjectView struct {
 	showAgentPrompt   bool   // modal for entering agent task prompt
 	agentPromptText   string // the task text input
 	agentSpawnResults string // flash message showing which repos got agents
+
+	// Auto-refresh tick for live agent status
+	workflowTicking bool // true when we have an active tick loop
+
+	// Cached per-repo agent snapshots for rendering (updated on tick, not on full refresh)
+	repoAgentSnaps map[string]*engine.AgentSnapshot // repo name -> agent snapshot
 
 	// Filter for tree list
 	filter *components.Filter[treeNode]
@@ -379,6 +386,9 @@ func (v *ProjectView) renderTreeNode(node treeNode, index int, selected bool) st
 		if aheadCount > 0 {
 			line.WriteString(th.DashboardAccentStyle.Render(fmt.Sprintf("  %d ahead", aheadCount)))
 		}
+
+		// Inline workflow indicators (worktree, agent, push, MR)
+		line.WriteString(v.repoWorkflowIndicators(node.Repo.Name))
 	} else {
 		// Branch row: indented under repo
 		prefix := "     "
@@ -467,6 +477,7 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					wf := project.NewFeatureWorkflow(v.proj, branchName, baseDir)
 					v.activeWorkflow = wf
 					v.showWorkflowStatus = true
+					v.recalcFilterHeight()
 					return v, func() tea.Msg {
 						wf.CreateAllWorktrees()
 						return RefreshDoneMsg{}
@@ -502,6 +513,8 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					v.showAgentPrompt = false
 					v.agentPromptText = ""
 					v.spawnAgentsIntoWorktrees(promptText)
+					v.refreshWorkflowAgentSnaps()
+					return v, v.ensureWorkflowTick()
 				} else {
 					v.showAgentPrompt = false
 				}
@@ -784,6 +797,7 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "W":
 			// Toggle workflow status panel
 			v.showWorkflowStatus = !v.showWorkflowStatus
+			v.recalcFilterHeight()
 		case "/":
 			if v.filter != nil {
 				v.filter.Update(msg)
@@ -797,6 +811,8 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case RefreshDoneMsg:
 		v.loading = false
+		// Refresh agent snapshots when workflow is active
+		v.refreshWorkflowAgentSnaps()
 		// Generate workflow flash messages from active workflow state
 		if v.activeWorkflow != nil {
 			st := v.activeWorkflow.Status()
@@ -826,6 +842,8 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				v.workflowStatusMsg = fmt.Sprintf("Worktrees for '%s' removed", v.activeWorkflow.BranchName)
 				v.activeWorkflow = nil
 				v.showWorkflowStatus = false
+				v.repoAgentSnaps = nil
+				v.recalcFilterHeight()
 			}
 		}
 
@@ -872,6 +890,16 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			v.mrResults = strings.Join(lines, "\n")
 		}
+
+	case WorkflowTickMsg:
+		// Refresh agent snapshots without full repo refresh
+		v.refreshWorkflowAgentSnaps()
+		if v.hasRunningAgents() {
+			return v, v.workflowTickCmd()
+		}
+		// No more running agents, stop ticking
+		v.workflowTicking = false
+		return v, nil
 
 	case tea.MouseMsg:
 		if v.filter != nil {
@@ -1046,66 +1074,8 @@ func (v *ProjectView) View() string {
 		s.WriteString("\n\n")
 	}
 
-	// Workflow status panel
-	if v.showWorkflowStatus && v.activeWorkflow != nil {
-		st := v.activeWorkflow.Status()
-		s.WriteString(th.StatsStyle.Render(" Feature Workflow "))
-		s.WriteString("\n")
-		s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-		s.WriteString("\n")
-		s.WriteString(th.Help.Render("  Branch: "))
-		s.WriteString(th.InfoStyle.Render(st.BranchName))
-		s.WriteString("\n")
-		s.WriteString(th.Help.Render("  State:  "))
-		s.WriteString(th.InfoStyle.Render(st.State.String()))
-		s.WriteString("\n")
-
-		// Per-repo status
-		names := make([]string, 0, len(v.activeWorkflow.Repos))
-		for name := range v.activeWorkflow.Repos {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			wr := v.activeWorkflow.Repos[name]
-			icon := "  "
-			if wr.Error != "" {
-				icon = th.DashboardErrorStyle.Render("✗ ")
-			} else if wr.WorktreeCreated {
-				icon = th.StatsStyle.Render("✓ ")
-			} else {
-				icon = th.MutedTextStyle.Render("- ")
-			}
-			s.WriteString(fmt.Sprintf("  %s%s", icon, name))
-			if wr.WorktreeCreated {
-				s.WriteString(th.MutedTextStyle.Render(fmt.Sprintf("  %s", wr.WorktreePath)))
-			}
-			if wr.Error != "" {
-				s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf("  %s", wr.Error)))
-			}
-			// Push status
-			if wr.Pushed {
-				s.WriteString("  ")
-				s.WriteString(th.StatsStyle.Render("pushed"))
-			}
-			// MR status
-			if wr.MRURL != "" {
-				s.WriteString("  ")
-				s.WriteString(th.DashboardAccentStyle.Render(wr.MRURL))
-			}
-			// Agent status
-			if wr.AgentID != "" && v.engine != nil {
-				agentStatus := v.renderAgentStatus(wr.AgentID)
-				s.WriteString("  ")
-				s.WriteString(agentStatus)
-			} else if wr.WorktreeCreated && wr.AgentID == "" {
-				s.WriteString("  ")
-				s.WriteString(th.MutedTextStyle.Render("-"))
-			}
-			s.WriteString("\n")
-		}
-		s.WriteString("\n")
-	}
+	// Workflow status panel (box-drawing bordered)
+	s.WriteString(v.renderWorkflowPanel())
 
 	// Workflow flash message
 	if v.workflowStatusMsg != "" {
@@ -1223,32 +1193,314 @@ func (v *ProjectView) View() string {
 	return s.String()
 }
 
-// renderAgentStatus returns a styled status string for an agent.
-func (v *ProjectView) renderAgentStatus(agentID string) string {
+
+// workflowTickCmd returns a tick command for live agent status refresh.
+func (v *ProjectView) workflowTickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+		return WorkflowTickMsg{}
+	})
+}
+
+// WorkflowTickMsg is sent periodically to refresh workflow agent status.
+type WorkflowTickMsg struct{}
+
+// hasRunningAgents checks if any workflow repo has an agent that is currently running.
+func (v *ProjectView) hasRunningAgents() bool {
+	if v.activeWorkflow == nil || v.engine == nil {
+		return false
+	}
+	for _, wr := range v.activeWorkflow.Repos {
+		if wr.AgentID == "" {
+			continue
+		}
+		agent := v.engine.GetAgent(wr.AgentID)
+		if agent == nil {
+			continue
+		}
+		snap := agent.Snapshot()
+		if snap.State == engine.AgentRunning || snap.State == engine.AgentStarting || snap.State == engine.AgentRouting {
+			return true
+		}
+	}
+	return false
+}
+
+// refreshWorkflowAgentSnaps updates the cached agent snapshots without doing a full repo refresh.
+func (v *ProjectView) refreshWorkflowAgentSnaps() {
+	if v.activeWorkflow == nil || v.engine == nil {
+		v.repoAgentSnaps = nil
+		return
+	}
+	snaps := make(map[string]*engine.AgentSnapshot)
+	for name, wr := range v.activeWorkflow.Repos {
+		if wr.AgentID == "" {
+			continue
+		}
+		agent := v.engine.GetAgent(wr.AgentID)
+		if agent == nil {
+			continue
+		}
+		s := agent.Snapshot()
+		snaps[name] = &s
+	}
+	v.repoAgentSnaps = snaps
+}
+
+// workflowPanelHeight returns the number of lines the workflow status panel occupies.
+func (v *ProjectView) workflowPanelHeight() int {
+	if !v.showWorkflowStatus || v.activeWorkflow == nil {
+		return 0
+	}
+	// 1 (top border+header) + 1 (summary bar) + 1 (blank) + N (per-repo) + 1 (bottom border) + 1 (blank after)
+	repoCount := len(v.activeWorkflow.Repos)
+	return 3 + repoCount + 2
+}
+
+// ensureWorkflowTick starts the tick loop if agents are running and we aren't already ticking.
+func (v *ProjectView) ensureWorkflowTick() tea.Cmd {
+	if !v.workflowTicking && v.hasRunningAgents() {
+		v.workflowTicking = true
+		return v.workflowTickCmd()
+	}
+	return nil
+}
+
+// repoWorkflowIndicators returns inline status indicators for a repo row when a workflow is active.
+func (v *ProjectView) repoWorkflowIndicators(repoName string) string {
+	if v.activeWorkflow == nil {
+		return ""
+	}
+	wr, ok := v.activeWorkflow.Repos[repoName]
+	if !ok {
+		return ""
+	}
+
 	th := theme.GetTheme()
-	if v.engine == nil {
-		return th.MutedTextStyle.Render("-")
+	var parts []string
+
+	// Worktree indicator
+	if wr.WorktreeCreated {
+		parts = append(parts, th.BranchStyle.Render("W"))
 	}
 
-	agent := v.engine.GetAgent(agentID)
-	if agent == nil {
-		return th.MutedTextStyle.Render("- (not found)")
+	// Agent indicator
+	if wr.AgentID != "" {
+		snap, ok := v.repoAgentSnaps[repoName]
+		if ok && snap != nil {
+			switch snap.State {
+			case engine.AgentRunning, engine.AgentStarting, engine.AgentRouting:
+				parts = append(parts, lipgloss.NewStyle().Foreground(th.Info).Render("●"))
+			case engine.AgentComplete:
+				parts = append(parts, th.StatsStyle.Render("✓"))
+			case engine.AgentError, engine.AgentKilled:
+				parts = append(parts, th.DashboardErrorStyle.Render("✗"))
+			}
+		}
 	}
 
-	snap := agent.Snapshot()
-	switch snap.State {
-	case engine.AgentRunning, engine.AgentStarting, engine.AgentRouting:
-		elapsed := time.Since(snap.CreatedAt).Truncate(time.Second)
-		return th.DashboardAccentStyle.Render(fmt.Sprintf("● %s (%s)", snap.State.String(), elapsed))
-	case engine.AgentComplete:
-		return th.StatsStyle.Render("✓ done")
-	case engine.AgentError:
-		return th.DashboardErrorStyle.Render("✗ error")
-	case engine.AgentKilled:
-		return th.DashboardErrorStyle.Render("✗ killed")
-	default:
-		return th.MutedTextStyle.Render(snap.State.String())
+	// Push indicator
+	if wr.Pushed {
+		parts = append(parts, th.StatsStyle.Render("↑"))
 	}
+
+	// MR indicator
+	if wr.MRURL != "" {
+		parts = append(parts, th.DashboardAccentStyle.Render("MR"))
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+	return "  " + strings.Join(parts, " ")
+}
+
+// renderWorkflowPanel renders the enhanced workflow status panel with box-drawing borders.
+func (v *ProjectView) renderWorkflowPanel() string {
+	if !v.showWorkflowStatus || v.activeWorkflow == nil {
+		return ""
+	}
+
+	th := theme.GetTheme()
+	st := v.activeWorkflow.Status()
+
+	// Calculate inner width
+	innerW := v.width - 4
+	if innerW < 40 {
+		innerW = 40
+	}
+
+	var s strings.Builder
+
+	// Header line with top border
+	headerText := fmt.Sprintf(" Feature Workflow: %s ", st.BranchName)
+	dashCount := innerW - len(headerText) - 1
+	if dashCount < 0 {
+		dashCount = 0
+	}
+	s.WriteString(th.BorderStyle.Render(fmt.Sprintf(" ╭%s%s╮", headerText, strings.Repeat("─", dashCount))))
+	s.WriteString("\n")
+
+	// Summary bar: State | Worktrees | Agents | Pushed | MRs
+	// Count agent states
+	agentsRunning := 0
+	agentsDone := 0
+	agentsError := 0
+	for name := range v.activeWorkflow.Repos {
+		snap, ok := v.repoAgentSnaps[name]
+		if !ok || snap == nil {
+			continue
+		}
+		switch snap.State {
+		case engine.AgentRunning, engine.AgentStarting, engine.AgentRouting:
+			agentsRunning++
+		case engine.AgentComplete:
+			agentsDone++
+		case engine.AgentError, engine.AgentKilled:
+			agentsError++
+		}
+	}
+
+	stateLabel := st.State.String()
+	summaryParts := []string{
+		fmt.Sprintf("State: %s", stateLabel),
+		fmt.Sprintf("Worktrees: %d/%d", st.WorktreesCreated, st.TotalRepos),
+	}
+
+	// Agent summary with color
+	totalAgents := agentsRunning + agentsDone + agentsError
+	if totalAgents > 0 {
+		agentStr := "Agents:"
+		if agentsRunning > 0 {
+			agentStr += fmt.Sprintf(" %d●", agentsRunning)
+		}
+		if agentsDone > 0 {
+			agentStr += fmt.Sprintf(" %d✓", agentsDone)
+		}
+		if agentsError > 0 {
+			agentStr += fmt.Sprintf(" %d✗", agentsError)
+		}
+		summaryParts = append(summaryParts, agentStr)
+	}
+
+	summaryParts = append(summaryParts,
+		fmt.Sprintf("Pushed: %d/%d", st.Pushed, st.TotalRepos),
+		fmt.Sprintf("MRs: %d/%d", st.MRsCreated, st.TotalRepos),
+	)
+
+	summaryLine := strings.Join(summaryParts, "  |  ")
+	padded := fmt.Sprintf(" %-*s", innerW, summaryLine)
+	if len(padded) > innerW+1 {
+		padded = padded[:innerW+1]
+	}
+	s.WriteString(th.BorderStyle.Render(" │"))
+	s.WriteString(th.StatsStyle.Render(padded))
+	s.WriteString(th.BorderStyle.Render("│"))
+	s.WriteString("\n")
+
+	// Blank separator
+	s.WriteString(th.BorderStyle.Render(fmt.Sprintf(" │%-*s│", innerW+1, "")))
+	s.WriteString("\n")
+
+	// Per-repo detail lines (sorted)
+	names := make([]string, 0, len(v.activeWorkflow.Repos))
+	for name := range v.activeWorkflow.Repos {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		wr := v.activeWorkflow.Repos[name]
+		var line strings.Builder
+
+		// Repo name (left-padded)
+		repoLabel := fmt.Sprintf("  %-16s", name)
+		if len(name) > 16 {
+			repoLabel = "  " + name[:16]
+		}
+		line.WriteString(repoLabel)
+
+		// Worktree + agent icons
+		if wr.WorktreeCreated {
+			line.WriteString(" ")
+			line.WriteString("W")
+		} else {
+			line.WriteString("  ")
+		}
+
+		// Agent detail
+		if wr.AgentID != "" {
+			snap, ok := v.repoAgentSnaps[name]
+			if ok && snap != nil {
+				switch snap.State {
+				case engine.AgentRunning, engine.AgentStarting, engine.AgentRouting:
+					elapsed := time.Since(snap.CreatedAt).Truncate(time.Second)
+					line.WriteString(fmt.Sprintf("  ● %s %s", snap.State.String(), formatDuration(elapsed)))
+				case engine.AgentComplete:
+					costStr := ""
+					if snap.TotalCostUSD > 0 {
+						costStr = fmt.Sprintf(" ($%.2f)", snap.TotalCostUSD)
+					}
+					line.WriteString(fmt.Sprintf("  ✓ done%s", costStr))
+				case engine.AgentError:
+					line.WriteString("  ✗ error")
+				case engine.AgentKilled:
+					line.WriteString("  ✗ killed")
+				default:
+					line.WriteString("  " + snap.State.String())
+				}
+			} else {
+				line.WriteString("  - (not found)")
+			}
+		} else if wr.WorktreeCreated {
+			line.WriteString("  -")
+		}
+
+		// Push status
+		if wr.Pushed {
+			line.WriteString("  ↑pushed")
+		}
+
+		// MR status
+		if wr.MRURL != "" {
+			mrLabel := wr.MRURL
+			// Truncate long URLs
+			maxURL := innerW - len(line.String()) - 8
+			if maxURL < 10 {
+				maxURL = 10
+			}
+			if len(mrLabel) > maxURL {
+				mrLabel = mrLabel[:maxURL-3] + "..."
+			}
+			line.WriteString(fmt.Sprintf("  MR %s", mrLabel))
+		}
+
+		// Error
+		if wr.Error != "" && !wr.WorktreeCreated {
+			line.WriteString(fmt.Sprintf("  err: %s", wr.Error))
+		}
+
+		content := line.String()
+		padded := fmt.Sprintf(" %-*s", innerW, content)
+		if len(padded) > innerW+1 {
+			padded = padded[:innerW+1]
+		}
+
+		// Apply per-line styling based on state
+		s.WriteString(th.BorderStyle.Render(" │"))
+		if wr.Error != "" && !wr.WorktreeCreated {
+			s.WriteString(th.DashboardErrorStyle.Render(padded))
+		} else {
+			s.WriteString(padded)
+		}
+		s.WriteString(th.BorderStyle.Render("│"))
+		s.WriteString("\n")
+	}
+
+	// Bottom border
+	s.WriteString(th.BorderStyle.Render(fmt.Sprintf(" ╰%s╯", strings.Repeat("─", innerW+1))))
+	s.WriteString("\n")
+
+	return s.String()
 }
 
 // ShortHelp returns a short help string.
@@ -1274,8 +1526,17 @@ func (v *ProjectView) CapturesKey(key string) bool {
 func (v *ProjectView) SetSize(width, height int) {
 	v.width = width
 	v.height = height
+	v.recalcFilterHeight()
+}
+
+// recalcFilterHeight adjusts the filter height to account for workflow panel.
+func (v *ProjectView) recalcFilterHeight() {
 	if v.filter != nil {
-		v.filter.SetHeight(height)
+		available := v.height - v.workflowPanelHeight()
+		if available < 4 {
+			available = 4
+		}
+		v.filter.SetHeight(available)
 	}
 }
 
