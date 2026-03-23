@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"git-frontend/internal/theme"
 
 	"github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // LogCommit represents a commit entry in the log view
@@ -51,6 +53,15 @@ type LogView struct {
 	// Detail panel state
 	showDetail   bool
 	detailCommit *LogCommit
+
+	// Detail sub-view: split-panel with file list + diff
+	detailFiles       []git.FileChange
+	detailFileIdx     int
+	detailFocusFiles  bool // true = file list focused, false = diff panel focused
+	detailDiffLines   []DiffLine
+	detailDiffScroll  int
+	detailDiffRaw     string
+	detailLoadingDiff bool
 
 	// Filter mode (author vs message)
 	filterMode string // "" or "author" or "message"
@@ -211,36 +222,60 @@ func (v *LogView) parseCommits(output string) ([]LogCommit, error) {
 	return commits, nil
 }
 
-// loadCommitFiles loads the list of files changed in a commit
-func (v *LogView) loadCommitFiles(hash string) {
-	cmd := exec.Command("git", "-C", v.repoPath, "diff-tree", "--no-commit-id", "--numstat", "-r", hash+"^.."+hash)
-	output, err := cmd.Output()
+// openCommitDetail opens the split-panel detail view for a commit
+func (v *LogView) openCommitDetail(commit *LogCommit) {
+	v.detailCommit = commit
+	v.showDetail = true
+	v.detailFileIdx = 0
+	v.detailFocusFiles = true
+	v.detailDiffLines = nil
+	v.detailDiffScroll = 0
+	v.detailDiffRaw = ""
+	v.detailLoadingDiff = false
+
+	// Load file list
+	files, err := git.GetCommitFiles(v.repoPath, commit.Hash)
 	if err != nil {
-		// Try alternate approach for the commit
-		cmd = exec.Command("git", "-C", v.repoPath, "show", "--numstat", "--format=", hash)
-		output, err = cmd.Output()
-		if err != nil {
-			return
-		}
+		v.detailFiles = nil
+		return
 	}
+	v.detailFiles = files
+	commit.FilesCount = len(files)
 
-	count := 0
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
-		// Count lines that look like numstat output (additions\tdeletions\tfilename)
-		parts := strings.Split(line, "\t")
-		if len(parts) >= 3 {
-			count++
-		}
+	// Auto-load diff for first file
+	if len(files) > 0 {
+		v.loadDetailFileDiff(0)
 	}
+}
 
-	if v.detailCommit != nil && v.detailCommit.Hash == hash {
-		v.detailCommit.FilesCount = count
+// loadDetailFileDiff loads the diff for the file at the given index
+func (v *LogView) loadDetailFileDiff(idx int) {
+	if idx < 0 || idx >= len(v.detailFiles) || v.detailCommit == nil {
+		return
 	}
+	v.detailLoadingDiff = true
+	file := v.detailFiles[idx]
+	raw, err := git.GetCommitFileDiff(v.repoPath, v.detailCommit.Hash, file.NewPath)
+	if err != nil {
+		v.detailDiffRaw = ""
+		v.detailDiffLines = nil
+	} else {
+		v.detailDiffRaw = raw
+		v.detailDiffLines = v.parseDiff(raw)
+	}
+	v.detailDiffScroll = 0
+	v.detailLoadingDiff = false
+}
+
+// closeDetail closes the detail sub-view
+func (v *LogView) closeDetail() {
+	v.showDetail = false
+	v.detailCommit = nil
+	v.detailFiles = nil
+	v.detailFileIdx = 0
+	v.detailDiffLines = nil
+	v.detailDiffScroll = 0
+	v.detailDiffRaw = ""
 }
 
 // Update handles update events.
@@ -284,9 +319,7 @@ func (v *LogView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			// Show commit detail
 			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				v.detailCommit = &item
-				v.loadCommitFiles(item.Hash)
-				v.showDetail = true
+				v.openCommitDetail(&item)
 			}
 
 		case "esc":
@@ -339,13 +372,7 @@ func (v *LogView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							return RefreshDoneMsg{}
 						}
 					}
-				} else if msg.String() == "ctrl+w" && len(v.authorFilter) > 0 {
-				v.authorFilter = components.DeleteWordEnd(v.authorFilter)
-				return v, func() tea.Msg {
-					v.loadCommits(true)
-					return RefreshDoneMsg{}
-				}
-			} else if msg.String() == "backspace" && len(v.authorFilter) > 0 {
+				} else if msg.String() == "backspace" && len(v.authorFilter) > 0 {
 					v.authorFilter = v.authorFilter[:len(v.authorFilter)-1]
 					return v, func() tea.Msg {
 						v.loadCommits(true)
@@ -413,14 +440,147 @@ func (v *LogView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return v, nil
 }
 
-// handleDetailKey handles key events in the detail panel.
+// handleDetailKey handles key events in the detail split-panel view.
 func (v *LogView) handleDetailKey(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc":
-		v.showDetail = false
-		v.detailCommit = nil
+		v.closeDetail()
+
+	case "tab":
+		// Switch focus between file list and diff panel
+		v.detailFocusFiles = !v.detailFocusFiles
+
+	case "up", "k":
+		if v.detailFocusFiles {
+			// Navigate file list up
+			if v.detailFileIdx > 0 {
+				v.detailFileIdx--
+				v.loadDetailFileDiff(v.detailFileIdx)
+			}
+		} else {
+			// Scroll diff up
+			if v.detailDiffScroll > 0 {
+				v.detailDiffScroll--
+			}
+		}
+
+	case "down", "j":
+		if v.detailFocusFiles {
+			// Navigate file list down
+			if v.detailFileIdx < len(v.detailFiles)-1 {
+				v.detailFileIdx++
+				v.loadDetailFileDiff(v.detailFileIdx)
+			}
+		} else {
+			// Scroll diff down
+			maxScroll := len(v.detailDiffLines) - v.detailDiffVisibleLines()
+			if maxScroll < 0 {
+				maxScroll = 0
+			}
+			if v.detailDiffScroll < maxScroll {
+				v.detailDiffScroll++
+			}
+		}
+
+	case "enter":
+		// When on file list, load that file's diff and switch focus to diff
+		if v.detailFocusFiles && v.detailFileIdx < len(v.detailFiles) {
+			v.loadDetailFileDiff(v.detailFileIdx)
+			v.detailFocusFiles = false
+		}
+
+	case "g":
+		// Go to top
+		if !v.detailFocusFiles {
+			v.detailDiffScroll = 0
+		} else if len(v.detailFiles) > 0 {
+			v.detailFileIdx = 0
+			v.loadDetailFileDiff(0)
+		}
+
+	case "G":
+		// Go to bottom
+		if !v.detailFocusFiles {
+			maxScroll := len(v.detailDiffLines) - v.detailDiffVisibleLines()
+			if maxScroll < 0 {
+				maxScroll = 0
+			}
+			v.detailDiffScroll = maxScroll
+		} else if len(v.detailFiles) > 0 {
+			v.detailFileIdx = len(v.detailFiles) - 1
+			v.loadDetailFileDiff(v.detailFileIdx)
+		}
 	}
 	return nil
+}
+
+// detailDiffVisibleLines returns the number of diff lines visible in the panel
+func (v *LogView) detailDiffVisibleLines() int {
+	// Account for header (commit info ~6 lines + panel chrome ~4 lines)
+	visible := v.height - 10
+	if visible < 5 {
+		visible = 5
+	}
+	return visible
+}
+
+// parseDiff parses raw diff output into structured DiffLine slices with line numbers.
+// Reuses the same logic as DiffView.parseDiff.
+func (v *LogView) parseDiff(rawDiff string) []DiffLine {
+	var lines []DiffLine
+	var oldLineNum, newLineNum int
+
+	for _, line := range strings.Split(rawDiff, "\n") {
+		diffLine := DiffLine{Content: line}
+
+		if strings.HasPrefix(line, "@@") {
+			diffLine.LineType = "@"
+			parts := strings.Fields(line)
+			for _, p := range parts {
+				if strings.HasPrefix(p, "-") && !strings.HasPrefix(p, "--") {
+					numStr := strings.TrimPrefix(p, "-")
+					if idx := strings.Index(numStr, ","); idx > 0 {
+						numStr = numStr[:idx]
+					}
+					if n, err := strconv.Atoi(numStr); err == nil {
+						oldLineNum = n
+					}
+				} else if strings.HasPrefix(p, "+") && !strings.HasPrefix(p, "++") {
+					numStr := strings.TrimPrefix(p, "+")
+					if idx := strings.Index(numStr, ","); idx > 0 {
+						numStr = numStr[:idx]
+					}
+					if n, err := strconv.Atoi(numStr); err == nil {
+						newLineNum = n
+					}
+				}
+			}
+		} else if strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++") {
+			diffLine.LineType = "H"
+			oldLineNum = 0
+			newLineNum = 0
+		} else if strings.HasPrefix(line, "+") {
+			diffLine.LineType = "+"
+			diffLine.NewLineNum = newLineNum
+			newLineNum++
+		} else if strings.HasPrefix(line, "-") {
+			diffLine.LineType = "-"
+			diffLine.OldLineNum = oldLineNum
+			oldLineNum++
+		} else if strings.HasPrefix(line, " ") {
+			diffLine.LineType = " "
+			diffLine.OldLineNum = oldLineNum
+			diffLine.NewLineNum = newLineNum
+			oldLineNum++
+			newLineNum++
+		} else {
+			diffLine.LineType = ""
+		}
+
+		lines = append(lines, diffLine)
+	}
+
+	return lines
 }
 
 // renderCommitItem renders a single commit item in the list.
@@ -468,6 +628,11 @@ func truncate(s string, maxLen int) string {
 // View renders the log view.
 func (v *LogView) View() string {
 	th := theme.GetTheme()
+
+	// If detail view is active, render split-panel detail instead
+	if v.showDetail && v.detailCommit != nil {
+		return v.renderDetailView()
+	}
 
 	// Loading state
 	if v.loading {
@@ -540,67 +705,6 @@ func (v *LogView) View() string {
 		s.WriteString(th.MutedTextStyle.Render(" End of commit history "))
 	}
 
-	// Detail panel
-	if v.showDetail && v.detailCommit != nil {
-		s.WriteString("\n")
-		s.WriteString(th.StatsStyle.Render(" ════════════════════════════════════════════════════════ "))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardTitle.Render(" Commit Detail "))
-		s.WriteString("\n\n")
-
-		// Hash
-		s.WriteString(fmt.Sprintf(" %s %s\n",
-			th.BranchStyle.Render("Hash:"),
-			th.InfoStyle.Render(v.detailCommit.Hash)))
-
-		// Refs (branches, tags)
-		if v.detailCommit.Refs != "" {
-			s.WriteString(fmt.Sprintf(" %s %s\n",
-				th.BranchStyle.Render("Refs:"),
-				th.DashboardAccentStyle.Render(v.detailCommit.Refs)))
-		}
-
-		// Author
-		s.WriteString(fmt.Sprintf(" %s %s <%s>\n",
-			th.BranchStyle.Render("Author:"),
-			th.StatsStyle.Render(v.detailCommit.Author),
-			th.MutedTextStyle.Render(v.detailCommit.AuthorEmail)))
-
-		// Date
-		s.WriteString(fmt.Sprintf(" %s %s\n",
-			th.BranchStyle.Render("Date:"),
-			th.StatsStyle.Render(v.detailCommit.Date.Format(time.RFC822))))
-
-		// Files count
-		if v.detailCommit.FilesCount > 0 {
-			s.WriteString(fmt.Sprintf(" %s %d file(s)\n",
-				th.BranchStyle.Render("Files:"),
-				v.detailCommit.FilesCount))
-		}
-
-		s.WriteString("\n")
-
-		// Subject
-		s.WriteString(th.DashboardTitle.Render(" Subject "))
-		s.WriteString("\n")
-		s.WriteString(th.StatsStyle.Render(v.detailCommit.Subject))
-
-		// Body (commit message body)
-		if v.detailCommit.Body != "" {
-			s.WriteString("\n\n")
-			s.WriteString(th.DashboardTitle.Render(" Body "))
-			s.WriteString("\n")
-			// Word wrap body
-			bodyLines := wordWrap(v.detailCommit.Body, 70)
-			for _, line := range bodyLines {
-				s.WriteString(th.MutedTextStyle.Render(line) + "\n")
-			}
-		}
-
-		s.WriteString("\n\n")
-		s.WriteString(th.Help.Render(" ESC: Close detail "))
-	}
-
 	// Error display
 	if v.err != nil {
 		s.WriteString("\n")
@@ -616,6 +720,335 @@ func (v *LogView) View() string {
 		footerText += "   g: Load more"
 	}
 	s.WriteString(th.Help.Render(footerText))
+
+	return s.String()
+}
+
+// renderDetailView renders the full split-panel commit detail view
+func (v *LogView) renderDetailView() string {
+	th := theme.GetTheme()
+	var s strings.Builder
+
+	// Header with commit info
+	s.WriteString(th.DashboardTitle.Render(" Commit Detail "))
+	s.WriteString("\n")
+
+	// Commit metadata (compact)
+	s.WriteString(fmt.Sprintf(" %s %s",
+		th.BranchStyle.Render("Hash:"),
+		th.InfoStyle.Render(v.detailCommit.ShortHash)))
+	if v.detailCommit.Refs != "" {
+		s.WriteString(fmt.Sprintf("  %s",
+			th.DashboardAccentStyle.Render(v.detailCommit.Refs)))
+	}
+	s.WriteString("\n")
+
+	s.WriteString(fmt.Sprintf(" %s %s <%s>  %s %s\n",
+		th.BranchStyle.Render("Author:"),
+		th.StatsStyle.Render(v.detailCommit.Author),
+		th.MutedTextStyle.Render(v.detailCommit.AuthorEmail),
+		th.BranchStyle.Render("Date:"),
+		th.MutedTextStyle.Render(v.detailCommit.Date.Format(time.RFC822))))
+
+	s.WriteString(fmt.Sprintf(" %s %s\n",
+		th.BranchStyle.Render("Subject:"),
+		th.StatsStyle.Render(v.detailCommit.Subject)))
+
+	if v.detailCommit.Body != "" {
+		bodyPreview := v.detailCommit.Body
+		if len(bodyPreview) > 80 {
+			bodyPreview = bodyPreview[:77] + "..."
+		}
+		s.WriteString(fmt.Sprintf(" %s\n", th.MutedTextStyle.Render(bodyPreview)))
+	}
+
+	s.WriteString(th.StatsStyle.Render(fmt.Sprintf(" %s\n", strings.Repeat("─", v.width-2))))
+
+	// Split panels
+	leftWidth := v.width * 2 / 5
+	if leftWidth < 30 {
+		leftWidth = 30
+	}
+	if leftWidth > 60 {
+		leftWidth = 60
+	}
+	rightWidth := v.width - leftWidth - 3 // 3 for divider
+
+	leftPanel := v.renderDetailFileList(leftWidth)
+	rightPanel := v.renderDetailDiffPanel(rightWidth)
+
+	s.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, " | ", rightPanel))
+
+	s.WriteString("\n")
+
+	// Footer
+	helpText := " j/k: Navigate"
+	if v.detailFocusFiles {
+		helpText += " files"
+	} else {
+		helpText += " diff"
+	}
+	helpText += "   Tab: Switch panel   Enter: View file diff   g/G: Top/Bottom   Esc: Close"
+	s.WriteString(th.Help.Render(helpText))
+
+	return s.String()
+}
+
+// renderDetailFileList renders the file list panel in the detail view
+func (v *LogView) renderDetailFileList(width int) string {
+	th := theme.GetTheme()
+	var s strings.Builder
+
+	// Panel header
+	focusIndicator := ""
+	if v.detailFocusFiles {
+		focusIndicator = " [FOCUS]"
+	}
+	filesCount := len(v.detailFiles)
+	s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" Files (%d)%s ", filesCount, focusIndicator)))
+	s.WriteString("\n")
+
+	dividerLen := width - 2
+	if dividerLen < 0 {
+		dividerLen = 0
+	}
+	s.WriteString(th.StatsStyle.Render(fmt.Sprintf(" %s ", strings.Repeat("─", dividerLen))))
+	s.WriteString("\n")
+
+	if len(v.detailFiles) == 0 {
+		s.WriteString(th.Help.Render(" No files changed"))
+		return s.String()
+	}
+
+	// Calculate visible range for scrolling
+	visibleLines := v.height - 12
+	if visibleLines < 1 {
+		visibleLines = 1
+	}
+
+	startIdx := v.detailFileIdx - visibleLines/2
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	endIdx := startIdx + visibleLines
+	if endIdx > len(v.detailFiles) {
+		endIdx = len(v.detailFiles)
+		startIdx = endIdx - visibleLines
+		if startIdx < 0 {
+			startIdx = 0
+		}
+	}
+
+	// Render files
+	for i := startIdx; i < endIdx && i < len(v.detailFiles); i++ {
+		file := v.detailFiles[i]
+		prefix := "  "
+		style := th.BranchStyle
+
+		if i == v.detailFileIdx {
+			prefix = " >"
+			style = th.SelectedBranchStyle
+			if v.detailFocusFiles {
+				style = th.DashboardAccentStyle
+			}
+		}
+
+		// Status indicator
+		statusChar := " "
+		statusStyle := th.StatsStyle
+
+		switch file.Status {
+		case "A":
+			statusStyle = th.DashboardAccentStyle
+			statusChar = "A"
+		case "M":
+			statusStyle = th.WarningStyle
+			statusChar = "M"
+		case "D":
+			statusStyle = th.DashboardErrorStyle
+			statusChar = "D"
+		case "R":
+			statusStyle = th.InfoStyle
+			statusChar = "R"
+		case "C":
+			statusStyle = th.InfoStyle
+			statusChar = "C"
+		}
+
+		// Truncate long paths
+		path := file.NewPath
+		maxPathLen := width - 18
+		if maxPathLen < 10 {
+			maxPathLen = 10
+		}
+		if len(path) > maxPathLen {
+			path = "..." + path[len(path)-maxPathLen+3:]
+		}
+
+		// Additions/deletions
+		counts := ""
+		if file.Additions > 0 || file.Deletions > 0 {
+			addStr := ""
+			delStr := ""
+			if file.Additions > 0 {
+				addStr = th.DashboardAccentStyle.Render(fmt.Sprintf("+%d", file.Additions))
+			}
+			if file.Deletions > 0 {
+				delStr = th.DashboardErrorStyle.Render(fmt.Sprintf("-%d", file.Deletions))
+			}
+			counts = " " + addStr + delStr
+		}
+
+		s.WriteString(fmt.Sprintf("%s%s %s%s\n",
+			prefix,
+			statusStyle.Render(statusChar),
+			style.Render(path),
+			counts))
+	}
+
+	// Scroll indicator
+	if len(v.detailFiles) > visibleLines {
+		scrollInfo := fmt.Sprintf(" %d-%d of %d ", startIdx+1, endIdx, len(v.detailFiles))
+		s.WriteString(th.Help.Render(scrollInfo))
+	}
+
+	return s.String()
+}
+
+// renderDetailDiffPanel renders the diff content panel in the detail view
+func (v *LogView) renderDetailDiffPanel(width int) string {
+	th := theme.GetTheme()
+	var s strings.Builder
+
+	// Panel header
+	focusIndicator := ""
+	if !v.detailFocusFiles {
+		focusIndicator = " [FOCUS]"
+	}
+
+	fileName := ""
+	if v.detailFileIdx < len(v.detailFiles) {
+		fileName = v.detailFiles[v.detailFileIdx].NewPath
+		if len(fileName) > width-20 {
+			fileName = "..." + fileName[len(fileName)-width+23:]
+		}
+	}
+
+	s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" Diff%s ", focusIndicator)))
+	if fileName != "" {
+		s.WriteString(th.MutedTextStyle.Render(fmt.Sprintf(" %s", fileName)))
+	}
+	s.WriteString("\n")
+
+	dividerLen := width - 2
+	if dividerLen < 0 {
+		dividerLen = 0
+	}
+	s.WriteString(th.StatsStyle.Render(fmt.Sprintf(" %s ", strings.Repeat("─", dividerLen))))
+	s.WriteString("\n")
+
+	if v.detailLoadingDiff {
+		s.WriteString(th.StatsStyle.Render(" Loading diff..."))
+		return s.String()
+	}
+
+	if len(v.detailFiles) == 0 {
+		s.WriteString(th.Help.Render(" No files to display"))
+		return s.String()
+	}
+
+	if len(v.detailDiffLines) == 0 {
+		s.WriteString(th.Help.Render(" No diff content available"))
+		return s.String()
+	}
+
+	// Render scrollable diff with gutter
+	gutterWidth := 6
+	diffWidth := width - gutterWidth - 1
+	if diffWidth < 10 {
+		diffWidth = 10
+	}
+
+	visibleLines := v.detailDiffVisibleLines()
+
+	startIdx := v.detailDiffScroll
+	endIdx := startIdx + visibleLines
+	if endIdx > len(v.detailDiffLines) {
+		endIdx = len(v.detailDiffLines)
+		startIdx = endIdx - visibleLines
+		if startIdx < 0 {
+			startIdx = 0
+		}
+	}
+
+	for i := startIdx; i < endIdx; i++ {
+		line := v.detailDiffLines[i]
+		gutter := ""
+		lineStyle := th.Help
+
+		switch line.LineType {
+		case "+":
+			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
+			if line.NewLineNum > 0 {
+				gutter = fmt.Sprintf(" %4d ", line.NewLineNum)
+			} else {
+				gutter = "      "
+			}
+		case "-":
+			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+			if line.OldLineNum > 0 {
+				gutter = fmt.Sprintf(" %4d ", line.OldLineNum)
+			} else {
+				gutter = "      "
+			}
+		case "@":
+			lineStyle = th.InfoStyle
+			gutter = "      "
+		case "H":
+			lineStyle = th.Help
+			gutter = "      "
+		case " ":
+			lineStyle = th.Help
+			if line.NewLineNum > 0 {
+				gutter = fmt.Sprintf(" %4d ", line.NewLineNum)
+			} else if line.OldLineNum > 0 {
+				gutter = fmt.Sprintf(" %4d ", line.OldLineNum)
+			} else {
+				gutter = "      "
+			}
+		default:
+			lineStyle = th.Help
+			gutter = "      "
+		}
+
+		content := line.Content
+		if len(content) > diffWidth-2 {
+			content = content[:diffWidth-5] + "..."
+		}
+
+		prefix := " "
+		if line.LineType == "+" {
+			prefix = "+"
+		} else if line.LineType == "-" {
+			prefix = "-"
+		}
+
+		s.WriteString(th.Help.Render(gutter))
+		s.WriteString(lineStyle.Render(prefix + content))
+		s.WriteString("\n")
+	}
+
+	// Scroll indicator
+	totalLines := len(v.detailDiffLines)
+	if totalLines > visibleLines {
+		scrollInfo := fmt.Sprintf(" %d-%d of %d lines ", startIdx+1, endIdx, totalLines)
+		if !v.detailFocusFiles {
+			s.WriteString(th.Help.Render(scrollInfo + "[j/k scroll, g/G top/bottom]"))
+		} else {
+			s.WriteString(th.Help.Render(scrollInfo + "[Tab to navigate]"))
+		}
+		s.WriteString("\n")
+	}
 
 	return s.String()
 }
@@ -648,6 +1081,9 @@ func wordWrap(text string, width int) []string {
 
 // ShortHelp returns a short help string.
 func (v *LogView) ShortHelp() string {
+	if v.showDetail {
+		return "j/k: Navigate  Tab: Switch panel  Enter: View diff  g/G: Top/Bottom  Esc: Close"
+	}
 	return "a: Author filter  s: Message search  Enter: View detail  ↑↓: Navigate  g: Load more  r: Refresh"
 }
 
@@ -718,8 +1154,9 @@ func (v *LogView) KeyBindings() []components.KeyBinding {
 		{Key: "↑/k", Description: "Navigate up"},
 		{Key: "↓/j", Description: "Navigate down"},
 		{Key: "Enter", Description: "View commit detail"},
-		{Key: "g", Description: "Load more commits"},
-		{Key: "Esc", Description: "Clear filters / Close detail"},
+		{Key: "Tab", Description: "Switch panel (in detail view)"},
+		{Key: "g/G", Description: "Top/Bottom (diff or load more)"},
+		{Key: "Esc", Description: "Close detail / Clear filters"},
 		{Key: "1", Description: "Switch to Overview"},
 		{Key: "2", Description: "Switch to Branches"},
 		{Key: "3", Description: "Switch to Stashes"},

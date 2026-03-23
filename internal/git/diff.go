@@ -409,3 +409,150 @@ func GetWorkdirStatus(repoPath string) (*WorkdirDiff, error) {
 		TotalUnstagedDels:  totalUnstagedDels,
 	}, nil
 }
+
+// GetCommitFiles returns the list of files changed in a specific commit.
+// Works for merge commits and initial commits.
+func GetCommitFiles(repoPath, hash string) ([]FileChange, error) {
+	// Use diff-tree with --no-commit-id -r to list files.
+	// For merge commits, use --first-parent to compare against first parent only.
+	// For initial commits, diff-tree with root flag works.
+	args := []string{"-C", repoPath, "diff-tree", "--no-commit-id", "-r", "--name-status", hash}
+	cmd := exec.Command("git", args...)
+	statusOutput, err := cmd.Output()
+	if err != nil {
+		// Might be initial commit (no parent) - try with --root
+		args = []string{"-C", repoPath, "diff-tree", "--no-commit-id", "-r", "--root", "--name-status", hash}
+		cmd = exec.Command("git", args...)
+		statusOutput, err = cmd.Output()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get commit files: %w", err)
+		}
+	}
+
+	// Parse name-status output to get file statuses
+	statusMap := make(map[string]string)
+	scanner := bufio.NewScanner(strings.NewReader(string(statusOutput)))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) < 2 {
+			continue
+		}
+		status := parts[0]
+		path := parts[1]
+		// For renames (R100), extract old and new paths
+		if strings.HasPrefix(status, "R") || strings.HasPrefix(status, "C") {
+			if len(parts) >= 3 {
+				statusMap[parts[2]] = status
+			}
+		} else {
+			statusMap[path] = status
+		}
+	}
+
+	// Now get numstat for addition/deletion counts
+	numstatArgs := []string{"-C", repoPath, "show", "--numstat", "--format=", hash}
+	cmd = exec.Command("git", numstatArgs...)
+	numstatOutput, err := cmd.Output()
+	if err != nil {
+		// Fall back to just the status info without counts
+		var files []FileChange
+		for path, status := range statusMap {
+			fc := FileChange{
+				NewPath: path,
+				Status:  normalizeStatus(status),
+			}
+			files = append(files, fc)
+		}
+		return files, nil
+	}
+
+	// Parse numstat and merge with status info
+	var files []FileChange
+	numstatScanner := bufio.NewScanner(strings.NewReader(string(numstatOutput)))
+	seenPaths := make(map[string]bool)
+	for numstatScanner.Scan() {
+		line := numstatScanner.Text()
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "\t")
+		if len(parts) < 3 {
+			continue
+		}
+
+		fc := FileChange{
+			NewPath: parts[2],
+		}
+
+		// Parse additions
+		if parts[0] != "-" {
+			if n, err := strconv.Atoi(parts[0]); err == nil {
+				fc.Additions = n
+			}
+		}
+		// Parse deletions
+		if parts[1] != "-" {
+			if n, err := strconv.Atoi(parts[1]); err == nil {
+				fc.Deletions = n
+			}
+		}
+
+		// Look up status
+		if status, ok := statusMap[fc.NewPath]; ok {
+			fc.Status = normalizeStatus(status)
+		} else {
+			fc.Status = "M"
+		}
+
+		files = append(files, fc)
+		seenPaths[fc.NewPath] = true
+	}
+
+	// Add any files from status that were not in numstat (e.g. renames)
+	for path, status := range statusMap {
+		if !seenPaths[path] {
+			files = append(files, FileChange{
+				NewPath: path,
+				Status:  normalizeStatus(status),
+			})
+		}
+	}
+
+	return files, nil
+}
+
+// normalizeStatus converts git status codes like "R100" to single-char "R"
+func normalizeStatus(status string) string {
+	if len(status) == 0 {
+		return "M"
+	}
+	switch status[0] {
+	case 'A':
+		return "A"
+	case 'M':
+		return "M"
+	case 'D':
+		return "D"
+	case 'R':
+		return "R"
+	case 'C':
+		return "C"
+	default:
+		return "M"
+	}
+}
+
+// GetCommitFileDiff returns the diff content for a specific file in a commit.
+// Works for merge commits and initial commits.
+func GetCommitFileDiff(repoPath, hash, filePath string) (string, error) {
+	cmd := exec.Command("git", "-C", repoPath, "show", hash, "--", filePath)
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get commit file diff: %w", err)
+	}
+	return string(output), nil
+}
