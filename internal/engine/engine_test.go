@@ -357,7 +357,6 @@ func TestBuildArgs(t *testing.T) {
 	hasMaxTurns := false
 	hasTool1 := false
 	hasTool2 := false
-	hasTask := false
 	hasOutputStreamJSON := false
 	hasInputStreamJSON := false
 
@@ -375,8 +374,6 @@ func TestBuildArgs(t *testing.T) {
 			hasOutputStreamJSON = true
 		case arg == "--input-format" && i+1 < len(args) && args[i+1] == "stream-json":
 			hasInputStreamJSON = true
-		case arg == "do something":
-			hasTask = true
 		}
 	}
 
@@ -395,8 +392,52 @@ func TestBuildArgs(t *testing.T) {
 	if !hasInputStreamJSON {
 		t.Error("expected --input-format stream-json in args")
 	}
-	if !hasTask {
-		t.Error("expected task in args")
+}
+
+func TestBuildTaskNoContextFiles(t *testing.T) {
+	a := newAgent("test", os.TempDir(), "do something", AgentOptions{})
+	task := a.buildTask()
+	if task != "do something" {
+		t.Errorf("expected bare task, got %q", task)
+	}
+}
+
+func TestBuildTaskWithContextFiles(t *testing.T) {
+	// Create a temp context file
+	tmpFile, err := os.CreateTemp("", "context-*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString("# Project Info\nThis is context."); err != nil {
+		t.Fatal(err)
+	}
+	tmpFile.Close()
+
+	a := newAgent("test", os.TempDir(), "do something", AgentOptions{
+		ContextFiles: []string{tmpFile.Name()},
+	})
+	task := a.buildTask()
+
+	if !strings.Contains(task, "# Project Info") {
+		t.Error("expected context file content in task")
+	}
+	if !strings.Contains(task, "do something") {
+		t.Error("expected original task in task")
+	}
+	if !strings.Contains(task, "<context file=") {
+		t.Error("expected context XML wrapper in task")
+	}
+}
+
+func TestBuildTaskWithMissingContextFile(t *testing.T) {
+	a := newAgent("test", os.TempDir(), "do something", AgentOptions{
+		ContextFiles: []string{"/nonexistent/file.md"},
+	})
+	task := a.buildTask()
+	if task != "do something" {
+		t.Errorf("expected bare task when context file missing, got %q", task)
 	}
 }
 
