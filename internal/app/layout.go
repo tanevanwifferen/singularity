@@ -80,14 +80,15 @@ func (l *Layout) RenderTabBar(router *Router) string {
 		return ""
 	}
 
-	names := router.ViewNames()
+	topLevel := router.TopLevelViewNames()
 	activeName := router.ActiveName()
+	activeIsSubmenu := router.IsSubmenuView(activeName)
 
 	// Build tab bar string
 	var tabBar string
 
-	// Left side: view tabs
-	for i, name := range names {
+	// Left side: top-level view tabs
+	for i, name := range topLevel {
 		if i > 0 {
 			tabBar += l.dividerStyle.Render(" │ ")
 		}
@@ -98,17 +99,25 @@ func (l *Layout) RenderTabBar(router *Router) string {
 		}
 		displayKey := strings.ToUpper(key)
 		if name == activeName {
-			// Active tab
 			tabBar += l.activeTabStyle.Render(fmt.Sprintf("[%s] %s", displayKey, name))
 		} else {
-			// Inactive tab
 			tabBar += l.inactiveTabStyle.Render(fmt.Sprintf("%s: %s", displayKey, name))
 		}
 	}
 
-	// Right side: view count
-	tabBar += "  "
-	tabBar += l.tabBarStyle.Render(l.viewCount(names))
+	// Submenu indicators (e.g. "G: Git ▸")
+	for _, triggerKey := range router.SubmenuKeys() {
+		tabBar += l.dividerStyle.Render(" │ ")
+		title := router.SubmenuTitle(triggerKey)
+		displayKey := strings.ToUpper(triggerKey)
+		tabBar += l.inactiveTabStyle.Render(fmt.Sprintf("%s: %s ▸", displayKey, title))
+	}
+
+	// If active view is in a submenu, show it highlighted after the submenu indicators
+	if activeIsSubmenu {
+		tabBar += l.dividerStyle.Render(" │ ")
+		tabBar += l.activeTabStyle.Render(fmt.Sprintf("[%s]", activeName))
+	}
 
 	return tabBar
 }
@@ -150,10 +159,10 @@ func (l *Layout) RenderStatusBar(repoInfo *git.RepoInfo, viewName string) string
 }
 
 // AvailableViewDimensions calculates the available dimensions for the active view.
-// It accounts for the tab bar (1 line + 1 divider) and status bar (1 line).
+// It accounts for the tab bar (1 line), tab divider (1 line), status divider (1 line), status bar (1 line).
 func (l *Layout) AvailableViewDimensions() (width, height int) {
-	// Reserve 1 line for tab bar and 1 for divider, 1 for status bar
-	height = l.height - 3
+	// Reserve 4 lines: tab bar, tab divider, status divider, status bar
+	height = l.height - 4
 	if height < 1 {
 		height = 1
 	}
@@ -194,13 +203,12 @@ func (l *Layout) Render(router *Router, repoInfo *git.RepoInfo, activeViewConten
 	output += th.BorderStyle.Render(divider)
 	output += "\n"
 
-	// Status bar
+	// Status bar (no trailing newline — avoids scrolling the tab bar off screen)
 	statusBar := l.RenderStatusBar(repoInfo, "")
 	if router != nil {
 		statusBar = l.RenderStatusBar(repoInfo, router.ActiveName())
 	}
 	output += statusBar
-	output += "\n"
 
 	return output
 }

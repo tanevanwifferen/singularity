@@ -253,9 +253,9 @@ func TestLayoutAvailableViewDimensions(t *testing.T) {
 
 	width, height := layout.AvailableViewDimensions()
 
-	// Should reserve 3 lines (tab bar, divider, status bar)
-	if height != 21 {
-		t.Errorf("Expected available height 21, got %d", height)
+	// Should reserve 4 lines (tab bar, tab divider, status divider, status bar)
+	if height != 20 {
+		t.Errorf("Expected available height 20, got %d", height)
 	}
 	if width != 80 {
 		t.Errorf("Expected available width 80, got %d", width)
@@ -471,9 +471,15 @@ func TestLayoutViewCount(t *testing.T) {
 	layout := NewLayout()
 	tabBar := layout.RenderTabBar(router)
 
-	// Should show view count
-	if !strings.Contains(tabBar, "(3 views)") {
-		t.Errorf("Expected tab bar to contain '(3 views)', got %q", tabBar)
+	// All three should appear as top-level tabs
+	if !strings.Contains(tabBar, "stub1") {
+		t.Error("Expected tab bar to contain 'stub1'")
+	}
+	if !strings.Contains(tabBar, "stub2") {
+		t.Error("Expected tab bar to contain 'stub2'")
+	}
+	if !strings.Contains(tabBar, "stub3") {
+		t.Error("Expected tab bar to contain 'stub3'")
 	}
 }
 

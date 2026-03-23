@@ -74,8 +74,22 @@ func main() {
 
 	// Local TUI mode (default)
 	a := app.New()
+
+	// Determine project config path: explicit flag > default location
+	projCfg := *projectConfig
+	if projCfg == "" {
+		defaultPath := project.GetDefaultConfigPath()
+		if _, err := os.Stat(defaultPath); err == nil {
+			projCfg = defaultPath
+		}
+	}
+
 	if *repoPath != "" {
+		// Explicit --repo always wins: single-repo mode
 		a.SetRepoPath(*repoPath)
+	} else if projCfg != "" {
+		// Project config found: multi-repo mode
+		a.SetProjectPath(projCfg)
 	}
 
 	if err := a.Run(); err != nil {

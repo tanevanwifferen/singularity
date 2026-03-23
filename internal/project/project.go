@@ -9,9 +9,10 @@ import (
 
 // Project represents a loaded multi-repo project with live state
 type Project struct {
-	Name  string
-	Repos []*Repo
-	mu    sync.RWMutex
+	Name         string
+	Repos        []*Repo
+	ContextFiles []string // Paths to files injected into agent prompts
+	mu           sync.RWMutex
 }
 
 // Repo represents a single repository within a project
@@ -62,8 +63,9 @@ func NewProject(def ProjectDef) *Project {
 	}
 
 	return &Project{
-		Name:  def.Name,
-		Repos: repos,
+		Name:         def.Name,
+		Repos:        repos,
+		ContextFiles: def.ContextFiles,
 	}
 }
 

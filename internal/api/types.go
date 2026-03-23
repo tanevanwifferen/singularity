@@ -78,6 +78,7 @@ type AgentStartRequest struct {
 	AllowedTools []string `json:"allowed_tools,omitempty"`
 	MaxTurns     int      `json:"max_turns,omitempty"`
 	TimeoutSecs  int      `json:"timeout_secs,omitempty"`
+	ContextFiles []string `json:"context_files,omitempty"`
 }
 
 // AgentQueryRequest is the request for querying an agent

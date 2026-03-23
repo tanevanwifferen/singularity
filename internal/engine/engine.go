@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +15,7 @@ type AgentOptions struct {
 	AllowedTools []string      // Restrict available tools
 	MaxTurns     int           // Max conversation turns (0 = unlimited)
 	Timeout      time.Duration // Kill agent after this duration (0 = no timeout)
+	ContextFiles []string      // Files to read and inject into the prompt on startup
 }
 
 // Engine manages a pool of Claude Code agent subprocesses
@@ -154,7 +156,7 @@ func (e *Engine) GetAgent(sessionID string) *Agent {
 	return e.getAgent(sessionID)
 }
 
-// ListAgents returns all agents
+// ListAgents returns all agents sorted by ID
 func (e *Engine) ListAgents() []*Agent {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -163,10 +165,13 @@ func (e *Engine) ListAgents() []*Agent {
 	for _, a := range e.agents {
 		agents = append(agents, a)
 	}
+	sort.Slice(agents, func(i, j int) bool {
+		return agents[i].ID < agents[j].ID
+	})
 	return agents
 }
 
-// ActiveAgents returns only running/starting agents
+// ActiveAgents returns only running/starting agents sorted by ID
 func (e *Engine) ActiveAgents() []*Agent {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -177,6 +182,9 @@ func (e *Engine) ActiveAgents() []*Agent {
 			active = append(active, a)
 		}
 	}
+	sort.Slice(active, func(i, j int) bool {
+		return active[i].ID < active[j].ID
+	})
 	return active
 }
 
@@ -227,7 +235,8 @@ func (e *Engine) Stats() EngineStats {
 	}
 	for _, a := range e.agents {
 		stats.Total++
-		switch a.State {
+		snap := a.Snapshot()
+		switch snap.State {
 		case AgentRunning, AgentStarting:
 			stats.Active++
 		case AgentComplete:

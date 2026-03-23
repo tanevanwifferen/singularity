@@ -38,8 +38,9 @@ const (
 
 // AgentView displays the agent console with a split-pane layout.
 type AgentView struct {
-	repoPath string
-	engine   *engine.Engine
+	repoPath     string
+	engine       *engine.Engine
+	contextFiles []string // Files to inject into agent prompts
 	agents   []AgentInfo
 	filter   *components.Filter[AgentInfo]
 	loading  bool
@@ -74,10 +75,15 @@ type AgentView struct {
 }
 
 // NewAgentView creates a new agent console view.
-func NewAgentView(repoPath string, eng *engine.Engine) *AgentView {
+func NewAgentView(repoPath string, eng *engine.Engine, contextFiles ...[]string) *AgentView {
+	var ctxFiles []string
+	if len(contextFiles) > 0 {
+		ctxFiles = contextFiles[0]
+	}
 	v := &AgentView{
 		repoPath:         repoPath,
 		engine:           eng,
+		contextFiles:     ctxFiles,
 		width:            80,
 		height:           24,
 		refreshInterval:  500 * time.Millisecond,
@@ -95,10 +101,14 @@ func NewAgentView(repoPath string, eng *engine.Engine) *AgentView {
 // listHeight returns the height available for the agent list pane.
 func (v *AgentView) listHeight() int {
 	if v.selectedAgent != nil {
-		// Split: list gets top 40%, output gets bottom 60%
-		return max(v.height*2/5-3, 4) // -3 for header/stats/help
+		// Split mode: 4 lines of overhead (stats, divider, output header, output help)
+		available := v.height - 4
+		if available < 6 {
+			return max(available/2, 1)
+		}
+		return available * 2 / 5
 	}
-	return max(v.height-5, 4) // full height minus chrome
+	return max(v.height-5, 4) // full height minus chrome (reserves space for modals)
 }
 
 // outputHeight returns the height available for the output pane.
@@ -106,7 +116,8 @@ func (v *AgentView) outputHeight() int {
 	if v.selectedAgent == nil {
 		return 0
 	}
-	return max(v.height-v.listHeight()-5, 4) // -5 for divider, header, etc
+	available := v.height - 4
+	return max(available-v.listHeight(), 1)
 }
 
 // SetEngine sets the agent engine (allows late binding)
@@ -146,16 +157,17 @@ func (v *AgentView) loadAgents() {
 	v.agents = make([]AgentInfo, 0, len(agentList))
 
 	for _, a := range agentList {
+		snap := a.Snapshot()
 		info := AgentInfo{
-			ID:        a.ID,
-			State:     a.State,
-			Task:      a.Task,
-			WorkDir:   a.WorkDir,
-			CreatedAt: a.CreatedAt,
-			StartedAt: a.StartedAt,
-			EndedAt:   a.EndedAt,
-			ExitCode:  a.ExitCode,
-			Error:     a.Error,
+			ID:        snap.ID,
+			State:     snap.State,
+			Task:      snap.Task,
+			WorkDir:   snap.WorkDir,
+			CreatedAt: snap.CreatedAt,
+			StartedAt: snap.StartedAt,
+			EndedAt:   snap.EndedAt,
+			ExitCode:  snap.ExitCode,
+			Error:     snap.Error,
 		}
 		v.agents = append(v.agents, info)
 	}
@@ -190,49 +202,98 @@ func (v *AgentView) refreshSelectedAgentOutput() {
 	v.rebuildOutputViewport()
 }
 
+// wrapLine wraps a line to fit within maxWidth, preserving a prefix on continuation lines.
+func wrapLine(line string, maxWidth int, contPrefix string) []string {
+	if maxWidth <= 0 || len(line) <= maxWidth {
+		return []string{line}
+	}
+	var wrapped []string
+	for len(line) > 0 {
+		cut := maxWidth
+		if len(wrapped) > 0 {
+			cut = maxWidth - len(contPrefix)
+			if cut <= 0 {
+				cut = maxWidth
+			}
+		}
+		if cut >= len(line) {
+			if len(wrapped) > 0 {
+				line = contPrefix + line
+			}
+			wrapped = append(wrapped, line)
+			break
+		}
+		chunk := line[:cut]
+		if len(wrapped) > 0 {
+			chunk = contPrefix + chunk
+		}
+		wrapped = append(wrapped, chunk)
+		line = line[cut:]
+	}
+	return wrapped
+}
+
 // rebuildOutputViewport rebuilds the viewport content from output entries.
 func (v *AgentView) rebuildOutputViewport() {
 	th := theme.GetTheme()
 	var lines []string
+	w := v.width
 
 	for _, entry := range v.outputEntries {
 		switch entry.Source {
 		case "text":
-			lines = append(lines, entry.Content)
+			for _, raw := range strings.Split(entry.Content, "\n") {
+				lines = append(lines, wrapLine(raw, w, "  ")...)
+			}
 
 		case "tool_use":
-			toolLine := lipgloss.NewStyle().Foreground(th.Info).Bold(true).Render(
-				fmt.Sprintf("  %s", entry.Content))
-			lines = append(lines, toolLine)
+			style := lipgloss.NewStyle().Foreground(th.Info).Bold(true)
+			for _, raw := range strings.Split(entry.Content, "\n") {
+				for _, wl := range wrapLine(fmt.Sprintf("  %s", raw), w, "    ") {
+					lines = append(lines, style.Render(wl))
+				}
+			}
 
 		case "tool_result":
 			style := th.MutedTextStyle
 			if entry.IsError {
 				style = th.DashboardErrorStyle
 			}
-			content := entry.Content
-			// Show first few lines of tool results
-			resultLines := strings.Split(content, "\n")
-			if len(resultLines) > 5 {
-				content = strings.Join(resultLines[:5], "\n") + fmt.Sprintf("\n    ... (%d more lines)", len(resultLines)-5)
-			}
-			for _, rl := range strings.Split(content, "\n") {
-				lines = append(lines, style.Render(fmt.Sprintf("    %s", rl)))
+			for _, rl := range strings.Split(entry.Content, "\n") {
+				for _, wl := range wrapLine(fmt.Sprintf("    %s", rl), w, "      ") {
+					lines = append(lines, style.Render(wl))
+				}
 			}
 
 		case "system":
-			lines = append(lines, th.MutedTextStyle.Render(fmt.Sprintf("  %s", entry.Content)))
+			for _, raw := range strings.Split(entry.Content, "\n") {
+				for _, wl := range wrapLine(fmt.Sprintf("  %s", raw), w, "    ") {
+					lines = append(lines, th.MutedTextStyle.Render(wl))
+				}
+			}
 
 		case "error":
-			lines = append(lines, th.DashboardErrorStyle.Render(fmt.Sprintf("  %s", entry.Content)))
+			for _, raw := range strings.Split(entry.Content, "\n") {
+				for _, wl := range wrapLine(fmt.Sprintf("  %s", raw), w, "    ") {
+					lines = append(lines, th.DashboardErrorStyle.Render(wl))
+				}
+			}
 
 		case "result":
-			lines = append(lines, lipgloss.NewStyle().Foreground(th.Info).Render(
-				fmt.Sprintf("  %s", entry.Content)))
+			style := lipgloss.NewStyle().Foreground(th.Info)
+			for _, raw := range strings.Split(entry.Content, "\n") {
+				for _, wl := range wrapLine(fmt.Sprintf("  %s", raw), w, "    ") {
+					lines = append(lines, style.Render(wl))
+				}
+			}
 
 		case "user_input":
-			lines = append(lines, lipgloss.NewStyle().Foreground(th.Accent).Bold(true).Render(
-				fmt.Sprintf("  > %s", entry.Content)))
+			style := lipgloss.NewStyle().Foreground(th.Accent).Bold(true)
+			for _, raw := range strings.Split(entry.Content, "\n") {
+				for _, wl := range wrapLine(fmt.Sprintf("  > %s", raw), w, "      ") {
+					lines = append(lines, style.Render(wl))
+				}
+			}
 		}
 	}
 
@@ -452,7 +513,9 @@ func (v *AgentView) handleNewAgentInput(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
 		if v.newAgentTask != "" && v.engine != nil {
-			opts := engine.AgentOptions{}
+			opts := engine.AgentOptions{
+				ContextFiles: v.contextFiles,
+			}
 			_, err := v.engine.StartAgent(v.repoPath, v.newAgentTask, opts)
 			if err != nil {
 				v.err = fmt.Errorf("failed to start agent: %w", err)

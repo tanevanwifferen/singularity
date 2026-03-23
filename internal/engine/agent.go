@@ -72,6 +72,7 @@ type Agent struct {
 	model        string
 	allowedTools []string
 	maxTurns     int
+	contextFiles []string
 
 	// Cost tracking (from result event)
 	TotalCostUSD float64 `json:"total_cost_usd,omitempty"`
@@ -103,6 +104,7 @@ func newAgent(id, workDir, task string, opts AgentOptions) *Agent {
 		model:        opts.Model,
 		allowedTools: opts.AllowedTools,
 		maxTurns:     opts.MaxTurns,
+		contextFiles: opts.ContextFiles,
 	}
 }
 
@@ -161,10 +163,20 @@ func (a *Agent) start() error {
 	go a.streamStderr(a.stderr)
 	go a.waitForExit()
 
+	// Send the initial task via stdin (required when using --input-format stream-json)
+	go func() {
+		task := a.buildTask()
+		if err := a.sendInput(task); err != nil {
+			a.appendOutput("error", fmt.Sprintf("Failed to send initial task: %v", err))
+		}
+	}()
+
 	return nil
 }
 
-// buildArgs constructs the claude CLI arguments for stream-json mode
+// buildArgs constructs the claude CLI arguments for stream-json mode.
+// Note: when --input-format stream-json is used, the initial prompt must be
+// sent via stdin as JSON, not as a positional argument.
 func (a *Agent) buildArgs() []string {
 	args := []string{
 		"--print",
@@ -186,9 +198,6 @@ func (a *Agent) buildArgs() []string {
 		args = append(args, "--allowedTools", tool)
 	}
 
-	// The task/prompt goes last
-	args = append(args, a.Task)
-
 	return args
 }
 
@@ -199,6 +208,34 @@ func (a *Agent) buildEnv() []string {
 		"CLAUDE_NO_ANALYTICS=true",
 	)
 	return env
+}
+
+// buildTask constructs the full task string by prepending context file contents.
+// Context files specified in AgentOptions are read and injected before the user's task.
+func (a *Agent) buildTask() string {
+	if len(a.contextFiles) == 0 {
+		return a.Task
+	}
+
+	var context strings.Builder
+	for _, path := range a.contextFiles {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			a.appendOutput("system", fmt.Sprintf("Warning: could not read context file %s: %v", path, err))
+			continue
+		}
+		content := strings.TrimSpace(string(data))
+		if content == "" {
+			continue
+		}
+		context.WriteString(fmt.Sprintf("<context file=%q>\n%s\n</context>\n\n", path, content))
+	}
+
+	if context.Len() == 0 {
+		return a.Task
+	}
+
+	return context.String() + a.Task
 }
 
 // streamJSON parses newline-delimited JSON events from Claude's stream-json output
@@ -300,7 +337,7 @@ func (a *Agent) processAssistantEvent(event map[string]interface{}) {
 			entry := OutputEntry{
 				Timestamp: time.Now(),
 				Source:    "tool_result",
-				Content:   truncate(content, 500),
+				Content:   content,
 				ToolID:    toolID,
 				IsError:   isError,
 			}
@@ -395,9 +432,15 @@ func (a *Agent) sendInput(message string) error {
 		return fmt.Errorf("agent %s stdin not available", a.ID)
 	}
 
+	// stream-json input format requires a structured message envelope
 	msg := map[string]interface{}{
-		"type":    "user",
-		"content": message,
+		"type": "user",
+		"message": map[string]interface{}{
+			"role":    "user",
+			"content": message,
+		},
+		"session_id":         a.ID,
+		"parent_tool_use_id": nil,
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -493,6 +536,38 @@ func (a *Agent) appendOutputLocked(source, content string) {
 // setState changes state (caller must hold mu)
 func (a *Agent) setState(state AgentState) {
 	a.State = state
+}
+
+// Snapshot returns a point-in-time copy of the agent's mutable fields (thread-safe)
+func (a *Agent) Snapshot() AgentSnapshot {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return AgentSnapshot{
+		ID:           a.ID,
+		WorkDir:      a.WorkDir,
+		Task:         a.Task,
+		State:        a.State,
+		CreatedAt:    a.CreatedAt,
+		StartedAt:    a.StartedAt,
+		EndedAt:      a.EndedAt,
+		ExitCode:     a.ExitCode,
+		Error:        a.Error,
+		TotalCostUSD: a.TotalCostUSD,
+	}
+}
+
+// AgentSnapshot is a point-in-time copy of an agent's state, safe to read without locks
+type AgentSnapshot struct {
+	ID           string
+	WorkDir      string
+	Task         string
+	State        AgentState
+	CreatedAt    time.Time
+	StartedAt    *time.Time
+	EndedAt      *time.Time
+	ExitCode     int
+	Error        string
+	TotalCostUSD float64
 }
 
 // Done returns a channel that closes when the agent exits

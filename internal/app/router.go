@@ -56,6 +56,12 @@ type Router struct {
 	activeName string
 	active     View
 
+	// Submenu groups: key press (e.g. "g") → submenu overlay
+	submenus    map[string]*components.Submenu
+	submenuKeys []string // ordered list of submenu trigger keys
+	// Set of view names that live inside a submenu (not shown in main tab bar)
+	submenuViews map[string]bool
+
 	// Cached available dimensions for views
 	viewWidth  int
 	viewHeight int
@@ -63,6 +69,10 @@ type Router struct {
 	// Help overlay state
 	showHelp   bool
 	helpOverlay components.HelpOverlay
+
+	// Submenu overlay state
+	showSubmenu    bool
+	activeSubmenu  *components.Submenu
 }
 
 // NewRouter creates a new router with the given initial view.
@@ -70,12 +80,14 @@ func NewRouter(initial View, name string) *Router {
 	views := make(map[string]View)
 	views[name] = initial
 	return &Router{
-		views:      views,
-		viewOrder:  []string{name},
-		viewKeys:   make(map[string]string),
-		keyToView:  make(map[string]string),
-		activeName: name,
-		active:     initial,
+		views:        views,
+		viewOrder:    []string{name},
+		viewKeys:     make(map[string]string),
+		keyToView:    make(map[string]string),
+		submenus:     make(map[string]*components.Submenu),
+		submenuViews: make(map[string]bool),
+		activeName:   name,
+		active:       initial,
 	}
 }
 
@@ -96,6 +108,47 @@ func (r *Router) Register(name string, view View, keys ...string) {
 			sized.SetSize(r.viewWidth, r.viewHeight)
 		}
 	}
+}
+
+// RegisterSubmenu registers a submenu triggered by the given key (e.g. "g").
+// Items reference views that must already be registered via Register.
+// Those views are removed from the main tab bar.
+func (r *Router) RegisterSubmenu(triggerKey string, title string, items []components.SubmenuItem) {
+	sm := components.NewSubmenu(title, items)
+	r.submenus[triggerKey] = &sm
+	r.submenuKeys = append(r.submenuKeys, triggerKey)
+	for _, item := range items {
+		r.submenuViews[item.ViewName] = true
+	}
+}
+
+// TopLevelViewNames returns view names that are NOT inside a submenu.
+func (r *Router) TopLevelViewNames() []string {
+	var names []string
+	for _, name := range r.viewOrder {
+		if !r.submenuViews[name] {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// IsSubmenuView returns true if the named view belongs to a submenu.
+func (r *Router) IsSubmenuView(name string) bool {
+	return r.submenuViews[name]
+}
+
+// SubmenuKeys returns the ordered list of submenu trigger keys.
+func (r *Router) SubmenuKeys() []string {
+	return r.submenuKeys
+}
+
+// SubmenuTitle returns the title of the submenu triggered by the given key.
+func (r *Router) SubmenuTitle(triggerKey string) string {
+	if sm, ok := r.submenus[triggerKey]; ok {
+		return sm.Title
+	}
+	return ""
 }
 
 // ViewKey returns the shortcut key for a view, or "" if none assigned.
@@ -158,7 +211,36 @@ func (r *Router) Init() tea.Cmd {
 // Update handles messages and delegates to the active view.
 // It handles view switching messages.
 func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// Handle help overlay first if visible
+	// Handle submenu overlay first if visible
+	if r.showSubmenu && r.activeSubmenu != nil {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			key := msg.String()
+			if key == "esc" {
+				r.showSubmenu = false
+				r.activeSubmenu = nil
+				return r, nil
+			}
+			// Check if key matches a submenu item
+			if viewName := r.activeSubmenu.Match(key); viewName != "" {
+				r.showSubmenu = false
+				r.activeSubmenu = nil
+				if err := r.SwitchTo(viewName); err != nil {
+					return r, nil
+				}
+				return r, r.active.Init()
+			}
+			// Any other key closes the submenu
+			r.showSubmenu = false
+			r.activeSubmenu = nil
+			return r, nil
+		case tea.WindowSizeMsg:
+			r.activeSubmenu.SetSize(msg.Width, msg.Height)
+			return r, nil
+		}
+	}
+
+	// Handle help overlay if visible
 	if r.showHelp {
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
@@ -205,10 +287,19 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok && !r.ActiveViewCapturesInput() {
 		key := keyMsg.String()
 
+		// Check submenu trigger keys first (e.g. "g" for Git Operations)
+		// These take priority over view key claims.
+		if sm, ok := r.submenus[key]; ok {
+			r.showSubmenu = true
+			r.activeSubmenu = sm
+			r.activeSubmenu.SetSize(r.viewWidth, r.viewHeight)
+			return r, nil
+		}
+
 		// Let views claim specific keys before router handles them.
 		// If a view implements KeyCapturer and claims this key, delegate directly.
 		// If a view does NOT implement KeyCapturer, assume it uses all plain
-		// single-letter keys (safe default) — only F-keys bypass this.
+		// single-letter keys (safe default) — only F-keys and special keys bypass this.
 		if kc, ok := r.active.(KeyCapturer); ok {
 			if kc.CapturesKey(key) {
 				_, cmd := r.active.Update(msg)
@@ -227,8 +318,8 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			r.buildHelpOverlay()
 			return r, nil
 		case "tab":
-			// Cycle to next view
-			names := r.ViewNames()
+			// Cycle to next top-level view
+			names := r.TopLevelViewNames()
 			for i, name := range names {
 				if name == r.activeName {
 					next := (i + 1) % len(names)
@@ -238,9 +329,16 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return r, r.active.Init()
 				}
 			}
+			// If active view is in a submenu, jump to first top-level view
+			if r.IsSubmenuView(r.activeName) && len(names) > 0 {
+				if err := r.SwitchTo(names[0]); err != nil {
+					return r, nil
+				}
+				return r, r.active.Init()
+			}
 		case "shift+tab":
-			// Cycle to previous view
-			names := r.ViewNames()
+			// Cycle to previous top-level view
+			names := r.TopLevelViewNames()
 			for i, name := range names {
 				if name == r.activeName {
 					prev := (i - 1 + len(names)) % len(names)
@@ -249,6 +347,13 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					return r, r.active.Init()
 				}
+			}
+			// If active view is in a submenu, jump to last top-level view
+			if r.IsSubmenuView(r.activeName) && len(names) > 0 {
+				if err := r.SwitchTo(names[len(names)-1]); err != nil {
+					return r, nil
+				}
+				return r, r.active.Init()
 			}
 		default:
 			// View switching via F-key (when view allows it)
@@ -304,6 +409,10 @@ type KeyBinding = components.KeyBinding
 
 // View delegates to the active view's View.
 func (r *Router) View() string {
+	if r.showSubmenu && r.activeSubmenu != nil {
+		background := r.active.View()
+		return r.activeSubmenu.View(background)
+	}
 	if r.showHelp {
 		// Render help overlay with the active view as background
 		background := r.active.View()

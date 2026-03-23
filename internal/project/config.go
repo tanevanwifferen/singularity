@@ -16,8 +16,9 @@ type ProjectConfig struct {
 
 // ProjectDef defines a project with multiple repos
 type ProjectDef struct {
-	Name  string    `json:"name"`
-	Repos []RepoDef `json:"repos"`
+	Name         string    `json:"name"`
+	Repos        []RepoDef `json:"repos"`
+	ContextFiles []string  `json:"context_files,omitempty"`
 }
 
 // RepoDef defines a single repo within a project
@@ -55,7 +56,7 @@ func LoadConfig(path string) (*ProjectConfig, error) {
 		}
 	}
 
-	// Expand ~ in repo paths
+	// Expand ~ in repo paths and context file paths
 	for projName, proj := range cfg.Projects {
 		for i, repo := range proj.Repos {
 			expanded, err := expandPath(repo.Path)
@@ -63,6 +64,13 @@ func LoadConfig(path string) (*ProjectConfig, error) {
 				return nil, fmt.Errorf("failed to expand path for repo %s in project %s: %w", repo.Name, projName, err)
 			}
 			cfg.Projects[projName].Repos[i].Path = expanded
+		}
+		for i, cf := range proj.ContextFiles {
+			expanded, err := expandPath(cf)
+			if err != nil {
+				return nil, fmt.Errorf("failed to expand context file path %q in project %s: %w", cf, projName, err)
+			}
+			cfg.Projects[projName].ContextFiles[i] = expanded
 		}
 	}
 

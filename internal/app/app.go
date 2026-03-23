@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"git-frontend/internal/app/components"
 	"git-frontend/internal/app/views"
 	"git-frontend/internal/engine"
 	"git-frontend/internal/git"
@@ -163,7 +164,7 @@ func (m *Model) loadRepo() {
 // initRouter initializes the view router with available views.
 func (m *Model) initRouter() {
 	// Create the overview view as the first view (landing page)
-	// Views use F1-F12 shortcuts for switching (shown in tab bar)
+	// Top-level views get F-key shortcuts; git operations live in a "g" submenu
 	overview := views.NewOverviewView(m.repoPath)
 	router := NewRouter(overview, "Overview")
 	router.viewKeys["Overview"] = "f1"
@@ -175,38 +176,53 @@ func (m *Model) initRouter() {
 	}
 
 	commitView := views.NewCommitView(m.repoPath)
-	router.Register("commit", commitView, "f3")
-
-	syncView := views.NewSyncView(m.repoPath)
-	router.Register("Sync", syncView, "f4")
-
-	branchCompareView := views.NewBranchComparisonView(m.repoPath)
-	router.Register("BranchCompare", branchCompareView, "f5")
-
-	stashView := views.NewStashView(m.repoPath)
-	router.Register("Stashes", stashView, "f6")
-
-	rebaseView := views.NewRebaseView(m.repoPath)
-	router.Register("Rebase", rebaseView, "f7")
-
-	worktreeView := views.NewWorktreeView(m.repoPath)
-	router.Register("Worktrees", worktreeView, "f8")
+	router.Register("Commit", commitView, "f3")
 
 	logView := views.NewLogView(m.repoPath)
-	router.Register("Log", logView, "f9")
-
-	pipelineView := views.NewPipelineView(m.repoPath)
-	router.Register("Pipeline", pipelineView, "f10")
-
-	prView := views.NewPRView(m.repoPath)
-	router.Register("CreatePR", prView, "f11")
+	router.Register("Log", logView, "f4")
 
 	// Register agent console view
 	if m.engine == nil {
 		m.engine = engine.New(10)
 	}
-	agentView := views.NewAgentView(m.repoPath, m.engine)
-	router.Register("Agents", agentView, "f12")
+	var contextFiles []string
+	if m.proj != nil {
+		contextFiles = m.proj.ContextFiles
+	}
+	agentView := views.NewAgentView(m.repoPath, m.engine, contextFiles)
+	router.Register("Agents", agentView, "f5")
+
+	// Git operations submenu (accessible via "g" key)
+	syncView := views.NewSyncView(m.repoPath)
+	router.Register("Sync", syncView)
+
+	branchCompareView := views.NewBranchComparisonView(m.repoPath)
+	router.Register("BranchCompare", branchCompareView)
+
+	stashView := views.NewStashView(m.repoPath)
+	router.Register("Stashes", stashView)
+
+	rebaseView := views.NewRebaseView(m.repoPath)
+	router.Register("Rebase", rebaseView)
+
+	worktreeView := views.NewWorktreeView(m.repoPath)
+	router.Register("Worktrees", worktreeView)
+
+	pipelineView := views.NewPipelineView(m.repoPath)
+	router.Register("Pipeline", pipelineView)
+
+	prView := views.NewPRView(m.repoPath)
+	router.Register("CreatePR", prView)
+
+	router.RegisterSubmenu("g", "Git", []components.SubmenuItem{
+		{Key: "s", Label: "Sync (push/pull/fetch)", ViewName: "Sync"},
+		{Key: "b", Label: "Branch Compare", ViewName: "BranchCompare"},
+		{Key: "t", Label: "Stashes", ViewName: "Stashes"},
+		{Key: "r", Label: "Rebase", ViewName: "Rebase"},
+		{Key: "w", Label: "Worktrees", ViewName: "Worktrees"},
+		{Key: "p", Label: "Pipeline", ViewName: "Pipeline"},
+		{Key: "c", Label: "Create PR", ViewName: "CreatePR"},
+	})
 
 	m.router = router
 
@@ -220,12 +236,11 @@ func (m *Model) initRouter() {
 func (m *Model) initProjectRouter() {
 	// Load project from path
 	if m.projectPath == "" {
-		m.projectPath = "."
+		m.projectPath = project.GetDefaultConfigPath()
 	}
 
 	// Try to load project config
-	configPath := project.GetDefaultConfigPath()
-	loader, err := project.NewLoaderFromFile(configPath)
+	loader, err := project.NewLoaderFromFile(m.projectPath)
 	if err != nil {
 		// No config file, try auto-discovery in current directory
 		// Create a project with all subdirectories that are git repos
