@@ -65,6 +65,19 @@ type LogView struct {
 
 	// Filter mode (author vs message)
 	filterMode string // "" or "author" or "message"
+
+	// Commit operations modal states
+	showCherryPickConfirm bool
+	cherryPickHash        string
+	showResetMenu         bool   // shows soft/mixed/hard submenu
+	resetHash             string
+	resetMode             string // "soft", "mixed", "hard"
+	showResetConfirm      bool
+	showRewordEditor      bool
+	rewordMessage         string
+	rewordCursor          int
+	operationErr          error  // transient error from last operation
+	operationSuccess      string // transient success message
 }
 
 // NewLogView creates a new log view.
@@ -282,7 +295,21 @@ func (v *LogView) closeDetail() {
 func (v *LogView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// Handle detail panel first
+		// Handle modal states first (highest priority)
+		if v.showCherryPickConfirm {
+			return v, v.handleCherryPickConfirm(msg)
+		}
+		if v.showResetConfirm {
+			return v, v.handleResetConfirm(msg)
+		}
+		if v.showResetMenu {
+			return v, v.handleResetMenu(msg)
+		}
+		if v.showRewordEditor {
+			return v, v.handleRewordEditor(msg)
+		}
+
+		// Handle detail panel
 		if v.showDetail {
 			return v, v.handleDetailKey(msg)
 		}
@@ -356,6 +383,54 @@ func (v *LogView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Filter - if in filter mode, activate filter input
 			if v.filterMode != "" {
 				v.filter.Update(msg)
+			}
+
+		case "y":
+			// Copy commit hash to clipboard
+			if item, idx := v.filter.SelectedItem(); idx >= 0 {
+				v.operationErr = nil
+				v.operationSuccess = ""
+				if err := git.CopyToClipboard(item.Hash); err != nil {
+					v.operationErr = err
+				} else {
+					v.operationSuccess = fmt.Sprintf("Copied %s to clipboard", item.ShortHash)
+				}
+			}
+
+		case "c":
+			// Cherry-pick selected commit (show confirmation)
+			if item, idx := v.filter.SelectedItem(); idx >= 0 {
+				v.cherryPickHash = item.Hash
+				v.showCherryPickConfirm = true
+				v.operationErr = nil
+				v.operationSuccess = ""
+			}
+
+		case "w":
+			// Reword HEAD commit message
+			if item, idx := v.filter.SelectedItem(); idx >= 0 {
+				// Only allow reword on the first commit (HEAD)
+				if idx == 0 {
+					v.showRewordEditor = true
+					v.rewordMessage = item.Subject
+					v.rewordCursor = len(item.Subject)
+					v.operationErr = nil
+					v.operationSuccess = ""
+				} else {
+					v.operationErr = fmt.Errorf("can only reword HEAD commit (first in list)")
+					v.operationSuccess = ""
+				}
+			}
+
+		case "x":
+			// Reset to commit (show submenu)
+			if item, idx := v.filter.SelectedItem(); idx >= 0 {
+				_ = idx // idx used only for bounds check
+				v.resetHash = item.Hash
+				v.showResetMenu = true
+				v.resetMode = "mixed" // default selection
+				v.operationErr = nil
+				v.operationSuccess = ""
 			}
 		}
 
@@ -509,6 +584,126 @@ func (v *LogView) handleDetailKey(msg tea.KeyMsg) tea.Cmd {
 		} else if len(v.detailFiles) > 0 {
 			v.detailFileIdx = len(v.detailFiles) - 1
 			v.loadDetailFileDiff(v.detailFileIdx)
+		}
+	}
+	return nil
+}
+
+// handleCherryPickConfirm handles y/n during cherry-pick confirmation.
+func (v *LogView) handleCherryPickConfirm(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "y", "Y", "enter":
+		hash := v.cherryPickHash
+		v.showCherryPickConfirm = false
+		v.cherryPickHash = ""
+		if err := git.CherryPick(v.repoPath, hash); err != nil {
+			v.operationErr = err
+		} else {
+			v.operationSuccess = fmt.Sprintf("Cherry-picked %s", hash[:8])
+			v.loadCommits(true)
+		}
+	case "n", "N", "esc":
+		v.showCherryPickConfirm = false
+		v.cherryPickHash = ""
+	}
+	return nil
+}
+
+// handleResetMenu handles the soft/mixed/hard submenu for reset.
+func (v *LogView) handleResetMenu(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "s":
+		v.resetMode = "soft"
+		v.showResetMenu = false
+		v.showResetConfirm = true
+	case "m":
+		v.resetMode = "mixed"
+		v.showResetMenu = false
+		v.showResetConfirm = true
+	case "h":
+		v.resetMode = "hard"
+		v.showResetMenu = false
+		v.showResetConfirm = true
+	case "esc":
+		v.showResetMenu = false
+		v.resetHash = ""
+		v.resetMode = ""
+	}
+	return nil
+}
+
+// handleResetConfirm handles y/n during reset confirmation.
+func (v *LogView) handleResetConfirm(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "y", "Y", "enter":
+		hash := v.resetHash
+		mode := v.resetMode
+		v.showResetConfirm = false
+		v.resetHash = ""
+		v.resetMode = ""
+		if err := git.ResetToCommit(v.repoPath, hash, mode); err != nil {
+			v.operationErr = err
+		} else {
+			v.operationSuccess = fmt.Sprintf("Reset --%s to %s", mode, hash[:8])
+			v.loadCommits(true)
+		}
+	case "n", "N", "esc":
+		v.showResetConfirm = false
+		v.resetHash = ""
+		v.resetMode = ""
+	}
+	return nil
+}
+
+// handleRewordEditor handles the text editor for rewording HEAD commit.
+func (v *LogView) handleRewordEditor(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "enter":
+		// Confirm reword
+		if v.rewordMessage != "" {
+			newMsg := v.rewordMessage
+			v.showRewordEditor = false
+			v.rewordMessage = ""
+			v.rewordCursor = 0
+			if err := git.AmendCommitMessage(v.repoPath, newMsg); err != nil {
+				v.operationErr = err
+			} else {
+				v.operationSuccess = "Commit message amended"
+				v.loadCommits(true)
+			}
+		}
+	case "esc":
+		v.showRewordEditor = false
+		v.rewordMessage = ""
+		v.rewordCursor = 0
+	case "backspace":
+		if v.rewordCursor > 0 {
+			v.rewordMessage = v.rewordMessage[:v.rewordCursor-1] + v.rewordMessage[v.rewordCursor:]
+			v.rewordCursor--
+		}
+	case "left":
+		if v.rewordCursor > 0 {
+			v.rewordCursor--
+		}
+	case "right":
+		if v.rewordCursor < len(v.rewordMessage) {
+			v.rewordCursor++
+		}
+	case "home":
+		v.rewordCursor = 0
+	case "end":
+		v.rewordCursor = len(v.rewordMessage)
+	case "ctrl+w":
+		v.rewordMessage, v.rewordCursor = components.DeleteWord(v.rewordMessage, v.rewordCursor)
+	default:
+		if len(msg.Runes) == 1 {
+			r := msg.Runes[0]
+			if r >= 32 && r <= 126 {
+				before := v.rewordMessage[:v.rewordCursor]
+				after := v.rewordMessage[v.rewordCursor:]
+				v.rewordMessage = before + string(r) + after
+				v.rewordCursor++
+			}
 		}
 	}
 	return nil
@@ -683,7 +878,7 @@ func (v *LogView) View() string {
 		if v.filter.IsActive() {
 			s.WriteString(v.filter.View())
 		} else {
-			helpText := " a: Filter by author   s: Search message   Enter: View detail   g: Load more   /: Quick search"
+			helpText := " a: Author   s: Search   Enter: Detail   y: Copy   c: Cherry-pick   w: Reword   x: Reset   g: More"
 			if v.hasMore {
 				helpText += "   ↑↓: Navigate"
 			}
@@ -711,17 +906,83 @@ func (v *LogView) View() string {
 		s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf(" Error: %v", v.err)))
 	}
 
+	// Operation status display
+	if v.operationErr != nil {
+		s.WriteString("\n")
+		s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf(" Operation error: %v", v.operationErr)))
+	}
+	if v.operationSuccess != "" {
+		s.WriteString("\n")
+		s.WriteString(th.DashboardAccentStyle.Render(fmt.Sprintf(" %s", v.operationSuccess)))
+	}
+
 	// Footer
 	s.WriteString("\n")
 	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
 	s.WriteString("\n")
-	footerText := " r: Refresh   a: Filter author   s: Search message   Enter: View detail   ESC: Clear filters"
+	footerText := " r: Refresh   a: Author   s: Search   Enter: Detail   y: Copy hash   c: Cherry-pick   w: Reword   x: Reset"
 	if v.hasMore {
-		footerText += "   g: Load more"
+		footerText += "   g: More"
 	}
 	s.WriteString(th.Help.Render(footerText))
 
-	return s.String()
+	// Render modal overlays on top
+	base := s.String()
+
+	if v.showCherryPickConfirm {
+		shortHash := v.cherryPickHash
+		if len(shortHash) > 8 {
+			shortHash = shortHash[:8]
+		}
+		modal := components.NewConfirmDialog(
+			"Cherry-pick Commit",
+			fmt.Sprintf("Cherry-pick commit %s onto current branch?", shortHash),
+			"cherry-pick",
+		)
+		modal.SetSize(v.width, v.height)
+		return modal.View(base)
+	}
+
+	if v.showResetMenu {
+		shortHash := v.resetHash
+		if len(shortHash) > 8 {
+			shortHash = shortHash[:8]
+		}
+		m := components.NewModal(
+			"Reset to "+shortHash,
+			"Choose reset mode:\n\n"+
+				"  [s] Soft  - keep changes staged\n"+
+				"  [m] Mixed - keep changes unstaged (default)\n"+
+				"  [h] Hard  - discard all changes\n\n"+
+				"  Esc to cancel",
+		)
+		m.SetSize(v.width, v.height)
+		return m.Render(base)
+	}
+
+	if v.showResetConfirm {
+		shortHash := v.resetHash
+		if len(shortHash) > 8 {
+			shortHash = shortHash[:8]
+		}
+		modal := components.NewConfirmDialog(
+			"Confirm Reset",
+			fmt.Sprintf("Reset --%s to %s?\nThis may modify your working tree.", v.resetMode, shortHash),
+			"reset",
+		)
+		modal.SetSize(v.width, v.height)
+		return modal.View(base)
+	}
+
+	if v.showRewordEditor {
+		// Render inline text editor modal
+		content := fmt.Sprintf("Edit commit message for HEAD:\n\n> %s\n\nEnter: Confirm   Esc: Cancel", v.rewordMessage+"█")
+		m := components.NewModal("Reword Commit", content)
+		m.SetSize(v.width, v.height)
+		return m.Render(base)
+	}
+
+	return base
 }
 
 // renderDetailView renders the full split-panel commit detail view
@@ -1084,7 +1345,7 @@ func (v *LogView) ShortHelp() string {
 	if v.showDetail {
 		return "j/k: Navigate  Tab: Switch panel  Enter: View diff  g/G: Top/Bottom  Esc: Close"
 	}
-	return "a: Author filter  s: Message search  Enter: View detail  ↑↓: Navigate  g: Load more  r: Refresh"
+	return "a: Author  s: Search  Enter: Detail  y: Copy hash  c: Cherry-pick  w: Reword  x: Reset  r: Refresh"
 }
 
 // headerFooterLines returns the number of lines used by the view chrome
@@ -1154,6 +1415,10 @@ func (v *LogView) KeyBindings() []components.KeyBinding {
 		{Key: "↑/k", Description: "Navigate up"},
 		{Key: "↓/j", Description: "Navigate down"},
 		{Key: "Enter", Description: "View commit detail"},
+		{Key: "y", Description: "Copy commit hash to clipboard"},
+		{Key: "c", Description: "Cherry-pick selected commit"},
+		{Key: "w", Description: "Reword HEAD commit message"},
+		{Key: "x", Description: "Reset to selected commit"},
 		{Key: "Tab", Description: "Switch panel (in detail view)"},
 		{Key: "g/G", Description: "Top/Bottom (diff or load more)"},
 		{Key: "Esc", Description: "Close detail / Clear filters"},
