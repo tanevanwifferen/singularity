@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"git-frontend/internal/app/components"
@@ -62,6 +63,15 @@ type ProjectView struct {
 	mrConfirmBranch string // branch name
 	mrResult        string // flash message for MR result
 
+	// Feature workflow state
+	activeWorkflow       *project.FeatureWorkflow
+	showWorkflowStart    bool   // modal for entering branch name
+	workflowBranchName   string // input text
+	showWorkflowCleanup  bool   // confirmation modal
+	workflowStatusMsg    string // flash message
+	workflowBaseDir      string // default ~/.worktrees/<projectName>/
+	showWorkflowStatus   bool   // toggle for status panel
+
 	// Filter for tree list
 	filter *components.Filter[treeNode]
 }
@@ -75,6 +85,7 @@ func NewProjectView(proj *project.Project) *ProjectView {
 		expanded: make(map[int]bool),
 	}
 
+	v.workflowBaseDir = defaultWorkflowBaseDir(proj.Name)
 	v.filter = components.NewFilter([]treeNode{}, v.renderTreeNode)
 	v.filter.SetHeight(v.height)
 
@@ -91,10 +102,20 @@ func NewProjectViewWithPath(projectPath string) *ProjectView {
 		expanded:    make(map[int]bool),
 	}
 
+	v.workflowBaseDir = defaultWorkflowBaseDir(filepath.Base(projectPath))
 	v.filter = components.NewFilter([]treeNode{}, v.renderTreeNode)
 	v.filter.SetHeight(v.height)
 
 	return v
+}
+
+// defaultWorkflowBaseDir returns ~/.worktrees/<projectName>/
+func defaultWorkflowBaseDir(projectName string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "/tmp"
+	}
+	return filepath.Join(home, ".worktrees", projectName)
 }
 
 // SetProject updates the project reference.
@@ -328,6 +349,63 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.mrResult != "" {
 			v.mrResult = ""
 		}
+		if v.workflowStatusMsg != "" {
+			v.workflowStatusMsg = ""
+		}
+
+		// Handle workflow start modal
+		if v.showWorkflowStart {
+			switch msg.String() {
+			case "enter":
+				if v.workflowBranchName != "" && v.proj != nil {
+					branchName := v.workflowBranchName
+					baseDir := v.workflowBaseDir
+					v.showWorkflowStart = false
+					v.workflowBranchName = ""
+					wf := project.NewFeatureWorkflow(v.proj, branchName, baseDir)
+					v.activeWorkflow = wf
+					v.showWorkflowStatus = true
+					return v, func() tea.Msg {
+						wf.CreateAllWorktrees()
+						return RefreshDoneMsg{}
+					}
+				}
+				v.showWorkflowStart = false
+			case "esc":
+				v.showWorkflowStart = false
+				v.workflowBranchName = ""
+			case "backspace":
+				if len(v.workflowBranchName) > 0 {
+					v.workflowBranchName = v.workflowBranchName[:len(v.workflowBranchName)-1]
+				}
+			case "ctrl+w":
+				v.workflowBranchName = components.DeleteWordEnd(v.workflowBranchName)
+			default:
+				if len(msg.Runes) == 1 {
+					r := msg.Runes[0]
+					if r >= 32 && r <= 126 {
+						v.workflowBranchName += string(r)
+					}
+				}
+			}
+			return v, nil
+		}
+
+		// Handle workflow cleanup confirmation
+		if v.showWorkflowCleanup {
+			switch msg.String() {
+			case "y":
+				wf := v.activeWorkflow
+				v.showWorkflowCleanup = false
+				return v, func() tea.Msg {
+					wf.RemoveAllWorktrees()
+					return RefreshDoneMsg{}
+				}
+			case "n", "esc":
+				v.showWorkflowCleanup = false
+			}
+			return v, nil
+		}
 
 		// Handle new branch creation mode
 		if v.showNewBranch {
@@ -472,6 +550,18 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.showBranchCheck = true
 			v.branchCheckName = ""
 			v.branchExistence = nil
+		case "w":
+			// Start new feature workflow
+			v.showWorkflowStart = true
+			v.workflowBranchName = ""
+		case "D":
+			// Cleanup feature workflow
+			if v.activeWorkflow != nil {
+				v.showWorkflowCleanup = true
+			}
+		case "W":
+			// Toggle workflow status panel
+			v.showWorkflowStatus = !v.showWorkflowStatus
 		case "/":
 			if v.filter != nil {
 				v.filter.Update(msg)
@@ -485,6 +575,37 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case RefreshDoneMsg:
 		v.loading = false
+		// Generate workflow flash messages from active workflow state
+		if v.activeWorkflow != nil {
+			st := v.activeWorkflow.Status()
+			switch st.State {
+			case project.WorkflowActive:
+				// Just finished creating worktrees
+				var lines []string
+				// Sort repo names for deterministic output
+				names := make([]string, 0, len(v.activeWorkflow.Repos))
+				for name := range v.activeWorkflow.Repos {
+					names = append(names, name)
+				}
+				sort.Strings(names)
+				for _, name := range names {
+					wr := v.activeWorkflow.Repos[name]
+					if wr.Error != "" {
+						lines = append(lines, fmt.Sprintf("  ✗ %s: %s", name, wr.Error))
+					} else if wr.WorktreeCreated {
+						lines = append(lines, fmt.Sprintf("  ✓ %s: worktree created", name))
+					}
+				}
+				if len(lines) > 0 {
+					v.workflowStatusMsg = strings.Join(lines, "\n")
+				}
+			case project.WorkflowDone:
+				// Cleanup finished
+				v.workflowStatusMsg = fmt.Sprintf("Worktrees for '%s' removed", v.activeWorkflow.BranchName)
+				v.activeWorkflow = nil
+				v.showWorkflowStatus = false
+			}
+		}
 
 	case tea.MouseMsg:
 		if v.filter != nil {
@@ -597,6 +718,86 @@ func (v *ProjectView) View() string {
 		s.WriteString("\n\n")
 	}
 
+	// Workflow start modal
+	if v.showWorkflowStart {
+		s.WriteString(th.StatsStyle.Render(" Start Feature Workflow "))
+		s.WriteString("\n")
+		s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
+		s.WriteString("\n\n")
+		s.WriteString(th.Help.Render("Branch name: "))
+		s.WriteString(th.InfoStyle.Render(v.workflowBranchName))
+		s.WriteString(th.MutedTextStyle.Render("_"))
+		s.WriteString("\n\n")
+		s.WriteString(th.Help.Render("Enter: Create worktrees   Esc: Cancel   Ctrl+W: Delete word"))
+		s.WriteString("\n\n")
+	}
+
+	// Workflow cleanup confirmation
+	if v.showWorkflowCleanup && v.activeWorkflow != nil {
+		s.WriteString(th.DashboardAccentStyle.Render(" Remove all worktrees? "))
+		s.WriteString("\n\n")
+		s.WriteString(th.Help.Render("  Branch: "))
+		s.WriteString(th.InfoStyle.Render(v.activeWorkflow.BranchName))
+		s.WriteString("\n\n")
+		s.WriteString(th.Help.Render(fmt.Sprintf("  Remove all worktrees for '%s'? (y/n)", v.activeWorkflow.BranchName)))
+		s.WriteString("\n\n")
+	}
+
+	// Workflow status panel
+	if v.showWorkflowStatus && v.activeWorkflow != nil {
+		st := v.activeWorkflow.Status()
+		s.WriteString(th.StatsStyle.Render(" Feature Workflow "))
+		s.WriteString("\n")
+		s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
+		s.WriteString("\n")
+		s.WriteString(th.Help.Render("  Branch: "))
+		s.WriteString(th.InfoStyle.Render(st.BranchName))
+		s.WriteString("\n")
+		s.WriteString(th.Help.Render("  State:  "))
+		s.WriteString(th.InfoStyle.Render(st.State.String()))
+		s.WriteString("\n")
+
+		// Per-repo status
+		names := make([]string, 0, len(v.activeWorkflow.Repos))
+		for name := range v.activeWorkflow.Repos {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			wr := v.activeWorkflow.Repos[name]
+			icon := "  "
+			if wr.Error != "" {
+				icon = th.DashboardErrorStyle.Render("✗ ")
+			} else if wr.WorktreeCreated {
+				icon = th.StatsStyle.Render("✓ ")
+			} else {
+				icon = th.MutedTextStyle.Render("- ")
+			}
+			s.WriteString(fmt.Sprintf("  %s%s", icon, name))
+			if wr.WorktreeCreated {
+				s.WriteString(th.MutedTextStyle.Render(fmt.Sprintf("  %s", wr.WorktreePath)))
+			}
+			if wr.Error != "" {
+				s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf("  %s", wr.Error)))
+			}
+			s.WriteString("\n")
+		}
+		s.WriteString("\n")
+	}
+
+	// Workflow flash message
+	if v.workflowStatusMsg != "" {
+		for _, line := range strings.Split(v.workflowStatusMsg, "\n") {
+			if strings.Contains(line, "✓") || strings.HasPrefix(line, "Worktrees for") {
+				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
+			} else {
+				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
+			}
+			s.WriteString("\n")
+		}
+		s.WriteString("\n")
+	}
+
 	// MR confirmation dialog
 	if v.showMRConfirm {
 		s.WriteString(th.DashboardAccentStyle.Render(" Create MR/PR? "))
@@ -652,25 +853,25 @@ func (v *ProjectView) View() string {
 	s.WriteString("\n")
 	s.WriteString(th.Help.Render("⚡current  ✓synced  ↑ahead  ↓behind  ⊘no remote  ●dirty  ✗error"))
 	s.WriteString("\n")
-	s.WriteString(th.Help.Render("↑↓: Navigate  Enter: Expand/collapse  o: Open  c: Checkout  n: New branch  m: MR/PR  b: Check  /: Filter  r: Refresh"))
+	s.WriteString(th.Help.Render("↑↓: Navigate  Enter: Expand/collapse  o: Open  c: Checkout  n: New branch  m: MR/PR  b: Check  w: Workflow  D: Cleanup  W: Status  /: Filter  r: Refresh"))
 
 	return s.String()
 }
 
 // ShortHelp returns a short help string.
 func (v *ProjectView) ShortHelp() string {
-	return "↑↓: Navigate  Enter: Expand/collapse  o: Open  c: Checkout  n: New branch  m: MR/PR  b: Check  /: Filter  r: Refresh"
+	return "↑↓: Navigate  Enter: Expand/collapse  o: Open  c: Checkout  n: New branch  m: MR/PR  b: Check  w: Workflow  D: Cleanup  W: Status  /: Filter  r: Refresh"
 }
 
 // CapturesInput returns true when the view is in an input mode.
 func (v *ProjectView) CapturesInput() bool {
-	return v.showBranchCheck || v.showNewBranch || v.showMRConfirm
+	return v.showBranchCheck || v.showNewBranch || v.showMRConfirm || v.showWorkflowStart || v.showWorkflowCleanup
 }
 
 // CapturesKey returns true for keys this view handles directly.
 func (v *ProjectView) CapturesKey(key string) bool {
 	switch key {
-	case "r", "o", "b", "c", "n", "m", "enter", "/", "j", "k", "up", "down":
+	case "r", "o", "b", "c", "n", "m", "w", "D", "W", "enter", "/", "j", "k", "up", "down":
 		return true
 	}
 	return false
@@ -711,6 +912,9 @@ func (v *ProjectView) KeyBindings() []components.KeyBinding {
 		{Key: "n", Description: "Create new branch across all repos"},
 		{Key: "m", Description: "Create MR/PR for selected branch"},
 		{Key: "b", Description: "Check if branch exists in all repos"},
+		{Key: "w", Description: "Start feature workflow (create worktrees)"},
+		{Key: "D", Description: "Cleanup feature workflow (remove worktrees)"},
+		{Key: "W", Description: "Toggle workflow status panel"},
 		{Key: "/", Description: "Filter"},
 		{Key: "r", Description: "Refresh all repos"},
 	}
