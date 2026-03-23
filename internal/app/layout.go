@@ -197,11 +197,16 @@ func (l *Layout) Render(router *Router, repoInfo *git.RepoInfo, activeViewConten
 	output += th.BorderStyle.Render(divider)
 	output += "\n"
 
-	// Active view content
-	output += activeViewContent
-	if len(activeViewContent) > 0 && activeViewContent[len(activeViewContent)-1] != '\n' {
-		output += "\n"
-	}
+	// Active view content — constrain to exactly the available height so the
+	// status bar stays pinned to the bottom of the terminal.
+	_, viewHeight := l.AvailableViewDimensions()
+	viewPane := lipgloss.NewStyle().
+		Width(l.width).
+		Height(viewHeight).
+		MaxHeight(viewHeight).
+		Render(activeViewContent)
+	output += viewPane
+	output += "\n"
 
 	// Status bar divider
 	output += th.BorderStyle.Render(divider)

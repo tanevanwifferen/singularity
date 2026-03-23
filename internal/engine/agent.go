@@ -76,6 +76,9 @@ type Agent struct {
 
 	// Cost tracking (from result event)
 	TotalCostUSD float64 `json:"total_cost_usd,omitempty"`
+
+	// Smart routing result (nil if not routed)
+	RouteResult *RouteResult `json:"route_result,omitempty"`
 }
 
 // OutputEntry represents a single output chunk from the agent.
@@ -156,6 +159,9 @@ func (a *Agent) start() error {
 	a.StartedAt = &now
 	a.State = AgentRunning
 
+	if a.RouteResult != nil {
+		a.appendOutput("system", fmt.Sprintf("Routed → %s (%s: %s)", a.RouteResult.Model, a.RouteResult.Category, a.RouteResult.Reason))
+	}
 	a.appendOutput("system", fmt.Sprintf("Agent %s started with task: %s", a.ID, a.Task))
 
 	// Stream structured JSON output
@@ -435,15 +441,16 @@ func (a *Agent) waitForExit() {
 }
 
 // sendInput sends a follow-up message to the agent's stdin via stream-json protocol.
-// Accepts messages to running or completed agents (process stays alive in stream-json mode).
+// Accepts messages to running, completed, or soft-closed agents (process stays alive
+// in stream-json mode until explicitly removed via RemoveAgent).
 func (a *Agent) sendInput(message string) error {
 	a.mu.Lock()
-	if a.State != AgentRunning && a.State != AgentComplete {
+	if a.State != AgentRunning && a.State != AgentComplete && a.State != AgentKilled {
 		a.mu.Unlock()
 		return fmt.Errorf("agent %s is in state %s, cannot send input", a.ID, a.State)
 	}
 	// Resume agent back to running when sending a follow-up
-	if a.State == AgentComplete {
+	if a.State == AgentComplete || a.State == AgentKilled {
 		a.State = AgentRunning
 		a.EndedAt = nil
 	}
@@ -481,6 +488,20 @@ func (a *Agent) sendInput(message string) error {
 	return nil
 }
 
+// softClose marks the agent as killed without terminating the subprocess.
+// The process stays alive and can still receive messages until RemoveAgent is called.
+func (a *Agent) softClose() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.State == AgentRunning || a.State == AgentStarting || a.State == AgentComplete {
+		a.State = AgentKilled
+		now := time.Now()
+		if a.EndedAt == nil {
+			a.EndedAt = &now
+		}
+	}
+}
+
 // kill terminates the agent subprocess
 func (a *Agent) kill() error {
 	a.mu.Lock()
@@ -498,7 +519,9 @@ func (a *Agent) kill() error {
 	}
 	a.stdinMu.Unlock()
 
-	a.State = AgentKilled
+	if a.State != AgentKilled {
+		a.State = AgentKilled
+	}
 	a.appendOutputLocked("system", "Agent killed")
 
 	return a.cmd.Process.Kill()
@@ -577,6 +600,7 @@ func (a *Agent) Snapshot() AgentSnapshot {
 		ExitCode:     a.ExitCode,
 		Error:        a.Error,
 		TotalCostUSD: a.TotalCostUSD,
+		RouteResult:  a.RouteResult,
 	}
 }
 
@@ -592,6 +616,7 @@ type AgentSnapshot struct {
 	ExitCode     int
 	Error        string
 	TotalCostUSD float64
+	RouteResult  *RouteResult
 }
 
 // Done returns a channel that closes when the agent exits

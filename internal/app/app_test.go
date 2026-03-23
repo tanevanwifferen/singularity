@@ -27,20 +27,78 @@ func TestModelInit(t *testing.T) {
 func TestModelUpdateQuitCtrlC(t *testing.T) {
 	model := New()
 
-	// Test ctrl+c
-	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	if cmd == nil {
-		t.Error("Expected non-nil command (tea.Quit) after ctrl+c")
+	// Test ctrl+c shows confirmation instead of quitting immediately
+	result, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd != nil {
+		t.Error("Expected nil command (confirmation shown, not quit)")
+	}
+	m := result.(Model)
+	if !m.showQuitConfirm {
+		t.Error("Expected showQuitConfirm=true after ctrl+c")
 	}
 }
 
 func TestModelUpdateQuitQ(t *testing.T) {
 	model := New()
 
-	// Test q
-	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	// Test q shows confirmation instead of quitting immediately
+	result, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd != nil {
+		t.Error("Expected nil command (confirmation shown, not quit)")
+	}
+	m := result.(Model)
+	if !m.showQuitConfirm {
+		t.Error("Expected showQuitConfirm=true after q")
+	}
+}
+
+func TestModelUpdateQuitConfirmYes(t *testing.T) {
+	model := New()
+
+	// First trigger the confirmation
+	result, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m := result.(Model)
+
+	// Confirm with 'y' - produces a cmd that returns ConfirmResult
+	result, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	if cmd == nil {
-		t.Error("Expected non-nil command (tea.Quit) after q")
+		t.Fatal("Expected non-nil command from confirm dialog")
+	}
+
+	// Execute the cmd to get the ConfirmResult message, then dispatch it
+	msg := cmd()
+	result, cmd = result.(Model).Update(msg)
+	if cmd == nil {
+		t.Error("Expected tea.Quit command after confirming quit")
+	}
+	m = result.(Model)
+	if !m.quitting {
+		t.Error("Expected quitting=true after confirming quit")
+	}
+}
+
+func TestModelUpdateQuitConfirmNo(t *testing.T) {
+	model := New()
+
+	// First trigger the confirmation
+	result, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m := result.(Model)
+
+	// Cancel with 'n' - produces a cmd that returns ConfirmResult
+	result, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if cmd == nil {
+		t.Fatal("Expected non-nil command from confirm dialog")
+	}
+
+	// Execute the cmd to get the ConfirmResult message, then dispatch it
+	msg := cmd()
+	result, _ = result.(Model).Update(msg)
+	m = result.(Model)
+	if m.showQuitConfirm {
+		t.Error("Expected showQuitConfirm=false after cancelling")
+	}
+	if m.quitting {
+		t.Error("Expected quitting=false after cancelling")
 	}
 }
 

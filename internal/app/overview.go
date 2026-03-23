@@ -254,13 +254,6 @@ func (v *OverviewView) View() string {
 		}
 	}
 
-	s.WriteString("\n")
-
-	// Footer
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
-	s.WriteString(th.Help.Render(" r: Refresh   1: Overview   2: Branches   3: Stashes   4: Worktrees "))
-
 	return s.String()
 }
 
@@ -279,7 +272,7 @@ func (v *OverviewView) findCurrentBranch() *git.BranchInfo {
 
 // ShortHelp returns a short help string.
 func (v *OverviewView) ShortHelp() string {
-	return "r: Refresh  1-4: Switch views"
+	return "r: Refresh"
 }
 
 // SetSize updates the view dimensions.

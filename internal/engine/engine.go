@@ -16,6 +16,7 @@ type AgentOptions struct {
 	MaxTurns     int           // Max conversation turns (0 = unlimited)
 	Timeout      time.Duration // Kill agent after this duration (0 = no timeout)
 	ContextFiles []string      // Files to read and inject into the prompt on startup
+	SmartRoute   bool          // Use Haiku to classify prompt and pick model (opus for planning, sonnet for implementation)
 }
 
 // Engine manages a pool of Claude Code agent subprocesses
@@ -61,8 +62,35 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 		return "", fmt.Errorf("agent limit reached (%d/%d active)", activeCount, e.maxAgents)
 	}
 
+	// Smart routing: classify prompt with Haiku to pick model
+	var routeResult *RouteResult
+	if opts.SmartRoute && opts.Model == "" {
+		e.mu.Unlock()
+		route, err := RoutePrompt(task)
+		if err == nil {
+			opts.Model = route.Model
+			routeResult = route
+		}
+		// Fall through with whatever model we got (or empty = default)
+		e.mu.Lock()
+		// Re-check capacity after releasing lock
+		activeCount = 0
+		for _, a := range e.agents {
+			if a.IsActive() {
+				activeCount++
+			}
+		}
+		if activeCount >= e.maxAgents {
+			e.mu.Unlock()
+			return "", fmt.Errorf("agent limit reached (%d/%d active)", activeCount, e.maxAgents)
+		}
+	}
+
 	id := e.generateID()
 	agent := newAgent(id, projectPath, task, opts)
+	if routeResult != nil {
+		agent.RouteResult = routeResult
+	}
 	e.agents[id] = agent
 	e.mu.Unlock()
 
@@ -115,13 +143,16 @@ func (e *Engine) GetOutputEntries(sessionID string, offset int) ([]OutputEntry, 
 	return agent.getOutput(offset), nil
 }
 
-// KillAgent terminates an agent subprocess
+// KillAgent soft-closes an agent: marks it as killed but leaves the subprocess alive
+// so follow-up messages can still be sent. The process is only terminated when
+// RemoveAgent is called (i.e., during cleanup).
 func (e *Engine) KillAgent(sessionID string) error {
 	agent := e.getAgent(sessionID)
 	if agent == nil {
 		return fmt.Errorf("agent not found: %s", sessionID)
 	}
-	return agent.kill()
+	agent.softClose()
+	return nil
 }
 
 // SendInput sends a follow-up message to a running agent's stdin
@@ -133,7 +164,8 @@ func (e *Engine) SendInput(sessionID string, message string) error {
 	return agent.sendInput(message)
 }
 
-// RemoveAgent kills (if running) and removes an agent from the engine
+// RemoveAgent kills the subprocess and removes the agent from the engine.
+// This is the point at which deferred kills (from KillAgent) actually terminate the process.
 func (e *Engine) RemoveAgent(sessionID string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -143,9 +175,7 @@ func (e *Engine) RemoveAgent(sessionID string) error {
 		return fmt.Errorf("agent not found: %s", sessionID)
 	}
 
-	if agent.IsActive() {
-		agent.kill()
-	}
+	agent.kill()
 
 	delete(e.agents, sessionID)
 	return nil

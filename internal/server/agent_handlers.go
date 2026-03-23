@@ -38,6 +38,7 @@ func (s *Server) handleAgentStart(w http.ResponseWriter, r *http.Request) {
 		AllowedTools: req.AllowedTools,
 		MaxTurns:     req.MaxTurns,
 		ContextFiles: req.ContextFiles,
+		SmartRoute:   req.SmartRoute,
 	}
 	if req.TimeoutSecs > 0 {
 		opts.Timeout = time.Duration(req.TimeoutSecs) * time.Second

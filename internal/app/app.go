@@ -20,19 +20,21 @@ const version = "0.0.1"
 
 // Model represents the application state
 type Model struct {
-	quitting     bool
-	repoPath     string
-	projectPath  string
-	repoInfo     *git.RepoInfo
-	proj         *project.Project
-	engine       *engine.Engine
-	statusMsg    string
-	errorMsg     string
-	router       *Router
-	layout       *Layout
-	wsClient     *WSClient
-	wsStatus     WSConnectionStatus
-	projectMode  bool
+	quitting         bool
+	showQuitConfirm  bool
+	quitConfirm      components.ConfirmDialog
+	repoPath         string
+	projectPath      string
+	repoInfo         *git.RepoInfo
+	proj             *project.Project
+	engine           *engine.Engine
+	statusMsg        string
+	errorMsg         string
+	router           *Router
+	layout           *Layout
+	wsClient         *WSClient
+	wsStatus         WSConnectionStatus
+	projectMode      bool
 }
 
 // New creates a new app model
@@ -326,14 +328,46 @@ func (m Model) Init() tea.Cmd {
 
 // Update handles messages and updates the model
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Handle quit confirmation dialog (works with or without router)
+	if m.showQuitConfirm {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			var cmd tea.Cmd
+			m.quitConfirm, cmd = m.quitConfirm.Update(msg)
+			return m, cmd
+		case components.ConfirmResult:
+			if msg.ID == "quit" && msg.Confirmed {
+				m.quitting = true
+				if m.wsClient != nil {
+					m.wsClient.Disconnect()
+				}
+				return m, tea.Quit
+			}
+			m.showQuitConfirm = false
+			return m, nil
+		case tea.WindowSizeMsg:
+			m.quitConfirm, _ = m.quitConfirm.Update(msg)
+			if m.layout != nil {
+				m.layout.SetSize(msg.Width, msg.Height)
+			}
+			if m.router != nil {
+				vw, vh := m.layout.AvailableViewDimensions()
+				m.router.NotifySize(vw, vh)
+			}
+			return m, nil
+		}
+		return m, nil
+	}
+
 	if m.router == nil {
 		// Router not initialized yet, handle basic keys
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
 			switch msg.String() {
 			case "ctrl+c", "q":
-				m.quitting = true
-				return m, tea.Quit
+				m.showQuitConfirm = true
+				m.quitConfirm = components.NewConfirmDialog("Quit", "Are you sure you want to quit?", "quit")
+				return m, nil
 			}
 		case tea.WindowSizeMsg:
 			m.layout.SetSize(msg.Width, msg.Height)
@@ -348,18 +382,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c":
-			m.quitting = true
-			if m.wsClient != nil {
-				m.wsClient.Disconnect()
-			}
-			return m, tea.Quit
+			m.showQuitConfirm = true
+			m.quitConfirm = components.NewConfirmDialog("Quit", "Are you sure you want to quit?", "quit")
+			m.quitConfirm.Modal.SetSize(m.layout.width, m.layout.height)
+			return m, nil
 		case "q":
 			if !viewCapturesInput {
-				m.quitting = true
-				if m.wsClient != nil {
-					m.wsClient.Disconnect()
-				}
-				return m, tea.Quit
+				m.showQuitConfirm = true
+				m.quitConfirm = components.NewConfirmDialog("Quit", "Are you sure you want to quit?", "quit")
+				m.quitConfirm.Modal.SetSize(m.layout.width, m.layout.height)
+				return m, nil
 			}
 		case "R":
 			if !viewCapturesInput {
@@ -464,10 +496,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) View() string {
 	// If router is initialized, use layout composition
 	if m.router != nil && m.layout != nil {
+		var base string
 		if m.projectMode && m.proj != nil {
-			return m.layout.Render(m.router, m.repoInfo, m.router.View(), m.proj.Name)
+			base = m.layout.Render(m.router, m.repoInfo, m.router.View(), m.proj.Name)
+		} else {
+			base = m.layout.Render(m.router, m.repoInfo, m.router.View())
 		}
-		return m.layout.Render(m.router, m.repoInfo, m.router.View())
+		if m.showQuitConfirm {
+			return m.quitConfirm.View(base)
+		}
+		return base
 	}
 
 	// Fallback to basic view if router not initialized
@@ -577,8 +615,8 @@ func (m Model) renderRepoInfo() string {
 
 // Run starts the application
 func (m *Model) Run() error {
-	// Load repo if path not set
-	if m.repoPath == "" {
+	// Load repo if path not set and not in project mode
+	if m.repoPath == "" && !m.projectMode {
 		m.loadRepo()
 	}
 

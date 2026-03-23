@@ -321,8 +321,8 @@ func (v *AgentView) syncPreview() {
 func (v *AgentView) selectAgent(info AgentInfo) {
 	v.selectedAgent = &info
 	v.outputAutoScroll = true
-	v.refreshSelectedAgentOutput()
 	v.recalcLayout()
+	v.refreshSelectedAgentOutput()
 }
 
 // deselectAgent closes the output pane.
@@ -398,7 +398,7 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return v, nil
 			case "i":
 				if v.selectedAgent != nil &&
-					(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting) {
+					(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting || v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentKilled) {
 					v.showMessageInput = true
 					v.messageInput = ""
 					v.focus = focusInput
@@ -482,6 +482,20 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.syncPreview()
 		}
 
+	case AgentCreatedMsg:
+		if msg.Err != nil {
+			v.err = msg.Err
+		} else {
+			v.loadAgents()
+			for _, a := range v.agents {
+				if a.ID == msg.ID {
+					v.selectAgent(a)
+					v.focus = focusOutput
+					break
+				}
+			}
+		}
+
 	case RefreshDoneMsg:
 		v.loading = false
 
@@ -526,19 +540,21 @@ func (v *AgentView) handleKillConfirm(msg tea.KeyMsg) tea.Cmd {
 func (v *AgentView) handleNewAgentInput(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
-		if v.newAgentTask != "" && v.engine != nil {
-			opts := engine.AgentOptions{
-				ContextFiles: v.contextFiles,
-			}
-			_, err := v.engine.StartAgent(v.repoPath, v.newAgentTask, opts)
-			if err != nil {
-				v.err = fmt.Errorf("failed to start agent: %w", err)
-			} else {
-				v.loadAgents()
-			}
-		}
+		task := v.newAgentTask
 		v.showNewAgent = false
 		v.newAgentTask = ""
+		if task != "" && v.engine != nil {
+			eng := v.engine
+			repoPath := v.repoPath
+			ctxFiles := v.contextFiles
+			return func() tea.Msg {
+				id, err := eng.StartAgent(repoPath, task, engine.AgentOptions{
+					ContextFiles: ctxFiles,
+					SmartRoute:   true,
+				})
+				return AgentCreatedMsg{ID: id, Err: err}
+			}
+		}
 	case "esc":
 		v.showNewAgent = false
 		v.newAgentTask = ""
@@ -703,6 +719,37 @@ func (v *AgentView) View() string {
 	// Agent list pane
 	s.WriteString(v.filter.View())
 
+	// New agent input modal (above output pane)
+	if v.showNewAgent {
+		s.WriteString("\n")
+		boxWidth := v.width - 4
+		if boxWidth < 30 {
+			boxWidth = 30
+		}
+		innerWidth := boxWidth - 4
+
+		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" ┌%s┐", strings.Repeat("─", boxWidth-2))))
+		s.WriteString("\n")
+
+		taskText := "Task: " + v.newAgentTask + "█"
+		for len(taskText) > 0 {
+			line := taskText
+			if len(line) > innerWidth {
+				line = taskText[:innerWidth]
+				taskText = taskText[innerWidth:]
+			} else {
+				taskText = ""
+			}
+			s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" │ %-*s │", innerWidth, line)))
+			s.WriteString("\n")
+		}
+
+		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" │ %-*s │", innerWidth, "Enter: start  Esc: cancel")))
+		s.WriteString("\n")
+		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" └%s┘", strings.Repeat("─", boxWidth-2))))
+		s.WriteString("\n")
+	}
+
 	// Output pane (when agent selected)
 	if v.selectedAgent != nil {
 		s.WriteString("\n")
@@ -741,9 +788,18 @@ func (v *AgentView) View() string {
 
 		// Message input field
 		if v.showMessageInput {
-			inputLine := lipgloss.NewStyle().Foreground(th.Accent).Render("> " + v.messageInput + "█")
-			s.WriteString(inputLine)
-			s.WriteString("\n")
+			inputStyle := lipgloss.NewStyle().Foreground(th.Accent)
+			prefix := "> "
+			cursor := "█"
+			fullText := prefix + v.messageInput + cursor
+			maxW := v.width - 2
+			if maxW < 10 {
+				maxW = 10
+			}
+			for _, wl := range wrapLine(fullText, maxW, "  ") {
+				s.WriteString(inputStyle.Render(wl))
+				s.WriteString("\n")
+			}
 		}
 
 		// Output pane hint
@@ -752,7 +808,7 @@ func (v *AgentView) View() string {
 		} else if v.focus == focusOutput {
 			hint := " j/k:scroll  g/G:top/bottom  ctrl+d/u:page  tab:list  esc:close"
 			if v.selectedAgent != nil &&
-				(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting || v.selectedAgent.State == engine.AgentComplete) {
+				(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting || v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentKilled) {
 				hint += "  i:send message"
 			}
 			s.WriteString(th.Help.Render(hint))
@@ -769,36 +825,6 @@ func (v *AgentView) View() string {
 			shortID = shortID[:12]
 		}
 		s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf(" Kill agent %s? (y/n) ", shortID)))
-	}
-
-	// New agent input modal
-	if v.showNewAgent {
-		s.WriteString("\n")
-		boxWidth := v.width - 4
-		if boxWidth < 30 {
-			boxWidth = 30
-		}
-		innerWidth := boxWidth - 4
-
-		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" ┌%s┐", strings.Repeat("─", boxWidth-2))))
-		s.WriteString("\n")
-
-		taskText := "Task: " + v.newAgentTask + "█"
-		for len(taskText) > 0 {
-			line := taskText
-			if len(line) > innerWidth {
-				line = taskText[:innerWidth]
-				taskText = taskText[innerWidth:]
-			} else {
-				taskText = ""
-			}
-			s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" │ %-*s │", innerWidth, line)))
-			s.WriteString("\n")
-		}
-
-		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" │ %-*s │", innerWidth, "Enter: start  Esc: cancel")))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" └%s┘", strings.Repeat("─", boxWidth-2))))
 	}
 
 	// Error display
@@ -865,3 +891,9 @@ func (v *AgentView) KeyBindings() []components.KeyBinding {
 
 // StreamTickMsg is sent periodically to refresh streaming output.
 type StreamTickMsg struct{}
+
+// AgentCreatedMsg is sent when a new agent has been started (or failed to start).
+type AgentCreatedMsg struct {
+	ID  string
+	Err error
+}

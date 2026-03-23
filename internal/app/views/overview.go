@@ -255,13 +255,6 @@ func (v *OverviewView) View() string {
 		}
 	}
 
-	s.WriteString("\n")
-
-	// Footer
-	s.WriteString(theme.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
-	s.WriteString(theme.Help.Render(" r: Refresh   1: Overview   2: Branches   3: Stashes   4: Worktrees "))
-
 	return s.String()
 }
 
@@ -280,7 +273,7 @@ func (v *OverviewView) findCurrentBranch() *git.BranchInfo {
 
 // ShortHelp returns a short help string.
 func (v *OverviewView) ShortHelp() string {
-	return "r: Refresh  1-4: Switch views"
+	return "r: Refresh"
 }
 
 // SetSize updates the view dimensions.
@@ -304,9 +297,5 @@ func (v *OverviewView) Refresh() error {
 func (v *OverviewView) KeyBindings() []components.KeyBinding {
 	return []components.KeyBinding{
 		{Key: "r", Description: "Refresh repository data"},
-		{Key: "1", Description: "Switch to Overview"},
-		{Key: "2", Description: "Switch to Branches"},
-		{Key: "3", Description: "Switch to Stashes"},
-		{Key: "4", Description: "Switch to Worktrees"},
 	}
 }

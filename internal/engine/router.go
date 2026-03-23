@@ -1,0 +1,111 @@
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+// PromptCategory represents the type of task a prompt is requesting
+type PromptCategory string
+
+const (
+	CategoryPlanning       PromptCategory = "planning"
+	CategoryImplementation PromptCategory = "implementation"
+)
+
+// RouteResult holds the classification result and selected model
+type RouteResult struct {
+	Category PromptCategory `json:"category"`
+	Model    string         `json:"model"`
+	Reason   string         `json:"reason"`
+}
+
+const classifierPrompt = `Classify the following user prompt into exactly one category.
+
+Categories:
+- "planning": The user wants to think through architecture, design, strategy, tradeoffs, debugging approach, or investigation. They want analysis, not code changes. Examples: "how should we structure X", "what's the best approach for Y", "investigate why Z is broken", "design a system for W", "what are the tradeoffs of X vs Y".
+- "implementation": The user wants concrete code changes, file edits, bug fixes, feature implementation, refactoring, or any hands-on coding work. Examples: "add a function that does X", "fix the bug in Y", "refactor Z to use W", "write tests for X", "implement feature Y".
+
+Respond with ONLY a JSON object, no other text:
+{"category": "planning" or "implementation", "reason": "one sentence why"}
+
+User prompt:
+%s`
+
+// ClassifyPrompt uses Claude Haiku to classify a prompt as planning or implementation.
+// Returns the category and suggested model.
+func ClassifyPrompt(ctx context.Context, prompt string) (*RouteResult, error) {
+	classifyInput := fmt.Sprintf(classifierPrompt, prompt)
+
+	args := []string{
+		"--print",
+		"--model", "haiku",
+		"--output-format", "text",
+		"--max-turns", "1",
+		classifyInput,
+	}
+
+	cmd := exec.CommandContext(ctx, "claude", args...)
+	cmd.Env = append(os.Environ(), "CLAUDE_NO_ANALYTICS=true")
+
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("classifier failed: %w", err)
+	}
+
+	return parseClassification(strings.TrimSpace(string(output)))
+}
+
+// parseClassification extracts the category from the classifier's JSON response
+func parseClassification(response string) (*RouteResult, error) {
+	// The response should be a JSON object, but it might have extra text around it.
+	// Find the JSON object boundaries.
+	start := strings.Index(response, "{")
+	end := strings.LastIndex(response, "}")
+	if start == -1 || end == -1 || end <= start {
+		return nil, fmt.Errorf("no JSON found in classifier response: %q", response)
+	}
+
+	jsonStr := response[start : end+1]
+
+	var parsed struct {
+		Category string `json:"category"`
+		Reason   string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
+		return nil, fmt.Errorf("failed to parse classifier response: %w", err)
+	}
+
+	result := &RouteResult{
+		Reason: parsed.Reason,
+	}
+
+	switch strings.ToLower(parsed.Category) {
+	case "planning":
+		result.Category = CategoryPlanning
+		result.Model = "opus"
+	case "implementation":
+		result.Category = CategoryImplementation
+		result.Model = "sonnet"
+	default:
+		// Default to sonnet for unknown categories
+		result.Category = CategoryImplementation
+		result.Model = "sonnet"
+	}
+
+	return result, nil
+}
+
+// RoutePrompt classifies a prompt and returns the routing result.
+// Uses a 15-second timeout to avoid blocking indefinitely.
+func RoutePrompt(prompt string) (*RouteResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	return ClassifyPrompt(ctx, prompt)
+}
