@@ -22,6 +22,8 @@ const (
 	ActionSwitchView     Action = "switch_view"
 	ActionNavigateUp     Action = "navigate_up"
 	ActionNavigateDown   Action = "navigate_down"
+	ActionNavigateLeft   Action = "navigate_left"
+	ActionNavigateRight  Action = "navigate_right"
 	ActionSelect         Action = "select"
 	ActionCancel         Action = "cancel"
 	ActionSearch         Action = "search"
@@ -41,6 +43,8 @@ var DefaultKeybinds = map[Action][]string{
 	ActionSwitchView:    {"1", "2", "3", "4", "5", "6", "7", "8", "9"},
 	ActionNavigateUp:    {"up", "k"},
 	ActionNavigateDown:  {"down", "j"},
+	ActionNavigateLeft:  {"left", "h"},
+	ActionNavigateRight: {"right", "l"},
 	ActionSelect:        {"enter"},
 	ActionCancel:        {"esc"},
 	ActionSearch:        {"/"},
@@ -179,6 +183,8 @@ func actionDescription(action Action) string {
 		ActionSwitchView:    "Switch to view by number",
 		ActionNavigateUp:    "Navigate up",
 		ActionNavigateDown:  "Navigate down",
+		ActionNavigateLeft:  "Previous tab / Navigate left",
+		ActionNavigateRight: "Next tab / Navigate right",
 		ActionSelect:        "Select / Confirm",
 		ActionCancel:        "Cancel / Clear",
 		ActionSearch:        "Search",

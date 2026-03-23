@@ -41,6 +41,7 @@ type AgentView struct {
 	selectedAgent *AgentInfo
 	outputOffset  int
 	outputEntries []engine.OutputEntry
+	logScrollPos  int // scroll position within the log output
 
 	// New agent input state
 	showNewAgent   bool
@@ -138,6 +139,16 @@ func (v *AgentView) refreshSelectedAgentOutput() {
 	v.outputEntries = entries
 }
 
+// selectCurrentAgent sets the selected agent to whatever is highlighted in the list.
+func (v *AgentView) selectCurrentAgent() {
+	if item, idx := v.filter.SelectedItem(); idx >= 0 {
+		v.selectedAgent = &item
+		v.outputOffset = 0
+		v.logScrollPos = 0
+		v.refreshSelectedAgentOutput()
+	}
+}
+
 // Update handles update events.
 func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -181,11 +192,10 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, nil
 
 		case "enter":
-			// Select agent to view output
-			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				v.selectedAgent = &item
-				v.outputOffset = 0
-				v.refreshSelectedAgentOutput()
+			// Select agent to view output (also auto-scroll to bottom)
+			v.selectCurrentAgent()
+			if v.selectedAgent != nil {
+				v.logScrollPos = v.logLineCount() // jump to bottom
 			}
 			return v, nil
 
@@ -193,6 +203,7 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Deselect agent (clear detail view)
 			v.selectedAgent = nil
 			v.outputEntries = nil
+			v.logScrollPos = 0
 			return v, nil
 
 		case "c":
@@ -220,24 +231,42 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if v.selectedAgent != nil {
 				v.selectedAgent = nil
 				v.outputEntries = nil
+				v.logScrollPos = 0
 			}
 
-		case "j", "down":
-			// Move down in list
+		case "j", "down", "up":
 			v.filter.Update(msg)
-			// Clear selection when navigating
-			if v.selectedAgent != nil {
-				v.selectedAgent = nil
-				v.outputEntries = nil
-			}
+			v.selectCurrentAgent()
+			return v, nil
 
 		case "g":
-			// Go to top (vim-style)
 			v.filter.Update(msg)
+			v.selectCurrentAgent()
 
 		case "G":
-			// Go to bottom (vim-style)
 			v.filter.Update(msg)
+			v.selectCurrentAgent()
+
+		case "ctrl+d":
+			// Scroll log down
+			if v.selectedAgent != nil {
+				v.logScrollPos += 10
+				max := v.logLineCount()
+				if v.logScrollPos > max {
+					v.logScrollPos = max
+				}
+			}
+			return v, nil
+
+		case "ctrl+u":
+			// Scroll log up
+			if v.selectedAgent != nil {
+				v.logScrollPos -= 10
+				if v.logScrollPos < 0 {
+					v.logScrollPos = 0
+				}
+			}
+			return v, nil
 		}
 
 		// Pass to filter for navigation
@@ -252,13 +281,14 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.width = msg.Width
 		v.height = msg.Height
 		if v.filter != nil {
-			v.filter.SetHeight(msg.Height)
+			v.filter.SetHeight(msg.Height - 6) // account for header area
 		}
 
 	case tea.MouseMsg:
 		// Handle mouse events for the filter/list
 		if v.filter != nil {
 			if v.filter.HandleMouse(msg) {
+				v.selectCurrentAgent()
 				return v, nil
 			}
 		}
@@ -266,11 +296,34 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case StreamTickMsg:
 		// Periodic refresh for streaming output
 		if v.selectedAgent != nil {
+			oldCount := len(v.outputEntries)
 			v.refreshSelectedAgentOutput()
+			// Auto-scroll to bottom if we were already at the bottom
+			if v.logScrollPos >= v.logLineCountFor(oldCount) {
+				v.logScrollPos = v.logLineCount()
+			}
 		}
+		// Also refresh the agent list to update states
+		v.loadAgents()
 	}
 
 	return v, nil
+}
+
+// logLineCount returns the number of displayable log lines.
+func (v *AgentView) logLineCount() int {
+	return v.logLineCountFor(len(v.outputEntries))
+}
+
+// logLineCountFor returns the displayable log line count for a given entry count.
+func (v *AgentView) logLineCountFor(entryCount int) int {
+	count := 0
+	for i := 0; i < entryCount && i < len(v.outputEntries); i++ {
+		if v.outputEntries[i].Source != "system" {
+			count++
+		}
+	}
+	return count
 }
 
 // handleKillConfirm handles key events during kill confirmation.
@@ -353,7 +406,6 @@ func (v *AgentView) renderAgentItem(agent AgentInfo, index int, selected bool) s
 		statusStyle = th.MutedTextStyle
 	}
 
-	// Agent ID and status
 	namePrefix := "  "
 	if selected {
 		namePrefix = " >"
@@ -362,173 +414,384 @@ func (v *AgentView) renderAgentItem(agent AgentInfo, index int, selected bool) s
 	var line strings.Builder
 	line.WriteString(fmt.Sprintf("%s%s ", namePrefix, statusStyle.Render(statusIcon)))
 
-	// Agent ID (short)
-	shortID := agent.ID
-	if len(shortID) > 12 {
-		shortID = shortID[:12]
-	}
-	line.WriteString(th.BranchStyle.Render(shortID))
-
-	// Task (truncated)
+	// Task (truncated to fit left panel)
 	task := agent.Task
-	if len(task) > 40 {
-		task = task[:37] + "..."
+	if len(task) > 25 {
+		task = task[:22] + "..."
 	}
-	line.WriteString(fmt.Sprintf(" %s", th.StatsStyle.Render(task)))
+	line.WriteString(th.StatsStyle.Render(task))
 
 	// Elapsed time for running agents
 	if agent.State == engine.AgentRunning || agent.State == engine.AgentStarting {
 		if agent.StartedAt != nil {
 			elapsed := time.Since(*agent.StartedAt)
-			line.WriteString(th.MutedTextStyle.Render(fmt.Sprintf(" [%s]", elapsed.Round(time.Second))))
+			line.WriteString(th.MutedTextStyle.Render(fmt.Sprintf(" %s", elapsed.Round(time.Second))))
 		}
 	}
 
-	// Duration for completed agents
-	if agent.EndedAt != nil && agent.StartedAt != nil {
-		duration := agent.EndedAt.Sub(*agent.StartedAt)
-		line.WriteString(th.MutedTextStyle.Render(fmt.Sprintf(" [%s]", duration.Round(time.Second))))
-	}
-
 	// State label
-	stateLabel := agent.State.String()
-	stateStyle := statusStyle
-	if agent.State == engine.AgentRunning {
+	stateLabel := ""
+	switch agent.State {
+	case engine.AgentRunning:
 		stateLabel = "running"
-		stateStyle = lipgloss.NewStyle().Foreground(th.Info)
-	} else if agent.State == engine.AgentComplete {
+	case engine.AgentComplete:
 		stateLabel = "done"
-		stateStyle = lipgloss.NewStyle().Foreground(th.Info)
+	case engine.AgentError:
+		stateLabel = "error"
+	case engine.AgentKilled:
+		stateLabel = "killed"
+	case engine.AgentStarting:
+		stateLabel = "starting"
 	}
-	line.WriteString(fmt.Sprintf(" %s", stateStyle.Render(stateLabel)))
+	if stateLabel != "" {
+		line.WriteString(fmt.Sprintf(" %s", statusStyle.Render(stateLabel)))
+	}
 
 	return line.String()
 }
 
-// View renders the agent console.
+// View renders the agent console with split-pane layout.
 func (v *AgentView) View() string {
 	th := theme.GetTheme()
+
+	// Calculate panel widths
+	leftWidth := v.width * 35 / 100 // 35% for agent list
+	if leftWidth < 30 {
+		leftWidth = 30
+	}
+	if leftWidth > 60 {
+		leftWidth = 60
+	}
+	rightWidth := v.width - leftWidth - 3 // 3 for divider
+	if rightWidth < 20 {
+		rightWidth = 20
+	}
 
 	var s strings.Builder
 
 	// Header
 	s.WriteString(th.DashboardTitle.Render(" Agent Console "))
-	s.WriteString("\n\n")
 
-	// Engine stats
+	// Engine stats inline
 	if v.engine != nil {
 		stats := v.engine.Stats()
-		s.WriteString(th.StatsStyle.Render(fmt.Sprintf(" Agents: %d/%d active | %d completed | %d errors ",
+		s.WriteString(th.StatsStyle.Render(fmt.Sprintf("  %d/%d active  %d done  %d err",
 			stats.Active, stats.MaxAgents, stats.Completed, stats.Errored)))
-		s.WriteString("\n\n")
 	}
+	s.WriteString("\n")
 
-	// New agent hint
-	if !v.showNewAgent && !v.showKillConfirm {
-		s.WriteString(th.Help.Render(" n: New agent | k: Kill | Enter: View output | d: Deselect | c: Clear stopped | /: Search | r: Refresh "))
-		s.WriteString("\n\n")
-	}
+	// Build split panels
+	leftPanel := v.renderLeftPanel(leftWidth)
+	rightPanel := v.renderRightPanel(rightWidth)
 
-	// Agent list
-	s.WriteString(v.filter.View())
+	// Combine panels side by side
+	s.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, rightPanel))
 
-	// Agent output panel
-	if v.selectedAgent != nil {
-		s.WriteString("\n")
-		s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" Agent: %s ", v.selectedAgent.ID)))
-		s.WriteString("\n\n")
-
-		// Agent details
-		s.WriteString(fmt.Sprintf(" %s %s\n", th.BranchStyle.Render("Task:"), th.StatsStyle.Render(v.selectedAgent.Task)))
-		s.WriteString(fmt.Sprintf(" %s %s\n", th.BranchStyle.Render("State:"), th.StatsStyle.Render(v.selectedAgent.State.String())))
-
-		if v.selectedAgent.StartedAt != nil {
-			s.WriteString(fmt.Sprintf(" %s %s\n", th.BranchStyle.Render("Started:"), th.StatsStyle.Render(v.selectedAgent.StartedAt.Format("15:04:05"))))
-		}
-		if v.selectedAgent.EndedAt != nil {
-			s.WriteString(fmt.Sprintf(" %s %s\n", th.BranchStyle.Render("Ended:"), th.StatsStyle.Render(v.selectedAgent.EndedAt.Format("15:04:05"))))
-		}
-		if v.selectedAgent.Error != "" {
-			s.WriteString(fmt.Sprintf(" %s %s\n", th.BranchStyle.Render("Error:"), th.DashboardErrorStyle.Render(v.selectedAgent.Error)))
-		}
-
-		s.WriteString("\n")
-		s.WriteString(th.StatsStyle.Render(" Output "))
-		s.WriteString("\n")
-		s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-		s.WriteString("\n")
-
-		// Output entries
-		if len(v.outputEntries) == 0 {
-			s.WriteString(th.MutedTextStyle.Render(" No output yet..."))
-		} else {
-			for _, entry := range v.outputEntries {
-				// Only show stdout and stderr, skip system messages in compact view
-				if entry.Source == "system" {
-					continue
-				}
-
-				content := entry.Content
-				// Truncate long lines
-				if len(content) > 120 {
-					content = content[:117] + "..."
-				}
-
-				var sourceStyle lipgloss.Style
-				switch entry.Source {
-				case "stderr":
-					sourceStyle = th.DashboardErrorStyle
-				default:
-					sourceStyle = th.StatsStyle
-				}
-
-				s.WriteString(fmt.Sprintf(" %s\n", sourceStyle.Render(content)))
-			}
-		}
-	}
-
-	// Kill confirmation modal
+	// Kill confirmation modal (overlay)
 	if v.showKillConfirm {
-		s.WriteString("\n\n")
-		s.WriteString(th.DashboardErrorStyle.Render(" ┌─────────────────────────────────────────────┐"))
 		s.WriteString("\n")
-		s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf(" │ Kill agent '%s'?  (y/n)                  │", v.killAgentID)))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardErrorStyle.Render(" └─────────────────────────────────────────────┘"))
+		s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf(" Kill agent '%s'?  (y/n) ", v.killAgentID)))
 	}
 
-	// New agent input modal
+	// New agent input modal (overlay)
 	if v.showNewAgent {
-		s.WriteString("\n\n")
-		s.WriteString(th.DashboardTitle.Render(" ┌─────────────────────────────────────────────┐"))
+		boxWidth := v.width - 4
+		if boxWidth < 30 {
+			boxWidth = 30
+		}
+		innerWidth := boxWidth - 4
+
 		s.WriteString("\n")
-		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" │ New agent task: %s", v.newAgentTask)))
+		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" ┌%s┐", strings.Repeat("─", boxWidth-2))))
 		s.WriteString("\n")
-		s.WriteString(th.DashboardTitle.Render(" │ (press Enter to start, Esc to cancel)     │"))
+
+		prompt := "New agent task: "
+		taskText := prompt + v.newAgentTask + "█"
+		for len(taskText) > 0 {
+			line := taskText
+			if len(line) > innerWidth {
+				line = taskText[:innerWidth]
+				taskText = taskText[innerWidth:]
+			} else {
+				taskText = ""
+			}
+			s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" │ %-*s │", innerWidth, line)))
+			s.WriteString("\n")
+		}
+
+		hint := "(press Enter to start, Esc to cancel)"
+		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" │ %-*s │", innerWidth, hint)))
 		s.WriteString("\n")
-		s.WriteString(th.DashboardTitle.Render(" └─────────────────────────────────────────────┘"))
+		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" └%s┘", strings.Repeat("─", boxWidth-2))))
 	}
 
 	// Error display
 	if v.err != nil {
-		s.WriteString("\n\n")
+		s.WriteString("\n")
 		s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf(" Error: %v", v.err)))
 	}
-
-	// Footer
-	s.WriteString("\n")
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
-	s.WriteString(th.Help.Render(" n: New agent | k: Kill | Enter: View output | d: Deselect | c: Clear stopped | r: Refresh "))
 
 	return s.String()
 }
 
+// renderLeftPanel renders the agent list panel.
+func (v *AgentView) renderLeftPanel(width int) string {
+	th := theme.GetTheme()
+	var s strings.Builder
+
+	// Panel header
+	s.WriteString(th.DashboardTitle.Render(" Agents "))
+	s.WriteString("\n")
+
+	dividerLen := width - 2
+	if dividerLen < 0 {
+		dividerLen = 0
+	}
+	s.WriteString(th.StatsStyle.Render(fmt.Sprintf(" %s", strings.Repeat("─", dividerLen))))
+	s.WriteString("\n")
+
+	if v.loading {
+		s.WriteString(th.MutedTextStyle.Render(" Loading..."))
+		padHeight := v.height - 8
+		for i := 0; i < padHeight; i++ {
+			s.WriteString("\n")
+		}
+		return lipgloss.NewStyle().Width(width).Render(s.String())
+	}
+
+	if len(v.agents) == 0 {
+		s.WriteString(th.MutedTextStyle.Render(" No agents"))
+		s.WriteString("\n")
+		s.WriteString(th.Help.Render(" Press n to start one"))
+		padHeight := v.height - 9
+		for i := 0; i < padHeight; i++ {
+			s.WriteString("\n")
+		}
+		return lipgloss.NewStyle().Width(width).Render(s.String())
+	}
+
+	// Agent list via filter
+	s.WriteString(v.filter.View())
+
+	// Help at bottom
+	s.WriteString("\n")
+	s.WriteString(th.Help.Render(" n:new k:kill c:clear /:search"))
+
+	return lipgloss.NewStyle().Width(width).Render(s.String())
+}
+
+// renderRightPanel renders the agent detail and log output panel.
+func (v *AgentView) renderRightPanel(width int) string {
+	th := theme.GetTheme()
+	var s strings.Builder
+
+	// Divider
+	dividerStyle := lipgloss.NewStyle().
+		Foreground(th.Border).
+		SetString(" │ ")
+
+	if v.selectedAgent == nil {
+		// Empty state
+		s.WriteString(th.DashboardTitle.Render(" Details "))
+		s.WriteString("\n")
+		dividerLen := width - 2
+		if dividerLen < 0 {
+			dividerLen = 0
+		}
+		s.WriteString(th.StatsStyle.Render(fmt.Sprintf(" %s", strings.Repeat("─", dividerLen))))
+		s.WriteString("\n\n")
+		s.WriteString(th.MutedTextStyle.Render(" Select an agent to view details"))
+		s.WriteString("\n")
+		s.WriteString(th.MutedTextStyle.Render(" Use ↑↓ to navigate, Enter to select"))
+
+		// Pad to fill height
+		padHeight := v.height - 10
+		for i := 0; i < padHeight; i++ {
+			s.WriteString("\n")
+		}
+
+		panel := lipgloss.NewStyle().Width(width).Render(s.String())
+		return dividerStyle.Render("│") + " " + panel
+	}
+
+	agent := v.selectedAgent
+
+	// Panel header with agent ID
+	shortID := agent.ID
+	if len(shortID) > 16 {
+		shortID = shortID[:16]
+	}
+	s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" Agent: %s ", shortID)))
+	s.WriteString("\n")
+
+	dividerLen := width - 2
+	if dividerLen < 0 {
+		dividerLen = 0
+	}
+	s.WriteString(th.StatsStyle.Render(fmt.Sprintf(" %s", strings.Repeat("─", dividerLen))))
+	s.WriteString("\n")
+
+	// Agent metadata
+	task := agent.Task
+	maxTaskLen := width - 8
+	if maxTaskLen > 0 && len(task) > maxTaskLen {
+		task = task[:maxTaskLen-3] + "..."
+	}
+	s.WriteString(fmt.Sprintf(" %s %s\n", th.BranchStyle.Render("Task:"), th.StatsStyle.Render(task)))
+
+	// State with icon
+	var stateIcon string
+	var stateStyle lipgloss.Style
+	switch agent.State {
+	case engine.AgentRunning:
+		stateIcon = "●"
+		stateStyle = lipgloss.NewStyle().Foreground(th.Info)
+	case engine.AgentStarting:
+		stateIcon = "◐"
+		stateStyle = lipgloss.NewStyle().Foreground(th.Info)
+	case engine.AgentComplete:
+		stateIcon = "✓"
+		stateStyle = lipgloss.NewStyle().Foreground(th.Info)
+	case engine.AgentError:
+		stateIcon = "✗"
+		stateStyle = th.DashboardErrorStyle
+	case engine.AgentKilled:
+		stateIcon = "⊘"
+		stateStyle = th.MutedTextStyle
+	default:
+		stateIcon = "○"
+		stateStyle = th.MutedTextStyle
+	}
+	s.WriteString(fmt.Sprintf(" %s %s %s\n", th.BranchStyle.Render("State:"), stateStyle.Render(stateIcon), stateStyle.Render(agent.State.String())))
+
+	if agent.StartedAt != nil {
+		elapsed := ""
+		if agent.EndedAt != nil {
+			duration := agent.EndedAt.Sub(*agent.StartedAt)
+			elapsed = fmt.Sprintf(" (%s)", duration.Round(time.Second))
+		} else if agent.State == engine.AgentRunning {
+			elapsed = fmt.Sprintf(" (%s)", time.Since(*agent.StartedAt).Round(time.Second))
+		}
+		s.WriteString(fmt.Sprintf(" %s %s%s\n", th.BranchStyle.Render("Started:"), th.StatsStyle.Render(agent.StartedAt.Format("15:04:05")), th.MutedTextStyle.Render(elapsed)))
+	}
+	if agent.Error != "" {
+		errText := agent.Error
+		if len(errText) > width-10 {
+			errText = errText[:width-13] + "..."
+		}
+		s.WriteString(fmt.Sprintf(" %s %s\n", th.BranchStyle.Render("Error:"), th.DashboardErrorStyle.Render(errText)))
+	}
+
+	// Log output section
+	s.WriteString("\n")
+	logHeader := " Log Output "
+	if agent.State == engine.AgentRunning {
+		logHeader = " Log Output (live) "
+	}
+	s.WriteString(th.DashboardTitle.Render(logHeader))
+	s.WriteString("\n")
+	s.WriteString(th.StatsStyle.Render(fmt.Sprintf(" %s", strings.Repeat("─", dividerLen))))
+	s.WriteString("\n")
+
+	// Calculate available lines for log output
+	// Header(1) + divider(1) + task(1) + state(1) + started(1) + blank(1) + logheader(1) + logdivider(1) + scrollhint(1) = ~9 lines of chrome
+	logHeight := v.height - 14
+	if logHeight < 3 {
+		logHeight = 3
+	}
+
+	// Collect displayable entries (skip system)
+	var displayEntries []engine.OutputEntry
+	for _, entry := range v.outputEntries {
+		if entry.Source != "system" {
+			displayEntries = append(displayEntries, entry)
+		}
+	}
+
+	if len(displayEntries) == 0 {
+		s.WriteString(th.MutedTextStyle.Render(" No output yet..."))
+		s.WriteString("\n")
+		if agent.State == engine.AgentRunning || agent.State == engine.AgentStarting {
+			s.WriteString(th.MutedTextStyle.Render(" Waiting for output..."))
+		}
+		// Pad remaining
+		padHeight := logHeight - 2
+		for i := 0; i < padHeight; i++ {
+			s.WriteString("\n")
+		}
+	} else {
+		// Apply scroll position - show the last logHeight lines by default
+		startIdx := len(displayEntries) - logHeight
+		if startIdx < 0 {
+			startIdx = 0
+		}
+
+		// Allow manual scroll override
+		if v.logScrollPos < len(displayEntries) {
+			startIdx = v.logScrollPos - logHeight
+			if startIdx < 0 {
+				startIdx = 0
+			}
+			// But don't go past the end
+			if startIdx+logHeight > len(displayEntries) {
+				startIdx = len(displayEntries) - logHeight
+				if startIdx < 0 {
+					startIdx = 0
+				}
+			}
+		}
+
+		endIdx := startIdx + logHeight
+		if endIdx > len(displayEntries) {
+			endIdx = len(displayEntries)
+		}
+
+		maxContentLen := width - 4
+		if maxContentLen < 10 {
+			maxContentLen = 10
+		}
+
+		for i := startIdx; i < endIdx; i++ {
+			entry := displayEntries[i]
+			content := entry.Content
+			if len(content) > maxContentLen {
+				content = content[:maxContentLen-3] + "..."
+			}
+
+			var sourceStyle lipgloss.Style
+			switch entry.Source {
+			case "stderr":
+				sourceStyle = th.DashboardErrorStyle
+			default:
+				sourceStyle = th.StatsStyle
+			}
+
+			s.WriteString(fmt.Sprintf(" %s\n", sourceStyle.Render(content)))
+		}
+
+		// Pad remaining lines
+		rendered := endIdx - startIdx
+		for i := rendered; i < logHeight; i++ {
+			s.WriteString("\n")
+		}
+
+		// Scroll indicator
+		if len(displayEntries) > logHeight {
+			s.WriteString(th.Help.Render(fmt.Sprintf(" %d-%d of %d lines  Ctrl+D/U: scroll", startIdx+1, endIdx, len(displayEntries))))
+		}
+	}
+
+	// Bottom help
+	s.WriteString("\n")
+	s.WriteString(th.Help.Render(" d:close  k:kill  r:refresh"))
+
+	panel := lipgloss.NewStyle().Width(width).Render(s.String())
+	return dividerStyle.Render("│") + " " + panel
+}
+
 // ShortHelp returns a short help string.
 func (v *AgentView) ShortHelp() string {
-	return "n: New agent  k: Kill  Enter: View output  d: Deselect  r: Refresh"
+	return "n: New agent  k: Kill  ↑↓: Navigate  d: Deselect  r: Refresh"
 }
 
 // SetSize updates the view dimensions.
@@ -536,7 +799,7 @@ func (v *AgentView) SetSize(width, height int) {
 	v.width = width
 	v.height = height
 	if v.filter != nil {
-		v.filter.SetHeight(height)
+		v.filter.SetHeight(height - 6)
 	}
 }
 
@@ -565,11 +828,11 @@ func (v *AgentView) KeyBindings() []components.KeyBinding {
 		{Key: "n", Description: "Start new agent task"},
 		{Key: "k", Description: "Kill selected agent"},
 		{Key: "Enter", Description: "View selected agent output"},
-		{Key: "d", Description: "Deselect / clear detail view"},
+		{Key: "d", Description: "Deselect / close detail view"},
 		{Key: "c", Description: "Clear stopped agents"},
 		{Key: "/", Description: "Search agents"},
-		{Key: "↑/k", Description: "Navigate up"},
-		{Key: "↓/j", Description: "Navigate down"},
+		{Key: "↑/↓", Description: "Navigate agents"},
+		{Key: "Ctrl+D/U", Description: "Scroll log output"},
 		{Key: "Esc", Description: "Cancel / Clear"},
 	}
 }

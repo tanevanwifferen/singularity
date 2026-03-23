@@ -153,7 +153,7 @@ func (v *WorktreeView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				v.removeWorktree = &item
 				v.showRemoveConfirm = true
 			}
-		case "l":
+		case "L":
 			// Lock selected worktree
 			if item, idx := v.filter.SelectedItem(); idx >= 0 {
 				v.lockWorktree(item.Path)
@@ -581,7 +581,7 @@ func (v *WorktreeView) KeyBindings() []components.KeyBinding {
 		{Key: "Enter", Description: "Navigate to worktree"},
 		{Key: "n", Description: "Create new worktree"},
 		{Key: "d", Description: "Remove selected worktree"},
-		{Key: "l", Description: "Lock selected worktree"},
+		{Key: "L", Description: "Lock selected worktree"},
 		{Key: "u", Description: "Unlock selected worktree"},
 		{Key: "p", Description: "Prune stale worktrees"},
 		{Key: "Esc", Description: "Clear filter / Cancel"},

@@ -192,7 +192,7 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return r, r.active.Init()
 			}
-		case "tab":
+		case "tab", "l":
 			// Cycle to next view
 			names := r.ViewNames()
 			for i, name := range names {
@@ -204,7 +204,7 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return r, r.active.Init()
 				}
 			}
-		case "shift+tab":
+		case "shift+tab", "h":
 			// Cycle to previous view
 			names := r.ViewNames()
 			for i, name := range names {

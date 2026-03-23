@@ -176,6 +176,10 @@ func (m *Model) initRouter() {
 	commitView := views.NewCommitView(m.repoPath)
 	router.Register("commit", commitView)
 
+	// Register sync view (push, pull, fetch, rebase)
+	syncView := views.NewSyncView(m.repoPath)
+	router.Register("Sync", syncView)
+
 	// Register branch comparison view (split panel with diff summary)
 	branchCompareView := views.NewBranchComparisonView(m.repoPath)
 	router.Register("BranchCompare", branchCompareView)

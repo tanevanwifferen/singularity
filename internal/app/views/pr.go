@@ -231,10 +231,10 @@ func (v *PRView) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case "down", "j":
 		v.moveSourceBranchDown()
 
-	case "left", "h":
+	case "left":
 		v.moveTargetBranchUp()
 
-	case "right", "l":
+	case "right":
 		v.moveTargetBranchDown()
 
 	case "tab":
