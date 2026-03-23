@@ -20,6 +20,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// issueKeyRe matches a Jira issue key like "PROJ-123".
+var issueKeyRe = regexp.MustCompile(`(?i)^[A-Z][A-Z0-9_]+-\d+$`)
+
 // jiraLoadedMsg carries freshly fetched Jira issues back to the view.
 type jiraLoadedMsg struct {
 	result *jira.SearchResult
@@ -100,9 +103,16 @@ func (v *JiraView) defaultJQL() string {
 	return "assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC"
 }
 
-func (v *JiraView) fetchCmd(jql string) tea.Cmd {
+func (v *JiraView) fetchCmd(query string) tea.Cmd {
 	return func() tea.Msg {
-		result, err := v.client.SearchIssues(jql, 50)
+		if issueKeyRe.MatchString(strings.TrimSpace(query)) {
+			issue, err := v.client.GetIssue(strings.TrimSpace(query))
+			if err != nil {
+				return jiraLoadedMsg{err: err}
+			}
+			return jiraLoadedMsg{result: &jira.SearchResult{Total: 1, Issues: []jira.Issue{*issue}}}
+		}
+		result, err := v.client.SearchIssues(query, 50)
 		return jiraLoadedMsg{result: result, err: err}
 	}
 }

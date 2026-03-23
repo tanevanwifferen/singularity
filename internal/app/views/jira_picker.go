@@ -104,10 +104,17 @@ func (p *JiraPickerState) defaultJQL() string {
 	return "resolution = Unresolved ORDER BY updated DESC"
 }
 
-func (p *JiraPickerState) fetchCmd(jql string) tea.Cmd {
+func (p *JiraPickerState) fetchCmd(query string) tea.Cmd {
 	client := p.client
 	return func() tea.Msg {
-		result, err := client.SearchIssues(jql, 50)
+		if issueKeyRe.MatchString(strings.TrimSpace(query)) {
+			issue, err := client.GetIssue(strings.TrimSpace(query))
+			if err != nil {
+				return jiraPickerLoadedMsg{err: err}
+			}
+			return jiraPickerLoadedMsg{issues: []jira.Issue{*issue}}
+		}
+		result, err := client.SearchIssues(query, 50)
 		if err != nil {
 			return jiraPickerLoadedMsg{err: err}
 		}
