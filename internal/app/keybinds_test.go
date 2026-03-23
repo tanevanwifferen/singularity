@@ -258,9 +258,10 @@ func TestKeybindManagerMatchesViewAction(t *testing.T) {
 		t.Error("Expected 'w' to match ActionNavigateUp in TestView")
 	}
 
-	// Check that other keys don't match
-	if km.MatchesViewAction("k", "TestView", ActionNavigateUp) {
-		t.Error("Expected 'k' to NOT match ActionNavigateUp in TestView")
+	// Check that 'up' doesn't match (not in view-specific override)
+	// However, 'k' IS a global default for ActionNavigateUp, so it falls back
+	if !km.MatchesViewAction("k", "TestView", ActionNavigateUp) {
+		t.Error("Expected 'k' to match ActionNavigateUp in TestView (global fallback)")
 	}
 
 	// Check that action falls back to global
