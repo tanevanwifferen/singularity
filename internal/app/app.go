@@ -254,6 +254,8 @@ func (m *Model) initRouter() {
 	}
 	if m.cfg != nil && m.cfg.Jira.Enabled {
 		jiraView := views.NewJiraView(m.cfg.Jira)
+		jiraView.SetEngine(m.engine)
+		jiraView.SetRepoPath(m.repoPath)
 		router.Register("Jira", jiraView)
 		gitItems = append(gitItems, components.SubmenuItem{Key: "j", Label: "Jira Issues", ViewName: "Jira"})
 	}
@@ -382,6 +384,8 @@ func (m *Model) initProjectRouter() {
 	}
 	if m.cfg != nil && m.cfg.Jira.Enabled {
 		jiraView := views.NewJiraView(m.cfg.Jira)
+		jiraView.SetEngine(m.engine)
+		jiraView.SetProject(m.proj)
 		router.Register("Jira", jiraView)
 		projGitItems = append(projGitItems, components.SubmenuItem{Key: "j", Label: "Jira Issues", ViewName: "Jira"})
 	}

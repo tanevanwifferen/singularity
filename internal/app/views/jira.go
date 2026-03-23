@@ -2,11 +2,18 @@ package views
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
+	"unicode"
 
 	"git-frontend/internal/app/components"
 	"git-frontend/internal/config"
+	"git-frontend/internal/engine"
+	"git-frontend/internal/git"
 	"git-frontend/internal/jira"
+	"git-frontend/internal/project"
 	"git-frontend/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -17,6 +24,13 @@ import (
 type jiraLoadedMsg struct {
 	result *jira.SearchResult
 	err    error
+}
+
+// jiraWorkflowDoneMsg signals that worktree creation has finished.
+type jiraWorkflowDoneMsg struct {
+	agentID  string
+	repoPath string
+	err      error
 }
 
 // JiraView displays a browsable, filterable list of Jira issues.
@@ -30,13 +44,24 @@ type JiraView struct {
 	width   int
 	height  int
 
+	// Dependencies wired by app
+	eng      *engine.Engine
+	proj     *project.Project
+	repoPath string
+
 	// Search / JQL input mode
 	searchMode  bool
 	searchInput string
 
 	// Detail pane
-	showDetail    bool
-	detailIssue   *jira.Issue
+	showDetail  bool
+	detailIssue *jira.Issue
+
+	// Workflow confirmation modal
+	showWorkflowConfirm bool
+	workflowIssue       *jira.Issue
+	workflowBranch      string
+	workflowStatusMsg   string
 }
 
 // NewJiraView creates a new Jira issues view.
@@ -51,6 +76,15 @@ func NewJiraView(cfg config.JiraConfig) *JiraView {
 	v.filter.SetHeight(v.height)
 	return v
 }
+
+// SetEngine wires the agent engine.
+func (v *JiraView) SetEngine(eng *engine.Engine) { v.eng = eng }
+
+// SetProject wires the project (project mode).
+func (v *JiraView) SetProject(proj *project.Project) { v.proj = proj }
+
+// SetRepoPath sets the single-repo path (single-repo mode).
+func (v *JiraView) SetRepoPath(path string) { v.repoPath = path }
 
 // Init loads issues on first display.
 func (v *JiraView) Init() tea.Cmd {
@@ -96,10 +130,33 @@ func (v *JiraView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return v, nil
 
+	case jiraWorkflowDoneMsg:
+		if msg.err != nil {
+			v.workflowStatusMsg = fmt.Sprintf("Error: %v", msg.err)
+			v.showWorkflowConfirm = false
+			return v, nil
+		}
+		v.showWorkflowConfirm = false
+		v.workflowStatusMsg = fmt.Sprintf("Agent started for %s", v.workflowBranch)
+		// Navigate to Agents view
+		return v, func() tea.Msg {
+			return ViewChangeMsg{ViewName: "Agents"}
+		}
+
 	case tea.KeyMsg:
+		// Workflow confirmation modal
+		if v.showWorkflowConfirm {
+			return v, v.handleWorkflowConfirm(msg)
+		}
+
 		// Detail pane active
 		if v.showDetail {
-			if msg.String() == "esc" {
+			switch msg.String() {
+			case "w":
+				if v.detailIssue != nil {
+					return v, v.triggerWorkflow(v.detailIssue)
+				}
+			case "esc":
 				v.showDetail = false
 				v.detailIssue = nil
 			}
@@ -120,6 +177,12 @@ func (v *JiraView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "s":
 			v.searchMode = true
 			v.searchInput = ""
+			return v, nil
+
+		case "w":
+			if item, idx := v.filter.SelectedItem(); idx >= 0 {
+				return v, v.triggerWorkflow(&item)
+			}
 			return v, nil
 
 		case "enter":
@@ -151,6 +214,130 @@ func (v *JiraView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return v, nil
+}
+
+// triggerWorkflow initiates the workflow confirmation modal.
+func (v *JiraView) triggerWorkflow(issue *jira.Issue) tea.Cmd {
+	v.workflowIssue = issue
+	v.workflowBranch = issueToBranchName(issue)
+	v.showWorkflowConfirm = true
+	return nil
+}
+
+// handleWorkflowConfirm handles key input in the workflow confirmation modal.
+func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "y", "enter":
+		issue := v.workflowIssue
+		branch := v.workflowBranch
+		eng := v.eng
+		proj := v.proj
+		repoPath := v.repoPath
+		return func() tea.Msg {
+			return startJiraWorkflow(issue, branch, eng, proj, repoPath)
+		}
+	case "n", "esc":
+		v.showWorkflowConfirm = false
+		v.workflowIssue = nil
+	}
+	return nil
+}
+
+// startJiraWorkflow creates worktrees and spawns an agent.
+func startJiraWorkflow(issue *jira.Issue, branch string, eng *engine.Engine, proj *project.Project, repoPath string) jiraWorkflowDoneMsg {
+	if eng == nil {
+		return jiraWorkflowDoneMsg{err: fmt.Errorf("agent engine not available")}
+	}
+
+	agentPrompt := buildJiraAgentPrompt(issue)
+
+	// Project mode: create worktrees across all repos via FeatureWorkflow
+	if proj != nil {
+		baseDir := filepath.Join(os.TempDir(), "git-frontend-workflows")
+		fw := project.NewFeatureWorkflow(proj, branch, baseDir)
+		if err := fw.CreateAllWorktrees(); err != nil {
+			return jiraWorkflowDoneMsg{err: fmt.Errorf("create worktrees: %w", err)}
+		}
+		workDir := fw.WorkflowDir()
+		// Use the first worktree's repo path if the workflow dir isn't itself a repo
+		if _, statErr := os.Stat(filepath.Join(workDir, ".git")); os.IsNotExist(statErr) {
+			for _, wr := range fw.Repos {
+				if wr.WorktreeCreated {
+					workDir = wr.WorktreePath
+					break
+				}
+			}
+		}
+		id, err := eng.StartAgent(workDir, agentPrompt, engine.AgentOptions{SmartRoute: true})
+		if err != nil {
+			return jiraWorkflowDoneMsg{err: fmt.Errorf("start agent: %w", err)}
+		}
+		fw.SetWorkflowAgentID(id)
+		return jiraWorkflowDoneMsg{agentID: id, repoPath: workDir}
+	}
+
+	// Single-repo mode
+	if repoPath == "" {
+		return jiraWorkflowDoneMsg{err: fmt.Errorf("no repository configured")}
+	}
+	worktreePath := filepath.Join(filepath.Dir(repoPath), branch)
+	if err := git.CreateWorktree(repoPath, worktreePath, branch, true); err != nil {
+		return jiraWorkflowDoneMsg{err: fmt.Errorf("create worktree: %w", err)}
+	}
+	id, err := eng.StartAgent(worktreePath, agentPrompt, engine.AgentOptions{SmartRoute: true})
+	if err != nil {
+		return jiraWorkflowDoneMsg{err: fmt.Errorf("start agent: %w", err)}
+	}
+	return jiraWorkflowDoneMsg{agentID: id, repoPath: worktreePath}
+}
+
+// buildJiraAgentPrompt constructs an agent task prompt from a Jira issue.
+func buildJiraAgentPrompt(issue *jira.Issue) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Implement Jira ticket %s.\n\n", issue.Key))
+	b.WriteString(fmt.Sprintf("Summary: %s\n", issue.Summary))
+	b.WriteString(fmt.Sprintf("Type: %s\n", issue.Type))
+	b.WriteString(fmt.Sprintf("Priority: %s\n", issue.Priority))
+	b.WriteString(fmt.Sprintf("Status: %s\n", issue.Status))
+	if issue.Assignee != "" {
+		b.WriteString(fmt.Sprintf("Assignee: %s\n", issue.Assignee))
+	}
+	if len(issue.Labels) > 0 {
+		b.WriteString(fmt.Sprintf("Labels: %s\n", strings.Join(issue.Labels, ", ")))
+	}
+	if issue.Description != "" {
+		b.WriteString("\nDescription:\n")
+		b.WriteString(issue.Description)
+		b.WriteString("\n")
+	}
+	b.WriteString("\nYou are working in a dedicated worktree/branch for this ticket. " +
+		"Implement the requirements described above. When done, ensure all tests pass.")
+	return b.String()
+}
+
+var nonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
+
+// issueToBranchName derives a git branch name from a Jira issue.
+// Format: key-summary-slug (lowercase, hyphens, max 60 chars).
+func issueToBranchName(issue *jira.Issue) string {
+	slug := strings.ToLower(issue.Summary)
+	// Replace non-alphanumeric runs with a hyphen
+	slug = nonAlnum.ReplaceAllStringFunc(slug, func(s string) string {
+		for _, r := range s {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) {
+				return "-"
+			}
+		}
+		return "-"
+	})
+	slug = strings.Trim(slug, "-")
+	key := strings.ToLower(issue.Key)
+	branch := key + "-" + slug
+	if len(branch) > 60 {
+		branch = branch[:60]
+		branch = strings.TrimRight(branch, "-")
+	}
+	return branch
 }
 
 func (v *JiraView) handleSearchInput(msg tea.KeyMsg) tea.Cmd {
@@ -245,11 +432,28 @@ func (v *JiraView) View() string {
 		s.WriteString(v.filter.View())
 	}
 
+	// Workflow confirmation modal
+	if v.showWorkflowConfirm && v.workflowIssue != nil {
+		s.WriteString("\n")
+		s.WriteString(renderModal("Start Workflow", []string{
+			fmt.Sprintf("Ticket: %s", v.workflowIssue.Key),
+			fmt.Sprintf("Branch: %s", v.workflowBranch),
+			"",
+			"Create worktree + spawn agent? (y/n)",
+		}, modalWidth(v.width)))
+	}
+
+	// Status message (e.g., after workflow starts)
+	if v.workflowStatusMsg != "" {
+		s.WriteString("\n")
+		s.WriteString(th.DashboardAccentStyle.Render(" " + v.workflowStatusMsg + " "))
+	}
+
 	// Footer
 	s.WriteString("\n")
 	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
 	s.WriteString("\n")
-	s.WriteString(th.Help.Render(" r: Refresh   s: JQL Search   /: Filter   ↑↓: Navigate   Enter: Detail "))
+	s.WriteString(th.Help.Render(" r: Refresh   s: JQL Search   /: Filter   ↑↓: Navigate   Enter: Detail   w: Start Workflow "))
 
 	return s.String()
 }
@@ -306,7 +510,7 @@ func (v *JiraView) renderDetail(issue *jira.Issue) string {
 	}
 
 	s.WriteString("\n")
-	s.WriteString(th.Help.Render(" Esc: back to list "))
+	s.WriteString(th.Help.Render(" Esc: back to list   w: start workflow "))
 
 	return s.String()
 }
