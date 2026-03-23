@@ -437,7 +437,7 @@ func (v *JiraView) View() string {
 	if v.filter.IsActive() {
 		s.WriteString(v.filter.View())
 	} else {
-		s.WriteString(th.Help.Render(" / to filter • s: JQL search • r: refresh • Enter: detail • ↑↓: navigate "))
+		s.WriteString(th.Help.Render(" / to filter • s: search • r: refresh • Enter: detail • ↑↓: navigate "))
 		s.WriteString("\n\n")
 		s.WriteString(v.filter.View())
 	}
@@ -463,7 +463,7 @@ func (v *JiraView) View() string {
 	s.WriteString("\n")
 	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
 	s.WriteString("\n")
-	s.WriteString(th.Help.Render(" r: Refresh   s: JQL Search   /: Filter   ↑↓: Navigate   Enter: Detail   w: Start Workflow "))
+	s.WriteString(th.Help.Render(" r: Refresh   s: Search   /: Filter   ↑↓: Navigate   Enter: Detail   w: Start Workflow "))
 
 	return s.String()
 }
@@ -592,7 +592,7 @@ func statusStyle(status string, th theme.Theme) lipgloss.Style {
 
 // ShortHelp returns a short help string.
 func (v *JiraView) ShortHelp() string {
-	return "r: Refresh  s: JQL Search  /: Filter  ↑↓: Navigate  Enter: Detail  Esc: Back"
+	return "r: Refresh  s: Search  /: Filter  ↑↓: Navigate  Enter: Detail  Esc: Back"
 }
 
 // SetSize updates the view dimensions.
@@ -608,7 +608,7 @@ func (v *JiraView) SetSize(width, height int) {
 func (v *JiraView) KeyBindings() []components.KeyBinding {
 	return []components.KeyBinding{
 		{Key: "r", Description: "Refresh issues"},
-		{Key: "s", Description: "JQL search"},
+		{Key: "s", Description: "Search (issue key or JQL)"},
 		{Key: "/", Description: "Filter list"},
 		{Key: "↑/k", Description: "Navigate up"},
 		{Key: "↓/j", Description: "Navigate down"},
