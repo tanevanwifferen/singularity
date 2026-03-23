@@ -51,6 +51,7 @@ func (a *Agent) setupWorktree() error {
 
 // mergeWorktreeBack merges the worktree branch back into the source branch
 // and cleans up the worktree. Returns the merge result status.
+// On merge conflict, launches a Claude session to rebase and retries.
 func (a *Agent) mergeWorktreeBack() string {
 	if a.worktreePath == "" || a.sourceRepoPath == "" {
 		return ""
@@ -61,14 +62,10 @@ func (a *Agent) mergeWorktreeBack() string {
 	wtBranch := a.worktreeBranch
 	wtPath := a.worktreePath
 
-	defer func() {
-		// Always clean up: remove worktree and delete temp branch
-		cleanupWorktree(repoPath, wtPath, wtBranch)
-	}()
-
 	// Auto-commit any uncommitted changes left by the agent
 	if committed, err := autoCommitWorktree(wtPath, a.ID, a.Task); err != nil {
 		a.appendOutput("error", fmt.Sprintf("Failed to auto-commit worktree changes: %v", err))
+		cleanupWorktree(repoPath, wtPath, wtBranch)
 		return "error"
 	} else if committed {
 		a.appendOutput("system", "Worktree: auto-committed uncommitted changes before merge")
@@ -78,32 +75,75 @@ func (a *Agent) mergeWorktreeBack() string {
 	hasChanges, err := branchHasNewCommits(repoPath, sourceBranch, wtBranch)
 	if err != nil {
 		a.appendOutput("error", fmt.Sprintf("Failed to check worktree changes: %v", err))
+		cleanupWorktree(repoPath, wtPath, wtBranch)
 		return "error"
 	}
 	if !hasChanges {
 		a.appendOutput("system", "Worktree: no changes to merge")
+		cleanupWorktree(repoPath, wtPath, wtBranch)
 		return "no-changes"
 	}
 
-	// Generate a merge commit message from the branch's commit log
+	// First merge attempt
+	result := a.attemptMerge(repoPath, sourceBranch, wtBranch)
+	if result == "conflict" {
+		// Launch a Claude session to rebase the worktree branch onto the source branch
+		a.appendOutput("system", fmt.Sprintf("Worktree: merge conflict — launching Claude session to rebase %s onto %s", wtBranch, sourceBranch))
+		if rebaseErr := rebaseWithClaude(wtPath, sourceBranch, a.Task); rebaseErr != nil {
+			a.appendOutput("error", fmt.Sprintf("Rebase session failed: %v", rebaseErr))
+			cleanupWorktree(repoPath, wtPath, wtBranch)
+			return "conflict"
+		}
+		a.appendOutput("system", "Worktree: rebase complete — retrying merge")
+		result = a.attemptMerge(repoPath, sourceBranch, wtBranch)
+	}
+
+	cleanupWorktree(repoPath, wtPath, wtBranch)
+	return result
+}
+
+// attemptMerge tries to merge wtBranch into sourceBranch using --no-ff.
+// On conflict, aborts the merge and returns "conflict".
+func (a *Agent) attemptMerge(repoPath, sourceBranch, wtBranch string) string {
 	logCmd := exec.Command("git", "-C", repoPath, "log", "--oneline", fmt.Sprintf("%s..%s", sourceBranch, wtBranch))
 	logOut, _ := logCmd.Output()
 	mergeMsg := generateMergeMessage(string(logOut), a.Task, a.ID)
 
-	// Merge the worktree branch into the source branch
-	// Use --no-ff to preserve the merge as a distinct event
-	cmd := exec.Command("git", "-C", repoPath, "merge", wtBranch, "--no-ff",
-		"-m", mergeMsg)
+	cmd := exec.Command("git", "-C", repoPath, "merge", wtBranch, "--no-ff", "-m", mergeMsg)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		// Merge conflict - abort and leave changes on the branch
 		abortCmd := exec.Command("git", "-C", repoPath, "merge", "--abort")
 		abortCmd.Run()
-		a.appendOutput("error", fmt.Sprintf("Worktree merge conflict, changes left on branch %s:\n%s", wtBranch, string(out)))
+		a.appendOutput("error", fmt.Sprintf("Merge conflict on branch %s:\n%s", wtBranch, string(out)))
 		return "conflict"
 	}
 
 	a.appendOutput("system", fmt.Sprintf("Worktree: merged changes from %s into %s", wtBranch, sourceBranch))
 	return "merged"
+}
+
+// rebaseWithClaude launches a non-interactive Claude session to rebase the worktree
+// branch onto sourceBranch, resolving any conflicts. Called when a direct merge fails.
+func rebaseWithClaude(wtPath, sourceBranch, task string) error {
+	prompt := fmt.Sprintf(
+		"Rebase the current git branch onto %s to resolve merge conflicts. "+
+			"The original task context was: %s\n\n"+
+			"Steps:\n"+
+			"1. Run: git rebase %s\n"+
+			"2. If there are conflicts, read the conflicting files, understand both sides, and resolve them correctly\n"+
+			"3. Stage resolved files and run: git rebase --continue\n"+
+			"4. Repeat until the rebase completes successfully\n"+
+			"5. Do not abort the rebase — resolve all conflicts",
+		sourceBranch, task, sourceBranch,
+	)
+
+	cmd := exec.Command("claude", "--print", "--permission-mode", "bypassPermissions", "-p", prompt)
+	cmd.Dir = wtPath
+	cmd.Env = append(os.Environ(), "CLAUDE_NO_ANALYTICS=true")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("claude rebase session: %w\n%s", err, string(out))
+	}
+	return nil
 }
 
 // cleanupWorktree removes the worktree and deletes the temporary branch.
