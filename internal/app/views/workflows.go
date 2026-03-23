@@ -470,13 +470,20 @@ func (v *WorkflowsView) handleJiraPickerKey(msg tea.KeyMsg) tea.Cmd {
 	return cmd
 }
 
-// handleJiraWorkflowConfirm handles the y/n confirmation before creating a workflow from a Jira ticket.
+// handleJiraWorkflowConfirm handles the y/n/e confirmation before creating a workflow from a Jira ticket.
 func (v *WorkflowsView) handleJiraWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "y", "enter":
 		issue := v.jiraConfirmIssue
 		v.jiraConfirmIssue = nil
 		return v.startWorkflowFromJira(issue)
+	case "e":
+		wf := v.currentWorkflow()
+		if wf != nil {
+			issue := v.jiraConfirmIssue
+			v.jiraConfirmIssue = nil
+			return v.startWorkflowFromJiraOnExisting(issue, wf)
+		}
 	case "n", "esc":
 		v.jiraConfirmIssue = nil
 	}
@@ -526,6 +533,39 @@ func (v *WorkflowsView) startWorkflowFromJira(issue *jira.Issue) tea.Cmd {
 		} else {
 			wf.SetWorkflowAgentID(id)
 			v.workflowStatusMsg = fmt.Sprintf("Agent started for %s (%s)", issue.Key, branchName)
+		}
+		return RefreshDoneMsg{}
+	}
+}
+
+// startWorkflowFromJiraOnExisting spawns an agent for a Jira issue on an already-created workflow
+// (reusing its existing worktrees rather than creating new ones).
+func (v *WorkflowsView) startWorkflowFromJiraOnExisting(issue *jira.Issue, wf *project.FeatureWorkflow) tea.Cmd {
+	if issue == nil || wf == nil {
+		return nil
+	}
+	agentPrompt := buildJiraAgentPrompt(issue)
+	eng := v.engine
+	var ctxFiles []string
+	if v.proj != nil {
+		ctxFiles = v.proj.ContextFiles
+	}
+	fullTask := agentPrompt + "\n\n" + buildWorkflowCommitInstructions(wf)
+
+	return func() tea.Msg {
+		if eng == nil {
+			v.workflowStatusMsg = "Agent engine not available"
+			return RefreshDoneMsg{}
+		}
+		id, err := eng.StartAgent(wf.WorkflowDir(), fullTask, engine.AgentOptions{
+			ContextFiles: ctxFiles,
+			SmartRoute:   true,
+		})
+		if err != nil {
+			v.workflowStatusMsg = fmt.Sprintf("Agent spawn failed: %v", err)
+		} else {
+			wf.SetWorkflowAgentID(id)
+			v.workflowStatusMsg = fmt.Sprintf("Agent started for %s on existing workflow '%s'", issue.Key, wf.BranchName)
 		}
 		return RefreshDoneMsg{}
 	}
@@ -989,8 +1029,13 @@ func (v *WorkflowsView) View() string {
 			"",
 			"  Create worktrees for all repos + spawn agent?",
 			"",
-			"  y: Confirm  n: Cancel",
 		}
+		if wf := v.currentWorkflow(); wf != nil {
+			lines = append(lines,
+				fmt.Sprintf("  e: Use selected workflow (%s)", th.MutedTextStyle.Render(wf.BranchName)),
+			)
+		}
+		lines = append(lines, "  y: New worktrees  n: Cancel")
 		s.WriteString(renderModal("Start Workflow from Jira", lines, modalWidth(v.width)))
 		s.WriteString("\n")
 		return s.String()
