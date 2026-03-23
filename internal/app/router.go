@@ -166,12 +166,19 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // buildHelpOverlay constructs the help overlay from global and view-specific bindings.
+// Uses the KeybindManager to provide resolved keybindings (with config overrides).
 func (r *Router) buildHelpOverlay() {
-	// Get global bindings
-	bindings := components.GlobalBindings()
+	// Get global bindings from KeybindManager (with config overrides)
+	bindings := GetKeybindManager().GlobalKeybinds()
 
-	// Add view-specific bindings if the active view implements KeyBindings
-	if kb, ok := r.active.(components.KeyBindings); ok {
+	// Try to get view-specific bindings from KeybindManager first
+	// If not configured, fall back to the view's KeyBindings() method
+	viewKB := GetKeybindManager().ViewKeybinds(r.activeName)
+	if viewKB != nil && len(viewKB) > 0 {
+		bindings = append(bindings, KeyBinding{Key: "---", Description: "--- View: " + r.activeName + " ---"})
+		bindings = append(bindings, viewKB...)
+	} else if kb, ok := r.active.(components.KeyBindings); ok {
+		// Fall back to view's hardcoded bindings for backward compatibility
 		bindings = append(bindings, KeyBinding{Key: "---", Description: "--- View: " + r.activeName + " ---"})
 		bindings = append(bindings, kb.KeyBindings()...)
 	}
