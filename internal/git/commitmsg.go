@@ -146,7 +146,7 @@ func attemptClaudeGenerate(path, prompt string) (*CommitMessage, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), claudeConfig.Timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "claude", "--print", "--permission-mode", "bypassPermissions", "-p", prompt)
+	cmd := exec.CommandContext(ctx, "claude", "--print", "--dangerously-skip-permissions", "-p", prompt)
 	cmd.Dir = path
 
 	output, err := cmd.Output()

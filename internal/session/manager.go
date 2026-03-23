@@ -115,7 +115,7 @@ func (m *Manager) runSession(session *Session, task string, timeoutSeconds int) 
 		"code",
 		"--print",
 		"--silent",
-		"--permission-mode", "bypassPermissions",
+		"--dangerously-skip-permissions",
 	}
 
 	cmd := exec.Command("claude", args...)

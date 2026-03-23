@@ -204,7 +204,10 @@ func (m *Model) initRouter() {
 	prView := views.NewPRView(m.repoPath)
 	router.Register("CreatePR", prView)
 
-	// Register agent console view (for server mode)
+	// Register agent console view - create engine if not set
+	if m.engine == nil {
+		m.engine = engine.New(10)
+	}
 	agentView := views.NewAgentView(m.repoPath, m.engine)
 	router.Register("Agents", agentView)
 

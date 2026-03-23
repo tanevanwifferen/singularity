@@ -450,7 +450,7 @@ func (v *CommitView) handleMessageEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return v, nil
 
-	case "ctrl+enter":
+	case "ctrl+s", "ctrl+enter":
 		// Request commit with confirmation if message is not empty
 		if len(v.commitMessage) > 0 && len(v.stagedFiles) > 0 {
 			v.editMode = ConfirmCommitMode
@@ -850,7 +850,7 @@ func (v *CommitView) renderMessageEditor(s *strings.Builder, th theme.Theme) str
 	// Help footer for message editing mode
 	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
 	s.WriteString("\n")
-	s.WriteString(th.Help.Render(" Enter: New line   Ctrl+G: AI generate   Ctrl+Enter: Commit   Esc: Cancel "))
+	s.WriteString(th.Help.Render(" Enter: New line   Ctrl+G: AI generate   Ctrl+S: Commit   Esc: Cancel "))
 
 	return s.String()
 }
@@ -935,7 +935,7 @@ func (v *CommitView) getLineStart() int {
 // ShortHelp returns a short help string.
 func (v *CommitView) ShortHelp() string {
 	if v.editMode == MessageEditMode {
-		return "Enter: New line  Ctrl+G: AI generate  Ctrl+Enter: Commit  Esc: Cancel"
+		return "Enter: New line  Ctrl+G: AI generate  Ctrl+S: Commit  Esc: Cancel"
 	}
 	if v.editMode == ConfirmCommitMode {
 		return "Y/n: Confirm/Cancel commit"

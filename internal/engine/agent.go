@@ -60,7 +60,6 @@ type Agent struct {
 
 	// Process management
 	cmd        *exec.Cmd
-	stdin      io.WriteCloser
 	stdout     io.ReadCloser
 	stderr     io.ReadCloser
 	done       chan struct{}
@@ -112,15 +111,12 @@ func (a *Agent) start() error {
 	a.cmd.Dir = a.WorkDir
 	a.cmd.Env = a.buildEnv()
 
+	// No stdin needed - task is passed as CLI argument
+	// Close stdin immediately to avoid "no stdin data received" warning
+	a.cmd.Stdin = nil
+
 	// Set up pipes
 	var err error
-	a.stdin, err = a.cmd.StdinPipe()
-	if err != nil {
-		a.setState(AgentError)
-		a.Error = fmt.Sprintf("stdin pipe: %v", err)
-		return err
-	}
-
 	a.stdout, err = a.cmd.StdoutPipe()
 	if err != nil {
 		a.setState(AgentError)
@@ -161,6 +157,7 @@ func (a *Agent) buildArgs() []string {
 		"--print",
 		"--verbose",
 		"--output-format", "text",
+		"--dangerously-skip-permissions",
 	}
 
 	if a.model != "" {
@@ -238,18 +235,8 @@ func (a *Agent) sendMessage(msg string) error {
 		return fmt.Errorf("agent %s is not running (state: %s)", a.ID, a.State)
 	}
 
-	if a.stdin == nil {
-		return fmt.Errorf("agent %s has no stdin", a.ID)
-	}
-
-	a.appendOutputLocked("system", fmt.Sprintf(">> %s", msg))
-
-	if !strings.HasSuffix(msg, "\n") {
-		msg += "\n"
-	}
-
-	_, err := io.WriteString(a.stdin, msg)
-	return err
+	// Agents run in --print mode (non-interactive), stdin is not available
+	return fmt.Errorf("agent %s does not support stdin in print mode", a.ID)
 }
 
 // kill terminates the agent subprocess
