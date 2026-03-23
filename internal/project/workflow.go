@@ -1,7 +1,9 @@
 package project
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -44,13 +46,14 @@ func (s WorkflowState) String() string {
 
 // WorkflowRepo tracks worktree and CI state for a single repo within a workflow
 type WorkflowRepo struct {
-	RepoName       string `json:"repo_name"`
-	OriginalPath   string `json:"original_path"`
-	WorktreePath   string `json:"worktree_path"`
-	WorktreeCreated bool  `json:"worktree_created"`
-	Pushed         bool   `json:"pushed"`
-	MRURL          string `json:"mr_url,omitempty"`
-	Error          string `json:"error,omitempty"`
+	RepoName        string `json:"repo_name"`
+	OriginalPath    string `json:"original_path"`
+	WorktreePath    string `json:"worktree_path"`
+	DefaultBranch   string `json:"default_branch"`
+	WorktreeCreated bool   `json:"worktree_created"`
+	Pushed          bool   `json:"pushed"`
+	MRURL           string `json:"mr_url,omitempty"`
+	Error           string `json:"error,omitempty"`
 }
 
 // FeatureWorkflow orchestrates a cross-repo feature branch lifecycle
@@ -97,9 +100,10 @@ func NewFeatureWorkflow(proj *Project, branchName, baseDir string) *FeatureWorkf
 	for _, r := range proj.Repos {
 		worktreePath := filepath.Join(baseDir, sanitized, r.Name)
 		repos[r.Name] = &WorkflowRepo{
-			RepoName:     r.Name,
-			OriginalPath: r.Path,
-			WorktreePath: worktreePath,
+			RepoName:      r.Name,
+			OriginalPath:  r.Path,
+			WorktreePath:  worktreePath,
+			DefaultBranch: r.DefaultBranch,
 		}
 	}
 
@@ -189,6 +193,14 @@ func (fw *FeatureWorkflow) RemoveAllWorktrees() error {
 				wr.WorktreeCreated = false
 				wr.Error = ""
 			}
+
+			// Delete the local branch (force in case it's unmerged)
+			if delErr := git.DeleteBranch(wr.OriginalPath, fw.BranchName, true); delErr != nil {
+				// Not fatal -- branch may not exist or may be checked out
+				if wr.Error == "" {
+					wr.Error = fmt.Sprintf("delete branch: %v", delErr)
+				}
+			}
 		}(wr)
 	}
 	wg.Wait()
@@ -224,11 +236,23 @@ func (fw *FeatureWorkflow) PushAll() error {
 				return
 			}
 
-			if status.Upstream == "" {
-				// No upstream yet -- set one
-				_, err = git.SetUpstreamAndPush(wr.WorktreePath, "origin")
-			} else {
+			if status.Upstream != "" {
+				// Has upstream: only push if there are commits ahead
+				if status.Ahead == 0 {
+					return // nothing to push
+				}
 				_, err = git.Push(wr.WorktreePath, false)
+			} else {
+				// No upstream: check if branch has commits vs default branch
+				base := wr.DefaultBranch
+				if base == "" {
+					base = "main"
+				}
+				ahead, _, cmpErr := git.CompareBranchesSimple(wr.WorktreePath, base, "HEAD")
+				if cmpErr != nil || ahead == 0 {
+					return // nothing to push
+				}
+				_, err = git.SetUpstreamAndPush(wr.WorktreePath, "origin")
 			}
 
 			fw.mu.Lock()
@@ -362,4 +386,152 @@ func (fw *FeatureWorkflow) WorkflowDir() string {
 	fw.mu.RLock()
 	defer fw.mu.RUnlock()
 	return filepath.Join(fw.BaseDir, sanitizeBranchForPath(fw.BranchName))
+}
+
+// SetProject re-associates the workflow with a project (needed after loading from disk).
+func (fw *FeatureWorkflow) SetProject(proj *Project) {
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	fw.project = proj
+}
+
+// workflowStatePath returns the path to the workflow state file for a project.
+func workflowStatePath(projectKey string) string {
+	dir := filepath.Dir(GetDefaultConfigPath())
+	return filepath.Join(dir, fmt.Sprintf("workflows-%s.json", projectKey))
+}
+
+// SaveWorkflows persists active workflows to disk.
+func SaveWorkflows(projectKey string, workflows []*FeatureWorkflow) error {
+	// Only save active workflows (not done/cleaning up)
+	var toSave []*FeatureWorkflow
+	for _, wf := range workflows {
+		wf.mu.RLock()
+		state := wf.State
+		wf.mu.RUnlock()
+		if state != WorkflowDone {
+			toSave = append(toSave, wf)
+		}
+	}
+
+	path := workflowStatePath(projectKey)
+
+	if len(toSave) == 0 {
+		// Remove the state file if no active workflows
+		os.Remove(path)
+		return nil
+	}
+
+	data, err := json.MarshalIndent(toSave, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal workflows: %w", err)
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create state dir: %w", err)
+	}
+
+	return os.WriteFile(path, data, 0644)
+}
+
+// DiscoverWorkflows scans existing worktrees across all project repos and groups
+// them by branch name into FeatureWorkflow objects. This allows importing workflows
+// that were created outside the app (e.g., manually via git worktree add).
+// The skip map contains branch names of workflows already tracked, to avoid duplicates.
+func DiscoverWorkflows(proj *Project, skip map[string]bool) ([]*FeatureWorkflow, error) {
+	proj.mu.RLock()
+	defer proj.mu.RUnlock()
+
+	// branch -> repo name -> worktree info
+	type repoWorktree struct {
+		repoName      string
+		originalPath  string
+		worktreePath  string
+		defaultBranch string
+	}
+	byBranch := make(map[string][]repoWorktree)
+
+	for _, r := range proj.Repos {
+		worktrees, err := git.GetWorktrees(r.Path)
+		if err != nil {
+			continue // skip repos that fail
+		}
+		for _, wt := range worktrees {
+			// Skip the main worktree (path == repo path) and bare/detached
+			if wt.Path == r.Path || wt.Branch == "" {
+				continue
+			}
+			// Skip default branches
+			if wt.Branch == r.DefaultBranch {
+				continue
+			}
+			// Skip already tracked workflows
+			if skip[wt.Branch] {
+				continue
+			}
+			byBranch[wt.Branch] = append(byBranch[wt.Branch], repoWorktree{
+				repoName:      r.Name,
+				originalPath:  r.Path,
+				worktreePath:  wt.Path,
+				defaultBranch: r.DefaultBranch,
+			})
+		}
+	}
+
+	var workflows []*FeatureWorkflow
+	for branch, rws := range byBranch {
+		repos := make(map[string]*WorkflowRepo, len(rws))
+		// Infer base dir from the first worktree path
+		var baseDir string
+		for _, rw := range rws {
+			repos[rw.repoName] = &WorkflowRepo{
+				RepoName:        rw.repoName,
+				OriginalPath:    rw.originalPath,
+				WorktreePath:    rw.worktreePath,
+				DefaultBranch:   rw.defaultBranch,
+				WorktreeCreated: true,
+			}
+			if baseDir == "" {
+				// worktreePath is typically baseDir/sanitized-branch/repoName
+				// go up two levels to get baseDir
+				baseDir = filepath.Dir(filepath.Dir(rw.worktreePath))
+			}
+		}
+
+		wf := &FeatureWorkflow{
+			BranchName: branch,
+			BaseDir:    baseDir,
+			Repos:      repos,
+			State:      WorkflowActive,
+			CreatedAt:  time.Now(),
+			project:    proj,
+		}
+		workflows = append(workflows, wf)
+	}
+
+	return workflows, nil
+}
+
+// LoadWorkflows loads persisted workflows from disk and re-associates them with the project.
+func LoadWorkflows(projectKey string, proj *Project) ([]*FeatureWorkflow, error) {
+	path := workflowStatePath(projectKey)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read workflows: %w", err)
+	}
+
+	var workflows []*FeatureWorkflow
+	if err := json.Unmarshal(data, &workflows); err != nil {
+		return nil, fmt.Errorf("unmarshal workflows: %w", err)
+	}
+
+	for _, wf := range workflows {
+		wf.SetProject(proj)
+	}
+
+	return workflows, nil
 }

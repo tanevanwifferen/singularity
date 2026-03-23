@@ -250,7 +250,9 @@ func (v *BranchesView) handleNewBranchInput(msg tea.KeyMsg) tea.Cmd {
 		v.newBranchName = components.DeleteWordEnd(v.newBranchName)
 	default:
 		// Handle text input for branch name
-		if len(msg.Runes) == 1 {
+		if msg.Paste && len(msg.Runes) > 0 {
+			v.newBranchName += string(msg.Runes)
+		} else if len(msg.Runes) == 1 {
 			r := msg.Runes[0]
 			if r >= 32 && r <= 126 {
 				v.newBranchName += string(r)

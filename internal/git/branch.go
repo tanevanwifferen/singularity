@@ -68,6 +68,20 @@ func Checkout(repoPath, branch string) error {
 	return nil
 }
 
+// DeleteBranch deletes a local branch. Use force to delete unmerged branches.
+func DeleteBranch(repoPath, branch string, force bool) error {
+	flag := "-d"
+	if force {
+		flag = "-D"
+	}
+	cmd := exec.Command("git", "-C", repoPath, "branch", flag, branch)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("delete branch failed: %s", strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
 // CreateBranch creates and checks out a new branch from the default branch
 func CreateBranch(repoPath, branch, fromBranch string) error {
 	cmd := exec.Command("git", "-C", repoPath, "checkout", "-b", branch, fromBranch)

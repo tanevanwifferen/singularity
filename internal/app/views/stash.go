@@ -263,7 +263,9 @@ func (v *StashView) handleNewStashInput(msg tea.KeyMsg) tea.Cmd {
 		v.newStashMessage = components.DeleteWordEnd(v.newStashMessage)
 	default:
 		// Handle text input for stash message
-		if len(msg.Runes) == 1 {
+		if msg.Paste && len(msg.Runes) > 0 {
+			v.newStashMessage += string(msg.Runes)
+		} else if len(msg.Runes) == 1 {
 			r := msg.Runes[0]
 			if r >= 32 && r <= 126 {
 				v.newStashMessage += string(r)

@@ -438,7 +438,13 @@ func (v *LogView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.filterMode != "" {
 			if v.filterMode == "author" {
 				// Author filter - handle character input
-				if len(msg.Runes) == 1 {
+				if msg.Paste && len(msg.Runes) > 0 {
+					v.authorFilter += string(msg.Runes)
+					return v, func() tea.Msg {
+						v.loadCommits(true)
+						return RefreshDoneMsg{}
+					}
+				} else if len(msg.Runes) == 1 {
 					r := msg.Runes[0]
 					if r >= 32 && r <= 126 {
 						v.authorFilter += string(r)
@@ -696,7 +702,13 @@ func (v *LogView) handleRewordEditor(msg tea.KeyMsg) tea.Cmd {
 	case "ctrl+w":
 		v.rewordMessage, v.rewordCursor = components.DeleteWord(v.rewordMessage, v.rewordCursor)
 	default:
-		if len(msg.Runes) == 1 {
+		if msg.Paste && len(msg.Runes) > 0 {
+			pasted := string(msg.Runes)
+			before := v.rewordMessage[:v.rewordCursor]
+			after := v.rewordMessage[v.rewordCursor:]
+			v.rewordMessage = before + pasted + after
+			v.rewordCursor += len([]rune(pasted))
+		} else if len(msg.Runes) == 1 {
 			r := msg.Runes[0]
 			if r >= 32 && r <= 126 {
 				before := v.rewordMessage[:v.rewordCursor]

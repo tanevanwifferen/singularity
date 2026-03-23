@@ -543,7 +543,13 @@ func (v *CommitView) handleMessageEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	default:
 		// Handle text input
-		if len(msg.Runes) == 1 {
+		if msg.Paste && len(msg.Runes) > 0 {
+			pasted := string(msg.Runes)
+			before := v.commitMessage[:v.messageCursor]
+			after := v.commitMessage[v.messageCursor:]
+			v.commitMessage = before + pasted + after
+			v.messageCursor += len([]rune(pasted))
+		} else if len(msg.Runes) == 1 {
 			r := msg.Runes[0]
 			if r >= 32 && r <= 126 {
 				// Insert character at cursor position

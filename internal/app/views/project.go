@@ -86,6 +86,8 @@ type ProjectView struct {
 	// Batch MR creation state
 	showBatchMRConfirm bool   // confirmation for batch MR creation
 	mrResults          string // flash message with MR results
+	showMRSummary      bool   // persistent MR summary panel after creation
+	mrSummaryLines     []string // MR URLs for display/copy
 
 	// Agent orchestration
 	engine            *engine.Engine
@@ -158,6 +160,21 @@ func (v *ProjectView) SetEngine(eng *engine.Engine) {
 // HasActiveWorkflow returns true if any feature workflows exist.
 func (v *ProjectView) HasActiveWorkflow() bool {
 	return len(v.workflows) > 0
+}
+
+// projectKey returns a filesystem-safe key for the current project.
+func (v *ProjectView) projectKey() string {
+	if v.proj != nil {
+		return v.proj.Name
+	}
+	return filepath.Base(v.projectPath)
+}
+
+// saveWorkflows persists the current workflow state to disk.
+func (v *ProjectView) saveWorkflows() {
+	if key := v.projectKey(); key != "" {
+		project.SaveWorkflows(key, v.workflows)
+	}
 }
 
 // currentWorkflow returns the currently selected workflow, or nil if none.
@@ -234,6 +251,16 @@ func (v *ProjectView) loadData() {
 	v.proj.Refresh()
 	v.status = v.proj.Status()
 	v.rebuildTree()
+
+	// Load persisted workflows on first load
+	if len(v.workflows) == 0 {
+		if loaded, err := project.LoadWorkflows(v.projectKey(), v.proj); err == nil && len(loaded) > 0 {
+			v.workflows = loaded
+			v.selectedWorkflow = 0
+			v.recalcFilterHeight()
+		}
+	}
+
 	v.loading = false
 }
 
@@ -473,7 +500,9 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "ctrl+w":
 				v.workflowBranchName = components.DeleteWordEnd(v.workflowBranchName)
 			default:
-				if len(msg.Runes) == 1 {
+				if msg.Paste && len(msg.Runes) > 0 {
+					v.workflowBranchName += string(msg.Runes)
+				} else if len(msg.Runes) == 1 {
 					r := msg.Runes[0]
 					if r >= 32 && r <= 126 {
 						v.workflowBranchName += string(r)
@@ -507,7 +536,9 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "ctrl+w":
 				v.agentPromptText = components.DeleteWordEnd(v.agentPromptText)
 			default:
-				if len(msg.Runes) == 1 {
+				if msg.Paste && len(msg.Runes) > 0 {
+					v.agentPromptText += string(msg.Runes)
+				} else if len(msg.Runes) == 1 {
 					r := msg.Runes[0]
 					if r >= 32 && r <= 126 {
 						v.agentPromptText += string(r)
@@ -551,6 +582,31 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case "n", "esc":
 				v.showPushConfirm = false
+			}
+			return v, nil
+		}
+
+		// Handle MR summary panel
+		if v.showMRSummary {
+			switch msg.String() {
+			case "y":
+				if len(v.mrSummaryLines) > 0 {
+					wf := v.currentWorkflow()
+					branchName := ""
+					if wf != nil {
+						branchName = wf.BranchName
+					}
+					header := fmt.Sprintf("MRs for %s:", branchName)
+					text := header + "\n" + strings.Join(v.mrSummaryLines, "\n")
+					if err := git.CopyToClipboard(text); err == nil {
+						v.mrResults = "Copied MR summary to clipboard"
+					} else {
+						v.mrResults = fmt.Sprintf("Copy failed: %v", err)
+					}
+				}
+			case "esc", "q":
+				v.showMRSummary = false
+				v.mrSummaryLines = nil
 			}
 			return v, nil
 		}
@@ -786,6 +842,32 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					v.showBatchMRConfirm = true
 				}
 			}
+		case "I":
+			// Import workflows from existing worktrees
+			if v.proj != nil {
+				skip := make(map[string]bool, len(v.workflows))
+				for _, wf := range v.workflows {
+					skip[wf.BranchName] = true
+				}
+				discovered, err := project.DiscoverWorkflows(v.proj, skip)
+				if err != nil || len(discovered) == 0 {
+					if err != nil {
+						v.workflowStatusMsg = fmt.Sprintf("Import error: %v", err)
+					} else {
+						v.workflowStatusMsg = "No new worktree workflows found"
+					}
+				} else {
+					v.workflows = append(v.workflows, discovered...)
+					v.selectedWorkflow = len(v.workflows) - len(discovered) // select first imported
+					v.saveWorkflows()
+					names := make([]string, len(discovered))
+					for i, wf := range discovered {
+						names[i] = wf.BranchName
+					}
+					v.workflowStatusMsg = fmt.Sprintf("Imported %d workflow(s): %s", len(discovered), strings.Join(names, ", "))
+					v.recalcFilterHeight()
+				}
+			}
 		case "[":
 			// Switch to previous workflow
 			if len(v.workflows) > 1 && v.selectedWorkflow > 0 {
@@ -829,10 +911,11 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				v.workflowStatusMsg = fmt.Sprintf(" Worktrees created for '%s' across %d repos\n   Next: press 'a' to spawn an agent, or start working in the worktrees", wf.BranchName, created)
 			case project.WorkflowDone:
 				// Cleanup finished -- remove this workflow from the slice
-				v.workflowStatusMsg = fmt.Sprintf("Worktrees for '%s' removed", wf.BranchName)
+				v.workflowStatusMsg = fmt.Sprintf("Worktrees and branches for '%s' removed", wf.BranchName)
 				v.removeCurrentWorkflow()
 			}
 		}
+		v.saveWorkflows()
 
 	case pushDoneMsg:
 		wf := v.currentWorkflow()
@@ -845,18 +928,24 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			v.pushResults = fmt.Sprintf(" Pushed %d/%d repos\n   Next: press 'M' to create merge requests", pushed, total)
+			v.saveWorkflows()
 		}
 
 	case mrDoneMsg:
 		wf := v.currentWorkflow()
 		if wf != nil {
-			created := 0
+			var lines []string
 			for _, wr := range wf.Repos {
 				if wr.MRURL != "" {
-					created++
+					lines = append(lines, fmt.Sprintf("  %s: %s", wr.RepoName, wr.MRURL))
 				}
 			}
-			v.mrResults = fmt.Sprintf(" Created %d MRs\n   Next: press 'D' to cleanup worktrees when merged", created)
+			v.mrResults = fmt.Sprintf(" Created %d MRs\n   Next: press 'D' to cleanup worktrees when merged", len(lines))
+			if len(lines) > 0 {
+				v.showMRSummary = true
+				v.mrSummaryLines = lines
+			}
+			v.saveWorkflows()
 		}
 
 	case WorkflowTickMsg:
@@ -1019,7 +1108,8 @@ func (v *ProjectView) View() string {
 			lines := []string{
 				"",
 				fmt.Sprintf("  Branch: %s", th.InfoStyle.Render(wf.BranchName)),
-				fmt.Sprintf("  This will remove all worktrees for '%s'.", wf.BranchName),
+				fmt.Sprintf("  This will remove all worktrees and delete"),
+			fmt.Sprintf("  the '%s' branch from all repos.", wf.BranchName),
 				"",
 				"  y: Confirm  Esc: Cancel",
 			}
@@ -1059,6 +1149,15 @@ func (v *ProjectView) View() string {
 			s.WriteString(renderModal("Create MRs/PRs", lines, v.modalWidth()))
 			s.WriteString("\n")
 		}
+	}
+
+	// MR summary panel (after batch MR creation)
+	if v.showMRSummary && len(v.mrSummaryLines) > 0 {
+		lines := []string{""}
+		lines = append(lines, v.mrSummaryLines...)
+		lines = append(lines, "", "  y: Copy to clipboard  Esc: Dismiss")
+		s.WriteString(renderModal("Merge Requests Created", lines, v.modalWidth()))
+		s.WriteString("\n")
 	}
 
 	// MR confirmation modal (single repo)
@@ -1351,6 +1450,21 @@ func (v *ProjectView) renderWorkflowSummary() string {
 
 		s.WriteString(line.String())
 		s.WriteString("\n")
+
+		// Persistent next-step hint for the selected workflow
+		if i == v.selectedWorkflow && st.State == project.WorkflowActive {
+			var hint string
+			switch {
+			case st.MRsCreated > 0:
+				hint = "  next: D to cleanup worktrees once merged"
+			case st.Pushed > 0:
+				hint = "  next: M to create merge requests"
+			default:
+				hint = "  next: p to push branches, a to spawn agent"
+			}
+			s.WriteString(th.MutedTextStyle.Render(hint))
+			s.WriteString("\n")
+		}
 	}
 	s.WriteString("\n")
 
@@ -1454,13 +1568,13 @@ func (v *ProjectView) ShortHelp() string {
 
 // CapturesInput returns true when the view is in an input mode.
 func (v *ProjectView) CapturesInput() bool {
-	return v.showBranchCheck || v.showNewBranch || v.showMRConfirm || v.showWorkflowStart || v.showWorkflowCleanup || v.showAgentPrompt || v.showPushConfirm || v.showBatchMRConfirm
+	return v.showBranchCheck || v.showNewBranch || v.showMRConfirm || v.showWorkflowStart || v.showWorkflowCleanup || v.showAgentPrompt || v.showPushConfirm || v.showBatchMRConfirm || v.showMRSummary
 }
 
 // CapturesKey returns true for keys this view handles directly.
 func (v *ProjectView) CapturesKey(key string) bool {
 	switch key {
-	case "r", "o", "b", "c", "n", "m", "w", "a", "p", "D", "M", "[", "]", "enter", "/", "j", "k", "up", "down":
+	case "r", "o", "b", "c", "n", "m", "w", "a", "p", "D", "I", "M", "[", "]", "enter", "/", "j", "k", "up", "down":
 		return true
 	}
 	return false
@@ -1473,10 +1587,21 @@ func (v *ProjectView) SetSize(width, height int) {
 	v.recalcFilterHeight()
 }
 
-// recalcFilterHeight adjusts the filter height to account for workflow summary.
+// recalcFilterHeight adjusts the filter height to account for workflow summary
+// and fixed chrome (repos header, footer legend, footer help).
 func (v *ProjectView) recalcFilterHeight() {
 	if v.filter != nil {
-		available := v.height - v.workflowSummaryHeight()
+		// Fixed overhead lines:
+		//   1 = view title
+		//   1 = blank after title
+		//   1 = project summary
+		//   1 = blank after summary
+		//   2 = repos header (title + divider)
+		//   1 = footer divider
+		//   1 = legend line
+		//   2 = footer help (2 lines when workflows active, 1 otherwise — use 2 as worst case)
+		const fixedChrome = 10
+		available := v.height - v.workflowSummaryHeight() - fixedChrome
 		if available < 4 {
 			available = 4
 		}
@@ -1511,6 +1636,7 @@ func (v *ProjectView) KeyBindings() []components.KeyBinding {
 		{Key: "m", Description: "Create MR/PR for selected branch"},
 		{Key: "b", Description: "Check if branch exists in all repos"},
 		{Key: "w", Description: "Start new feature workflow (create worktrees)"},
+		{Key: "I", Description: "Import workflows from existing worktrees"},
 		{Key: "[/]", Description: "Switch between workflows"},
 		{Key: "a", Description: "Spawn agent for selected workflow"},
 		{Key: "p", Description: "Push all repos in selected workflow"},

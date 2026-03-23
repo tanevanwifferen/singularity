@@ -101,8 +101,9 @@ func NewAgentView(repoPath string, eng *engine.Engine, contextFiles ...[]string)
 // listHeight returns the height available for the agent list pane.
 func (v *AgentView) listHeight() int {
 	if v.selectedAgent != nil {
-		// Split mode: 4 lines of overhead (stats, divider, output header, output help)
-		available := v.height - 4
+		// Split mode: 6 lines of overhead (stats, blank separator, divider,
+		// output header, blank after viewport, hint/modal line)
+		available := v.height - 6
 		if available < 6 {
 			return max(available/2, 1)
 		}
@@ -116,8 +117,14 @@ func (v *AgentView) outputHeight() int {
 	if v.selectedAgent == nil {
 		return 0
 	}
-	available := v.height - 4
-	return max(available-v.listHeight(), 1)
+	available := v.height - 6
+	h := max(available-v.listHeight(), 1)
+	if v.showMessageInput {
+		// Modal box (top border + message + hint + bottom border = 4 lines)
+		// replaces the 1-line hint, so 3 extra lines are needed.
+		h = max(h-3, 1)
+	}
+	return h
 }
 
 // SetEngine sets the agent engine (allows late binding)
@@ -435,6 +442,7 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if item, idx := v.filter.SelectedItem(); idx >= 0 {
 				v.selectAgent(item)
+				v.focus = focusOutput
 			}
 			return v, nil
 
@@ -456,12 +464,15 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "c":
 			if v.engine != nil {
-				for _, a := range v.agents {
-					if a.State != engine.AgentRunning && a.State != engine.AgentStarting {
-						v.engine.RemoveAgent(a.ID)
+				if item, idx := v.filter.SelectedItem(); idx >= 0 {
+					if item.State != engine.AgentRunning && item.State != engine.AgentStarting {
+						v.engine.RemoveAgent(item.ID)
+						if v.selectedAgent != nil && v.selectedAgent.ID == item.ID {
+							v.deselectAgent()
+						}
+						v.loadAgents()
 					}
 				}
-				v.loadAgents()
 			}
 			return v, nil
 
@@ -561,7 +572,9 @@ func (v *AgentView) handleNewAgentInput(msg tea.KeyMsg) tea.Cmd {
 	case "ctrl+w":
 		v.newAgentTask = components.DeleteWordEnd(v.newAgentTask)
 	default:
-		if len(msg.Runes) == 1 {
+		if msg.Paste && len(msg.Runes) > 0 {
+			v.newAgentTask += string(msg.Runes)
+		} else if len(msg.Runes) == 1 {
 			r := msg.Runes[0]
 			if r >= 32 && r <= 126 {
 				v.newAgentTask += string(r)
@@ -593,7 +606,9 @@ func (v *AgentView) handleMessageInput(msg tea.KeyMsg) tea.Cmd {
 	case "ctrl+w":
 		v.messageInput = components.DeleteWordEnd(v.messageInput)
 	default:
-		if len(msg.Runes) == 1 {
+		if msg.Paste && len(msg.Runes) > 0 {
+			v.messageInput += string(msg.Runes)
+		} else if len(msg.Runes) == 1 {
 			r := msg.Runes[0]
 			if r >= 32 && r <= 126 {
 				v.messageInput += string(r)

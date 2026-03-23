@@ -480,6 +480,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.loadRepo()
 				return m, nil
 			}
+		case "P":
+			if !viewCapturesInput && m.proj != nil && !m.projectMode {
+				// Return to project overview
+				m.projectMode = true
+				m.loadProject()
+				return m, nil
+			}
 		case "T":
 			if !viewCapturesInput {
 				// Toggle theme
@@ -575,6 +582,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.repoPath = msg.RepoPath
 			m.projectMode = false
 			m.loadRepo()
+		} else if msg.ViewName == "Project" && m.proj != nil {
+			// Return to project overview
+			m.projectMode = true
+			m.loadProject()
 		} else {
 			// Simple view switch
 			if m.router != nil {
@@ -594,7 +605,7 @@ func (m Model) View() string {
 	// If router is initialized, use layout composition
 	if m.router != nil && m.layout != nil {
 		var base string
-		if m.projectMode && m.proj != nil {
+		if m.proj != nil {
 			base = m.layout.Render(m.router, m.repoInfo, m.router.View(), m.proj.Name)
 		} else {
 			base = m.layout.Render(m.router, m.repoInfo, m.router.View())

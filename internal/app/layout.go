@@ -130,6 +130,13 @@ func (l *Layout) RenderStatusBar(repoInfo *git.RepoInfo, viewName string, projec
 
 	// Left side: repo info or project name
 	if repoInfo != nil {
+		// If we also have a project name, show a back-to-overview hint
+		if projectName != "" {
+			status += l.mutedTextStyle.Render("P: ")
+			status += l.inactiveTabStyle.Render(projectName)
+			status += l.mutedTextStyle.Render(" · ")
+		}
+
 		repoName := filepath.Base(repoInfo.Path)
 		status += l.primaryTextStyle.Render(repoName)
 

@@ -284,8 +284,17 @@ func (f *Filter[T]) Update(msg tea.Msg) *Filter[T] {
 				return f
 			}
 
-			// Handle single character input
-			if len(msg.Runes) == 1 {
+			// Handle character input (single key or bracketed paste)
+			if msg.Paste && len(msg.Runes) > 0 {
+				pasted := string(msg.Runes)
+				if f.filterCursor == len(f.filterText) {
+					f.filterText += pasted
+				} else {
+					f.filterText = f.filterText[:f.filterCursor] + pasted + f.filterText[f.filterCursor:]
+				}
+				f.filterCursor += len([]rune(pasted))
+				f.applyFilter()
+			} else if len(msg.Runes) == 1 {
 				r := msg.Runes[0]
 				// Only accept printable characters
 				if r >= 32 && r <= 126 {
