@@ -15,7 +15,6 @@ import (
 	"git-frontend/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // pushDoneMsg signals that batch push has completed.
@@ -72,8 +71,9 @@ type ProjectView struct {
 	mrConfirmBranch string // branch name
 	mrResult        string // flash message for MR result
 
-	// Feature workflow state
-	activeWorkflow       *project.FeatureWorkflow
+	// Feature workflow state (multi-workflow)
+	workflows            []*project.FeatureWorkflow
+	selectedWorkflow     int    // index into workflows slice
 	showWorkflowStart    bool   // modal for entering branch name
 	workflowBranchName   string // input text
 	showWorkflowCleanup  bool   // confirmation modal
@@ -93,13 +93,12 @@ type ProjectView struct {
 	engine            *engine.Engine
 	showAgentPrompt   bool   // modal for entering agent task prompt
 	agentPromptText   string // the task text input
-	agentSpawnResults string // flash message showing which repos got agents
 
 	// Auto-refresh tick for live agent status
 	workflowTicking bool // true when we have an active tick loop
 
-	// Cached per-repo agent snapshots for rendering (updated on tick, not on full refresh)
-	repoAgentSnaps map[string]*engine.AgentSnapshot // repo name -> agent snapshot
+	// Cached workflow agent snapshot for rendering (updated on tick)
+	workflowAgentSnap *engine.AgentSnapshot
 
 	// Filter for tree list
 	filter *components.Filter[treeNode]
@@ -158,9 +157,17 @@ func (v *ProjectView) SetEngine(eng *engine.Engine) {
 	v.engine = eng
 }
 
-// HasActiveWorkflow returns true if a feature workflow is currently active.
+// HasActiveWorkflow returns true if any feature workflows exist.
 func (v *ProjectView) HasActiveWorkflow() bool {
-	return v.activeWorkflow != nil
+	return len(v.workflows) > 0
+}
+
+// currentWorkflow returns the currently selected workflow, or nil if none.
+func (v *ProjectView) currentWorkflow() *project.FeatureWorkflow {
+	if len(v.workflows) == 0 || v.selectedWorkflow >= len(v.workflows) {
+		return nil
+	}
+	return v.workflows[v.selectedWorkflow]
 }
 
 // discoverProject creates a project by auto-discovering git repos in a directory
@@ -271,11 +278,13 @@ func (v *ProjectView) selectedNode() *treeNode {
 	return &item
 }
 
-// spawnAgentsIntoWorktrees spawns an agent into each repo's worktree directory.
-// StartAgent returns immediately (it spawns a background process), so this is safe
-// to call synchronously in the Update handler.
-func (v *ProjectView) spawnAgentsIntoWorktrees(task string) {
-	if v.activeWorkflow == nil || v.engine == nil {
+// spawnAgentForWorkflow spawns a single agent at the workflow's BaseDir.
+// The BaseDir contains all repo worktrees as subdirectories, so the agent
+// can see all repos. StartAgent returns immediately (it spawns a background
+// process), so this is safe to call synchronously in the Update handler.
+func (v *ProjectView) spawnAgentForWorkflow(task string) {
+	wf := v.currentWorkflow()
+	if wf == nil || v.engine == nil {
 		return
 	}
 
@@ -285,51 +294,26 @@ func (v *ProjectView) spawnAgentsIntoWorktrees(task string) {
 		ctxFiles = v.proj.ContextFiles
 	}
 
-	// Count how many worktrees need agents
-	var needed int
-	for _, wr := range v.activeWorkflow.Repos {
-		if wr.WorktreeCreated {
-			needed++
-		}
-	}
-
-	// Check engine capacity
+	// Check engine capacity (just need 1 slot)
 	stats := v.engine.Stats()
 	available := stats.MaxAgents - stats.Active
-	if needed > available {
-		v.agentSpawnResults = fmt.Sprintf("Engine capacity exceeded: need %d agents but only %d/%d slots available",
-			needed, available, stats.MaxAgents)
+	if available < 1 {
+		v.workflowStatusMsg = fmt.Sprintf("Engine capacity exceeded: no slots available (%d/%d active)",
+			stats.Active, stats.MaxAgents)
 		return
 	}
 
-	// Sort repo names for deterministic output
-	names := make([]string, 0, len(v.activeWorkflow.Repos))
-	for name := range v.activeWorkflow.Repos {
-		names = append(names, name)
+	// Spawn a single agent at the workflow directory (contains all repo worktrees)
+	id, err := v.engine.StartAgent(wf.WorkflowDir(), task, engine.AgentOptions{
+		ContextFiles: ctxFiles,
+		SmartRoute:   true,
+	})
+	if err != nil {
+		v.workflowStatusMsg = fmt.Sprintf("Agent spawn failed: %v", err)
+	} else {
+		wf.SetWorkflowAgentID(id)
+		v.workflowStatusMsg = fmt.Sprintf("Agent %s spawned for workflow '%s'", id, wf.BranchName)
 	}
-	sort.Strings(names)
-
-	var results []string
-	for _, name := range names {
-		wr := v.activeWorkflow.Repos[name]
-		if !wr.WorktreeCreated {
-			results = append(results, fmt.Sprintf("  - %s: skipped (no worktree)", name))
-			continue
-		}
-
-		id, err := v.engine.StartAgent(wr.WorktreePath, task, engine.AgentOptions{
-			ContextFiles: ctxFiles,
-			SmartRoute:   true,
-		})
-		if err != nil {
-			results = append(results, fmt.Sprintf("  ✗ %s: %v", name, err))
-		} else {
-			v.activeWorkflow.SetAgentID(name, id)
-			results = append(results, fmt.Sprintf("  ✓ %s: agent %s", name, id))
-		}
-	}
-
-	v.agentSpawnResults = strings.Join(results, "\n")
 }
 
 // renderTreeNode renders a single tree item for the filter.
@@ -455,9 +439,6 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.workflowStatusMsg != "" {
 			v.workflowStatusMsg = ""
 		}
-		if v.agentSpawnResults != "" {
-			v.agentSpawnResults = ""
-		}
 		if v.pushResults != "" {
 			v.pushResults = ""
 		}
@@ -475,7 +456,8 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					v.showWorkflowStart = false
 					v.workflowBranchName = ""
 					wf := project.NewFeatureWorkflow(v.proj, branchName, baseDir)
-					v.activeWorkflow = wf
+					v.workflows = append(v.workflows, wf)
+					v.selectedWorkflow = len(v.workflows) - 1
 					v.showWorkflowStatus = true
 					v.recalcFilterHeight()
 					return v, func() tea.Msg {
@@ -508,12 +490,12 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.showAgentPrompt {
 			switch msg.String() {
 			case "enter":
-				if v.agentPromptText != "" && v.engine != nil && v.activeWorkflow != nil {
+				if v.agentPromptText != "" && v.engine != nil && v.currentWorkflow() != nil {
 					promptText := v.agentPromptText
 					v.showAgentPrompt = false
 					v.agentPromptText = ""
-					v.spawnAgentsIntoWorktrees(promptText)
-					v.refreshWorkflowAgentSnaps()
+					v.spawnAgentForWorkflow(promptText)
+					v.refreshWorkflowAgentSnap()
 					return v, v.ensureWorkflowTick()
 				} else {
 					v.showAgentPrompt = false
@@ -542,8 +524,11 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.showWorkflowCleanup {
 			switch msg.String() {
 			case "y":
-				wf := v.activeWorkflow
+				wf := v.currentWorkflow()
 				v.showWorkflowCleanup = false
+				if wf == nil {
+					return v, nil
+				}
 				return v, func() tea.Msg {
 					wf.RemoveAllWorktrees()
 					return RefreshDoneMsg{}
@@ -558,8 +543,11 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.showPushConfirm {
 			switch msg.String() {
 			case "y":
-				wf := v.activeWorkflow
+				wf := v.currentWorkflow()
 				v.showPushConfirm = false
+				if wf == nil {
+					return v, nil
+				}
 				return v, func() tea.Msg {
 					wf.PushAll()
 					return pushDoneMsg{}
@@ -574,8 +562,11 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.showBatchMRConfirm {
 			switch msg.String() {
 			case "y":
-				wf := v.activeWorkflow
+				wf := v.currentWorkflow()
 				v.showBatchMRConfirm = false
+				if wf == nil {
+					return v, nil
+				}
 				return v, func() tea.Msg {
 					wf.CreateAllMRs()
 					return mrDoneMsg{}
@@ -734,16 +725,18 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.showWorkflowStart = true
 			v.workflowBranchName = ""
 		case "D":
-			// Cleanup feature workflow
-			if v.activeWorkflow != nil {
+			// Cleanup selected workflow
+			wf := v.currentWorkflow()
+			if wf != nil {
 				v.showWorkflowCleanup = true
 			}
 		case "a":
-			// Spawn agents into worktrees (only when workflow is active with worktrees)
-			if v.activeWorkflow != nil && v.engine != nil {
+			// Spawn agent for selected workflow (only when workflow has worktrees)
+			wf := v.currentWorkflow()
+			if wf != nil && v.engine != nil {
 				// Check that at least one worktree was created
 				hasWorktree := false
-				for _, wr := range v.activeWorkflow.Repos {
+				for _, wr := range wf.Repos {
 					if wr.WorktreeCreated {
 						hasWorktree = true
 						break
@@ -753,17 +746,18 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					v.showAgentPrompt = true
 					v.agentPromptText = ""
 				} else {
-					v.agentSpawnResults = "No worktrees created yet -- create worktrees first"
+					v.workflowStatusMsg = "No worktrees created yet -- create worktrees first"
 				}
 			}
 		case "p":
-			// Batch push all repos in the workflow
-			if v.activeWorkflow == nil {
+			// Batch push all repos in the selected workflow
+			wf := v.currentWorkflow()
+			if wf == nil {
 				v.pushResults = "No active workflow"
 			} else {
 				// Check if any worktree has been created
 				hasWorktree := false
-				for _, wr := range v.activeWorkflow.Repos {
+				for _, wr := range wf.Repos {
 					if wr.WorktreeCreated {
 						hasWorktree = true
 						break
@@ -776,13 +770,14 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "M":
-			// Batch create MRs for all pushed repos
-			if v.activeWorkflow == nil {
+			// Batch create MRs for all pushed repos in selected workflow
+			wf := v.currentWorkflow()
+			if wf == nil {
 				v.mrResults = "No active workflow"
 			} else {
 				// Check if any repo has been pushed
 				hasPushed := false
-				for _, wr := range v.activeWorkflow.Repos {
+				for _, wr := range wf.Repos {
 					if wr.Pushed {
 						hasPushed = true
 						break
@@ -793,6 +788,18 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					v.showBatchMRConfirm = true
 				}
+			}
+		case "[":
+			// Switch to previous workflow
+			if len(v.workflows) > 1 && v.selectedWorkflow > 0 {
+				v.selectedWorkflow--
+				v.refreshWorkflowAgentSnap()
+			}
+		case "]":
+			// Switch to next workflow
+			if len(v.workflows) > 1 && v.selectedWorkflow < len(v.workflows)-1 {
+				v.selectedWorkflow++
+				v.refreshWorkflowAgentSnap()
 			}
 		case "W":
 			// Toggle workflow status panel
@@ -811,23 +818,24 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case RefreshDoneMsg:
 		v.loading = false
-		// Refresh agent snapshots when workflow is active
-		v.refreshWorkflowAgentSnaps()
-		// Generate workflow flash messages from active workflow state
-		if v.activeWorkflow != nil {
-			st := v.activeWorkflow.Status()
+		// Refresh agent snapshot when workflow is active
+		v.refreshWorkflowAgentSnap()
+		// Generate workflow flash messages from current workflow state
+		wf := v.currentWorkflow()
+		if wf != nil {
+			st := wf.Status()
 			switch st.State {
 			case project.WorkflowActive:
 				// Just finished creating worktrees
 				var lines []string
 				// Sort repo names for deterministic output
-				names := make([]string, 0, len(v.activeWorkflow.Repos))
-				for name := range v.activeWorkflow.Repos {
+				names := make([]string, 0, len(wf.Repos))
+				for name := range wf.Repos {
 					names = append(names, name)
 				}
 				sort.Strings(names)
 				for _, name := range names {
-					wr := v.activeWorkflow.Repos[name]
+					wr := wf.Repos[name]
 					if wr.Error != "" {
 						lines = append(lines, fmt.Sprintf("  ✗ %s: %s", name, wr.Error))
 					} else if wr.WorktreeCreated {
@@ -838,25 +846,23 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					v.workflowStatusMsg = strings.Join(lines, "\n")
 				}
 			case project.WorkflowDone:
-				// Cleanup finished
-				v.workflowStatusMsg = fmt.Sprintf("Worktrees for '%s' removed", v.activeWorkflow.BranchName)
-				v.activeWorkflow = nil
-				v.showWorkflowStatus = false
-				v.repoAgentSnaps = nil
-				v.recalcFilterHeight()
+				// Cleanup finished -- remove this workflow from the slice
+				v.workflowStatusMsg = fmt.Sprintf("Worktrees for '%s' removed", wf.BranchName)
+				v.removeCurrentWorkflow()
 			}
 		}
 
 	case pushDoneMsg:
-		if v.activeWorkflow != nil {
+		wf := v.currentWorkflow()
+		if wf != nil {
 			var lines []string
-			names := make([]string, 0, len(v.activeWorkflow.Repos))
-			for name := range v.activeWorkflow.Repos {
+			names := make([]string, 0, len(wf.Repos))
+			for name := range wf.Repos {
 				names = append(names, name)
 			}
 			sort.Strings(names)
 			for _, name := range names {
-				wr := v.activeWorkflow.Repos[name]
+				wr := wf.Repos[name]
 				if wr.Error != "" {
 					lines = append(lines, fmt.Sprintf("  ✗ %s: %s", name, wr.Error))
 				} else if wr.Pushed {
@@ -869,15 +875,16 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case mrDoneMsg:
-		if v.activeWorkflow != nil {
+		wf := v.currentWorkflow()
+		if wf != nil {
 			var lines []string
-			names := make([]string, 0, len(v.activeWorkflow.Repos))
-			for name := range v.activeWorkflow.Repos {
+			names := make([]string, 0, len(wf.Repos))
+			for name := range wf.Repos {
 				names = append(names, name)
 			}
 			sort.Strings(names)
 			for _, name := range names {
-				wr := v.activeWorkflow.Repos[name]
+				wr := wf.Repos[name]
 				if !wr.Pushed {
 					lines = append(lines, fmt.Sprintf("  ⊘ %s: skipped (not pushed)", name))
 				} else if wr.Error != "" {
@@ -892,8 +899,8 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case WorkflowTickMsg:
-		// Refresh agent snapshots without full repo refresh
-		v.refreshWorkflowAgentSnaps()
+		// Refresh agent snapshot without full repo refresh
+		v.refreshWorkflowAgentSnap()
 		if v.hasRunningAgents() {
 			return v, v.workflowTickCmd()
 		}
@@ -1028,7 +1035,7 @@ func (v *ProjectView) View() string {
 
 	// Agent prompt modal
 	if v.showAgentPrompt {
-		s.WriteString(th.StatsStyle.Render(" Spawn Agents into Worktrees "))
+		s.WriteString(th.StatsStyle.Render(" Spawn Agent for Workflow "))
 		s.WriteString("\n")
 		s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
 		s.WriteString("\n\n")
@@ -1036,42 +1043,51 @@ func (v *ProjectView) View() string {
 		s.WriteString(th.InfoStyle.Render(v.agentPromptText))
 		s.WriteString(th.MutedTextStyle.Render("_"))
 		s.WriteString("\n\n")
-		s.WriteString(th.Help.Render("Enter: Spawn agents   Esc: Cancel   Ctrl+W: Delete word"))
+		s.WriteString(th.Help.Render("Enter: Spawn agent   Esc: Cancel   Ctrl+W: Delete word"))
 		s.WriteString("\n\n")
 	}
 
 	// Workflow cleanup confirmation
-	if v.showWorkflowCleanup && v.activeWorkflow != nil {
-		s.WriteString(th.DashboardAccentStyle.Render(" Remove all worktrees? "))
-		s.WriteString("\n\n")
-		s.WriteString(th.Help.Render("  Branch: "))
-		s.WriteString(th.InfoStyle.Render(v.activeWorkflow.BranchName))
-		s.WriteString("\n\n")
-		s.WriteString(th.Help.Render(fmt.Sprintf("  Remove all worktrees for '%s'? (y/n)", v.activeWorkflow.BranchName)))
-		s.WriteString("\n\n")
+	if v.showWorkflowCleanup {
+		wf := v.currentWorkflow()
+		if wf != nil {
+			s.WriteString(th.DashboardAccentStyle.Render(" Remove all worktrees? "))
+			s.WriteString("\n\n")
+			s.WriteString(th.Help.Render("  Branch: "))
+			s.WriteString(th.InfoStyle.Render(wf.BranchName))
+			s.WriteString("\n\n")
+			s.WriteString(th.Help.Render(fmt.Sprintf("  Remove all worktrees for '%s'? (y/n)", wf.BranchName)))
+			s.WriteString("\n\n")
+		}
 	}
 
 	// Batch push confirmation
-	if v.showPushConfirm && v.activeWorkflow != nil {
-		s.WriteString(th.DashboardAccentStyle.Render(" Push all repos? "))
-		s.WriteString("\n\n")
-		s.WriteString(th.Help.Render("  Branch: "))
-		s.WriteString(th.InfoStyle.Render(v.activeWorkflow.BranchName))
-		s.WriteString("\n\n")
-		s.WriteString(th.Help.Render(fmt.Sprintf("  Push all repos on branch '%s'? [y] Yes [n] No", v.activeWorkflow.BranchName)))
-		s.WriteString("\n\n")
+	if v.showPushConfirm {
+		wf := v.currentWorkflow()
+		if wf != nil {
+			s.WriteString(th.DashboardAccentStyle.Render(" Push all repos? "))
+			s.WriteString("\n\n")
+			s.WriteString(th.Help.Render("  Branch: "))
+			s.WriteString(th.InfoStyle.Render(wf.BranchName))
+			s.WriteString("\n\n")
+			s.WriteString(th.Help.Render(fmt.Sprintf("  Push all repos on branch '%s'? [y] Yes [n] No", wf.BranchName)))
+			s.WriteString("\n\n")
+		}
 	}
 
 	// Batch MR creation confirmation
-	if v.showBatchMRConfirm && v.activeWorkflow != nil {
-		st := v.activeWorkflow.Status()
-		s.WriteString(th.DashboardAccentStyle.Render(" Create MRs/PRs? "))
-		s.WriteString("\n\n")
-		s.WriteString(th.Help.Render("  Branch: "))
-		s.WriteString(th.InfoStyle.Render(v.activeWorkflow.BranchName))
-		s.WriteString("\n\n")
-		s.WriteString(th.Help.Render(fmt.Sprintf("  Create MRs/PRs for %d pushed repos? [y] Yes [n] No", st.Pushed)))
-		s.WriteString("\n\n")
+	if v.showBatchMRConfirm {
+		wf := v.currentWorkflow()
+		if wf != nil {
+			st := wf.Status()
+			s.WriteString(th.DashboardAccentStyle.Render(" Create MRs/PRs? "))
+			s.WriteString("\n\n")
+			s.WriteString(th.Help.Render("  Branch: "))
+			s.WriteString(th.InfoStyle.Render(wf.BranchName))
+			s.WriteString("\n\n")
+			s.WriteString(th.Help.Render(fmt.Sprintf("  Create MRs/PRs for %d pushed repos? [y] Yes [n] No", st.Pushed)))
+			s.WriteString("\n\n")
+		}
 	}
 
 	// Workflow status panel (box-drawing bordered)
@@ -1081,19 +1097,6 @@ func (v *ProjectView) View() string {
 	if v.workflowStatusMsg != "" {
 		for _, line := range strings.Split(v.workflowStatusMsg, "\n") {
 			if strings.Contains(line, "✓") || strings.HasPrefix(line, "Worktrees for") {
-				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
-			} else {
-				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
-			}
-			s.WriteString("\n")
-		}
-		s.WriteString("\n")
-	}
-
-	// Agent spawn results flash message
-	if v.agentSpawnResults != "" {
-		for _, line := range strings.Split(v.agentSpawnResults, "\n") {
-			if strings.Contains(line, "✓") {
 				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
 			} else {
 				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
@@ -1188,7 +1191,7 @@ func (v *ProjectView) View() string {
 	s.WriteString("\n")
 	s.WriteString(th.Help.Render("⚡current  ✓synced  ↑ahead  ↓behind  ⊘no remote  ●dirty  ✗error"))
 	s.WriteString("\n")
-	s.WriteString(th.Help.Render("↑↓: Navigate  Enter: Expand/collapse  o: Open  c: Checkout  n: New branch  m: MR/PR  b: Check  w: Workflow  a: Agents  p: Push all  M: Create MRs  D: Cleanup  W: Status  /: Filter  r: Refresh"))
+	s.WriteString(th.Help.Render("↑↓: Navigate  Enter: Expand/collapse  o: Open  c: Checkout  n: New branch  m: MR/PR  b: Check  w: Workflow  [/]: Switch workflow  a: Agent  p: Push all  M: Create MRs  D: Cleanup  W: Status  /: Filter  r: Refresh"))
 
 	return s.String()
 }
@@ -1204,16 +1207,17 @@ func (v *ProjectView) workflowTickCmd() tea.Cmd {
 // WorkflowTickMsg is sent periodically to refresh workflow agent status.
 type WorkflowTickMsg struct{}
 
-// hasRunningAgents checks if any workflow repo has an agent that is currently running.
+// hasRunningAgents checks if any workflow has an agent that is currently running.
 func (v *ProjectView) hasRunningAgents() bool {
-	if v.activeWorkflow == nil || v.engine == nil {
+	if v.engine == nil {
 		return false
 	}
-	for _, wr := range v.activeWorkflow.Repos {
-		if wr.AgentID == "" {
+	for _, wf := range v.workflows {
+		agentID := wf.GetWorkflowAgentID()
+		if agentID == "" {
 			continue
 		}
-		agent := v.engine.GetAgent(wr.AgentID)
+		agent := v.engine.GetAgent(agentID)
 		if agent == nil {
 			continue
 		}
@@ -1225,35 +1229,57 @@ func (v *ProjectView) hasRunningAgents() bool {
 	return false
 }
 
-// refreshWorkflowAgentSnaps updates the cached agent snapshots without doing a full repo refresh.
-func (v *ProjectView) refreshWorkflowAgentSnaps() {
-	if v.activeWorkflow == nil || v.engine == nil {
-		v.repoAgentSnaps = nil
+// refreshWorkflowAgentSnap updates the cached agent snapshot for the current workflow.
+func (v *ProjectView) refreshWorkflowAgentSnap() {
+	wf := v.currentWorkflow()
+	if wf == nil || v.engine == nil {
+		v.workflowAgentSnap = nil
 		return
 	}
-	snaps := make(map[string]*engine.AgentSnapshot)
-	for name, wr := range v.activeWorkflow.Repos {
-		if wr.AgentID == "" {
-			continue
-		}
-		agent := v.engine.GetAgent(wr.AgentID)
-		if agent == nil {
-			continue
-		}
-		s := agent.Snapshot()
-		snaps[name] = &s
+	agentID := wf.GetWorkflowAgentID()
+	if agentID == "" {
+		v.workflowAgentSnap = nil
+		return
 	}
-	v.repoAgentSnaps = snaps
+	agent := v.engine.GetAgent(agentID)
+	if agent == nil {
+		v.workflowAgentSnap = nil
+		return
+	}
+	s := agent.Snapshot()
+	v.workflowAgentSnap = &s
+}
+
+// removeCurrentWorkflow removes the currently selected workflow from the slice and adjusts selection.
+func (v *ProjectView) removeCurrentWorkflow() {
+	if len(v.workflows) == 0 {
+		return
+	}
+	idx := v.selectedWorkflow
+	v.workflows = append(v.workflows[:idx], v.workflows[idx+1:]...)
+	if v.selectedWorkflow >= len(v.workflows) && v.selectedWorkflow > 0 {
+		v.selectedWorkflow--
+	}
+	if len(v.workflows) == 0 {
+		v.showWorkflowStatus = false
+		v.workflowAgentSnap = nil
+	}
+	v.recalcFilterHeight()
 }
 
 // workflowPanelHeight returns the number of lines the workflow status panel occupies.
 func (v *ProjectView) workflowPanelHeight() int {
-	if !v.showWorkflowStatus || v.activeWorkflow == nil {
+	if !v.showWorkflowStatus || len(v.workflows) == 0 {
 		return 0
 	}
-	// 1 (top border+header) + 1 (summary bar) + 1 (blank) + N (per-repo) + 1 (bottom border) + 1 (blank after)
-	repoCount := len(v.activeWorkflow.Repos)
-	return 3 + repoCount + 2
+	// 1 (header) + N (per-workflow line) + 1 (blank separator)
+	// + for the selected workflow: 1 (summary) + 1 (agent) + repos + 1 (border) + 1 (blank)
+	wf := v.currentWorkflow()
+	if wf == nil {
+		return 2 + len(v.workflows)
+	}
+	repoCount := len(wf.Repos)
+	return 3 + len(v.workflows) + repoCount + 3
 }
 
 // ensureWorkflowTick starts the tick loop if agents are running and we aren't already ticking.
@@ -1267,10 +1293,11 @@ func (v *ProjectView) ensureWorkflowTick() tea.Cmd {
 
 // repoWorkflowIndicators returns inline status indicators for a repo row when a workflow is active.
 func (v *ProjectView) repoWorkflowIndicators(repoName string) string {
-	if v.activeWorkflow == nil {
+	wf := v.currentWorkflow()
+	if wf == nil {
 		return ""
 	}
-	wr, ok := v.activeWorkflow.Repos[repoName]
+	wr, ok := wf.Repos[repoName]
 	if !ok {
 		return ""
 	}
@@ -1281,21 +1308,6 @@ func (v *ProjectView) repoWorkflowIndicators(repoName string) string {
 	// Worktree indicator
 	if wr.WorktreeCreated {
 		parts = append(parts, th.BranchStyle.Render("W"))
-	}
-
-	// Agent indicator
-	if wr.AgentID != "" {
-		snap, ok := v.repoAgentSnaps[repoName]
-		if ok && snap != nil {
-			switch snap.State {
-			case engine.AgentRunning, engine.AgentStarting, engine.AgentRouting:
-				parts = append(parts, lipgloss.NewStyle().Foreground(th.Info).Render("●"))
-			case engine.AgentComplete:
-				parts = append(parts, th.StatsStyle.Render("✓"))
-			case engine.AgentError, engine.AgentKilled:
-				parts = append(parts, th.DashboardErrorStyle.Render("✗"))
-			}
-		}
 	}
 
 	// Push indicator
@@ -1314,14 +1326,13 @@ func (v *ProjectView) repoWorkflowIndicators(repoName string) string {
 	return "  " + strings.Join(parts, " ")
 }
 
-// renderWorkflowPanel renders the enhanced workflow status panel with box-drawing borders.
+// renderWorkflowPanel renders the workflow status panel showing all workflows.
 func (v *ProjectView) renderWorkflowPanel() string {
-	if !v.showWorkflowStatus || v.activeWorkflow == nil {
+	if !v.showWorkflowStatus || len(v.workflows) == 0 {
 		return ""
 	}
 
 	th := theme.GetTheme()
-	st := v.activeWorkflow.Status()
 
 	// Calculate inner width
 	innerW := v.width - 4
@@ -1332,7 +1343,7 @@ func (v *ProjectView) renderWorkflowPanel() string {
 	var s strings.Builder
 
 	// Header line with top border
-	headerText := fmt.Sprintf(" Feature Workflow: %s ", st.BranchName)
+	headerText := fmt.Sprintf(" Workflows (%d) ", len(v.workflows))
 	dashCount := innerW - len(headerText) - 1
 	if dashCount < 0 {
 		dashCount = 0
@@ -1340,160 +1351,190 @@ func (v *ProjectView) renderWorkflowPanel() string {
 	s.WriteString(th.BorderStyle.Render(fmt.Sprintf(" ╭%s%s╮", headerText, strings.Repeat("─", dashCount))))
 	s.WriteString("\n")
 
-	// Summary bar: State | Worktrees | Agents | Pushed | MRs
-	// Count agent states
-	agentsRunning := 0
-	agentsDone := 0
-	agentsError := 0
-	for name := range v.activeWorkflow.Repos {
-		snap, ok := v.repoAgentSnaps[name]
-		if !ok || snap == nil {
-			continue
-		}
-		switch snap.State {
-		case engine.AgentRunning, engine.AgentStarting, engine.AgentRouting:
-			agentsRunning++
-		case engine.AgentComplete:
-			agentsDone++
-		case engine.AgentError, engine.AgentKilled:
-			agentsError++
-		}
-	}
+	// List all workflows, highlighting the selected one
+	for i, wf := range v.workflows {
+		st := wf.Status()
 
-	stateLabel := st.State.String()
-	summaryParts := []string{
-		fmt.Sprintf("State: %s", stateLabel),
-		fmt.Sprintf("Worktrees: %d/%d", st.WorktreesCreated, st.TotalRepos),
-	}
-
-	// Agent summary with color
-	totalAgents := agentsRunning + agentsDone + agentsError
-	if totalAgents > 0 {
-		agentStr := "Agents:"
-		if agentsRunning > 0 {
-			agentStr += fmt.Sprintf(" %d●", agentsRunning)
-		}
-		if agentsDone > 0 {
-			agentStr += fmt.Sprintf(" %d✓", agentsDone)
-		}
-		if agentsError > 0 {
-			agentStr += fmt.Sprintf(" %d✗", agentsError)
-		}
-		summaryParts = append(summaryParts, agentStr)
-	}
-
-	summaryParts = append(summaryParts,
-		fmt.Sprintf("Pushed: %d/%d", st.Pushed, st.TotalRepos),
-		fmt.Sprintf("MRs: %d/%d", st.MRsCreated, st.TotalRepos),
-	)
-
-	summaryLine := strings.Join(summaryParts, "  |  ")
-	padded := fmt.Sprintf(" %-*s", innerW, summaryLine)
-	if len(padded) > innerW+1 {
-		padded = padded[:innerW+1]
-	}
-	s.WriteString(th.BorderStyle.Render(" │"))
-	s.WriteString(th.StatsStyle.Render(padded))
-	s.WriteString(th.BorderStyle.Render("│"))
-	s.WriteString("\n")
-
-	// Blank separator
-	s.WriteString(th.BorderStyle.Render(fmt.Sprintf(" │%-*s│", innerW+1, "")))
-	s.WriteString("\n")
-
-	// Per-repo detail lines (sorted)
-	names := make([]string, 0, len(v.activeWorkflow.Repos))
-	for name := range v.activeWorkflow.Repos {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	for _, name := range names {
-		wr := v.activeWorkflow.Repos[name]
 		var line strings.Builder
-
-		// Repo name (left-padded)
-		repoLabel := fmt.Sprintf("  %-16s", name)
-		if len(name) > 16 {
-			repoLabel = "  " + name[:16]
-		}
-		line.WriteString(repoLabel)
-
-		// Worktree + agent icons
-		if wr.WorktreeCreated {
-			line.WriteString(" ")
-			line.WriteString("W")
+		// Selection indicator
+		if i == v.selectedWorkflow {
+			line.WriteString(" > ")
 		} else {
-			line.WriteString("  ")
+			line.WriteString("   ")
 		}
 
-		// Agent detail
-		if wr.AgentID != "" {
-			snap, ok := v.repoAgentSnaps[name]
-			if ok && snap != nil {
+		// Branch name
+		line.WriteString(st.BranchName)
+
+		// State
+		line.WriteString(fmt.Sprintf("  [%s]", st.State.String()))
+
+		// Worktree count
+		line.WriteString(fmt.Sprintf("  W:%d/%d", st.WorktreesCreated, st.TotalRepos))
+
+		// Agent status
+		agentID := wf.GetWorkflowAgentID()
+		if agentID != "" {
+			agent := v.engine.GetAgent(agentID)
+			if agent != nil {
+				snap := agent.Snapshot()
 				switch snap.State {
 				case engine.AgentRunning, engine.AgentStarting, engine.AgentRouting:
-					elapsed := time.Since(snap.CreatedAt).Truncate(time.Second)
-					line.WriteString(fmt.Sprintf("  ● %s %s", snap.State.String(), formatDuration(elapsed)))
+					line.WriteString("  ●")
 				case engine.AgentComplete:
-					costStr := ""
-					if snap.TotalCostUSD > 0 {
-						costStr = fmt.Sprintf(" ($%.2f)", snap.TotalCostUSD)
-					}
-					line.WriteString(fmt.Sprintf("  ✓ done%s", costStr))
-				case engine.AgentError:
-					line.WriteString("  ✗ error")
-				case engine.AgentKilled:
-					line.WriteString("  ✗ killed")
-				default:
-					line.WriteString("  " + snap.State.String())
+					line.WriteString("  ✓")
+				case engine.AgentError, engine.AgentKilled:
+					line.WriteString("  ✗")
 				}
-			} else {
-				line.WriteString("  - (not found)")
 			}
-		} else if wr.WorktreeCreated {
-			line.WriteString("  -")
 		}
 
-		// Push status
-		if wr.Pushed {
-			line.WriteString("  ↑pushed")
+		// Push/MR counts
+		if st.Pushed > 0 {
+			line.WriteString(fmt.Sprintf("  ↑%d", st.Pushed))
 		}
-
-		// MR status
-		if wr.MRURL != "" {
-			mrLabel := wr.MRURL
-			// Truncate long URLs
-			maxURL := innerW - len(line.String()) - 8
-			if maxURL < 10 {
-				maxURL = 10
-			}
-			if len(mrLabel) > maxURL {
-				mrLabel = mrLabel[:maxURL-3] + "..."
-			}
-			line.WriteString(fmt.Sprintf("  MR %s", mrLabel))
-		}
-
-		// Error
-		if wr.Error != "" && !wr.WorktreeCreated {
-			line.WriteString(fmt.Sprintf("  err: %s", wr.Error))
+		if st.MRsCreated > 0 {
+			line.WriteString(fmt.Sprintf("  MR:%d", st.MRsCreated))
 		}
 
 		content := line.String()
-		padded := fmt.Sprintf(" %-*s", innerW, content)
+		padded := fmt.Sprintf("%-*s", innerW+1, content)
 		if len(padded) > innerW+1 {
 			padded = padded[:innerW+1]
 		}
 
-		// Apply per-line styling based on state
 		s.WriteString(th.BorderStyle.Render(" │"))
-		if wr.Error != "" && !wr.WorktreeCreated {
-			s.WriteString(th.DashboardErrorStyle.Render(padded))
+		if i == v.selectedWorkflow {
+			s.WriteString(th.DashboardAccentStyle.Render(padded))
 		} else {
 			s.WriteString(padded)
 		}
 		s.WriteString(th.BorderStyle.Render("│"))
 		s.WriteString("\n")
+	}
+
+	// Separator
+	s.WriteString(th.BorderStyle.Render(fmt.Sprintf(" │%-*s│", innerW+1, "")))
+	s.WriteString("\n")
+
+	// Detail for selected workflow
+	wf := v.currentWorkflow()
+	if wf != nil {
+		st := wf.Status()
+
+		// Summary bar: State | Worktrees | Agent | Pushed | MRs
+		summaryParts := []string{
+			fmt.Sprintf("State: %s", st.State.String()),
+			fmt.Sprintf("Worktrees: %d/%d", st.WorktreesCreated, st.TotalRepos),
+		}
+
+		// Agent summary
+		agentID := wf.GetWorkflowAgentID()
+		if agentID != "" {
+			snap := v.workflowAgentSnap
+			if snap != nil {
+				switch snap.State {
+				case engine.AgentRunning, engine.AgentStarting, engine.AgentRouting:
+					elapsed := time.Since(snap.CreatedAt).Truncate(time.Second)
+					summaryParts = append(summaryParts, fmt.Sprintf("Agent: ● %s %s", snap.State.String(), formatDuration(elapsed)))
+				case engine.AgentComplete:
+					costStr := ""
+					if snap.TotalCostUSD > 0 {
+						costStr = fmt.Sprintf(" ($%.2f)", snap.TotalCostUSD)
+					}
+					summaryParts = append(summaryParts, fmt.Sprintf("Agent: ✓ done%s", costStr))
+				case engine.AgentError:
+					summaryParts = append(summaryParts, "Agent: ✗ error")
+				case engine.AgentKilled:
+					summaryParts = append(summaryParts, "Agent: ✗ killed")
+				default:
+					summaryParts = append(summaryParts, fmt.Sprintf("Agent: %s", snap.State.String()))
+				}
+			} else {
+				summaryParts = append(summaryParts, "Agent: - (not found)")
+			}
+		}
+
+		summaryParts = append(summaryParts,
+			fmt.Sprintf("Pushed: %d/%d", st.Pushed, st.TotalRepos),
+			fmt.Sprintf("MRs: %d/%d", st.MRsCreated, st.TotalRepos),
+		)
+
+		summaryLine := strings.Join(summaryParts, "  |  ")
+		padded := fmt.Sprintf(" %-*s", innerW, summaryLine)
+		if len(padded) > innerW+1 {
+			padded = padded[:innerW+1]
+		}
+		s.WriteString(th.BorderStyle.Render(" │"))
+		s.WriteString(th.StatsStyle.Render(padded))
+		s.WriteString(th.BorderStyle.Render("│"))
+		s.WriteString("\n")
+
+		// Per-repo detail lines (sorted)
+		names := make([]string, 0, len(wf.Repos))
+		for name := range wf.Repos {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+
+		for _, name := range names {
+			wr := wf.Repos[name]
+			var line strings.Builder
+
+			// Repo name (left-padded)
+			repoLabel := fmt.Sprintf("  %-16s", name)
+			if len(name) > 16 {
+				repoLabel = "  " + name[:16]
+			}
+			line.WriteString(repoLabel)
+
+			// Worktree icon
+			if wr.WorktreeCreated {
+				line.WriteString(" W")
+			} else {
+				line.WriteString("  ")
+			}
+
+			// Push status
+			if wr.Pushed {
+				line.WriteString("  ↑pushed")
+			}
+
+			// MR status
+			if wr.MRURL != "" {
+				mrLabel := wr.MRURL
+				// Truncate long URLs
+				maxURL := innerW - len(line.String()) - 8
+				if maxURL < 10 {
+					maxURL = 10
+				}
+				if len(mrLabel) > maxURL {
+					mrLabel = mrLabel[:maxURL-3] + "..."
+				}
+				line.WriteString(fmt.Sprintf("  MR %s", mrLabel))
+			}
+
+			// Error
+			if wr.Error != "" && !wr.WorktreeCreated {
+				line.WriteString(fmt.Sprintf("  err: %s", wr.Error))
+			}
+
+			content := line.String()
+			padded := fmt.Sprintf(" %-*s", innerW, content)
+			if len(padded) > innerW+1 {
+				padded = padded[:innerW+1]
+			}
+
+			// Apply per-line styling based on state
+			s.WriteString(th.BorderStyle.Render(" │"))
+			if wr.Error != "" && !wr.WorktreeCreated {
+				s.WriteString(th.DashboardErrorStyle.Render(padded))
+			} else {
+				s.WriteString(padded)
+			}
+			s.WriteString(th.BorderStyle.Render("│"))
+			s.WriteString("\n")
+		}
 	}
 
 	// Bottom border
@@ -1505,7 +1546,7 @@ func (v *ProjectView) renderWorkflowPanel() string {
 
 // ShortHelp returns a short help string.
 func (v *ProjectView) ShortHelp() string {
-	return "↑↓: Navigate  Enter: Expand/collapse  o: Open  c: Checkout  n: New branch  m: MR/PR  b: Check  w: Workflow  a: Agents  p: Push all  M: Create MRs  D: Cleanup  W: Status  /: Filter  r: Refresh"
+	return "↑↓: Navigate  Enter: Expand/collapse  o: Open  c: Checkout  n: New branch  m: MR/PR  b: Check  w: Workflow  [/]: Switch workflow  a: Agent  p: Push all  M: Create MRs  D: Cleanup  W: Status  /: Filter  r: Refresh"
 }
 
 // CapturesInput returns true when the view is in an input mode.
@@ -1516,7 +1557,7 @@ func (v *ProjectView) CapturesInput() bool {
 // CapturesKey returns true for keys this view handles directly.
 func (v *ProjectView) CapturesKey(key string) bool {
 	switch key {
-	case "r", "o", "b", "c", "n", "m", "w", "a", "p", "D", "M", "W", "enter", "/", "j", "k", "up", "down":
+	case "r", "o", "b", "c", "n", "m", "w", "a", "p", "D", "M", "W", "[", "]", "enter", "/", "j", "k", "up", "down":
 		return true
 	}
 	return false
@@ -1566,11 +1607,12 @@ func (v *ProjectView) KeyBindings() []components.KeyBinding {
 		{Key: "n", Description: "Create new branch across all repos"},
 		{Key: "m", Description: "Create MR/PR for selected branch"},
 		{Key: "b", Description: "Check if branch exists in all repos"},
-		{Key: "w", Description: "Start feature workflow (create worktrees)"},
-		{Key: "a", Description: "Spawn agents into worktrees"},
-		{Key: "p", Description: "Push all repos in workflow"},
+		{Key: "w", Description: "Start new feature workflow (create worktrees)"},
+		{Key: "[/]", Description: "Switch between workflows"},
+		{Key: "a", Description: "Spawn agent for selected workflow"},
+		{Key: "p", Description: "Push all repos in selected workflow"},
 		{Key: "M", Description: "Create MRs/PRs for all pushed repos"},
-		{Key: "D", Description: "Cleanup feature workflow (remove worktrees)"},
+		{Key: "D", Description: "Cleanup selected workflow (remove worktrees)"},
 		{Key: "W", Description: "Toggle workflow status panel"},
 		{Key: "/", Description: "Filter"},
 		{Key: "r", Description: "Refresh all repos"},

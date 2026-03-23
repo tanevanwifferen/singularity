@@ -200,7 +200,7 @@ func TestWorkflowGetRepo(t *testing.T) {
 	}
 }
 
-func TestWorkflowSetAgentID(t *testing.T) {
+func TestWorkflowSetWorkflowAgentID(t *testing.T) {
 	proj := NewProject(ProjectDef{
 		Name: "Test",
 		Repos: []RepoDef{
@@ -210,14 +210,37 @@ func TestWorkflowSetAgentID(t *testing.T) {
 
 	fw := NewFeatureWorkflow(proj, "test-branch", "/tmp/wt")
 
-	fw.SetAgentID("web", "agent-123")
-	wr := fw.GetRepo("web")
-	if wr.AgentID != "agent-123" {
-		t.Errorf("expected agent ID 'agent-123', got %q", wr.AgentID)
+	if fw.GetWorkflowAgentID() != "" {
+		t.Errorf("expected empty agent ID initially, got %q", fw.GetWorkflowAgentID())
 	}
 
-	// Setting agent ID on nonexistent repo should not panic
-	fw.SetAgentID("nonexistent", "agent-456")
+	fw.SetWorkflowAgentID("agent-123")
+	if fw.GetWorkflowAgentID() != "agent-123" {
+		t.Errorf("expected agent ID 'agent-123', got %q", fw.GetWorkflowAgentID())
+	}
+
+	// Status should reflect the agent
+	status := fw.Status()
+	if status.AgentID != "agent-123" {
+		t.Errorf("expected status agent ID 'agent-123', got %q", status.AgentID)
+	}
+	if !status.HasAgent {
+		t.Error("expected HasAgent to be true")
+	}
+}
+
+func TestWorkflowDir(t *testing.T) {
+	proj := NewProject(ProjectDef{
+		Name: "Test",
+		Repos: []RepoDef{
+			{Path: "/tmp/a", Name: "web", DefaultBranch: "main"},
+		},
+	})
+
+	fw := NewFeatureWorkflow(proj, "feature/add-auth", "/tmp/worktrees")
+	if fw.WorkflowDir() != "/tmp/worktrees/feature-add-auth" {
+		t.Errorf("expected workflow dir '/tmp/worktrees/feature-add-auth', got %q", fw.WorkflowDir())
+	}
 }
 
 func TestWorkflowStateString(t *testing.T) {

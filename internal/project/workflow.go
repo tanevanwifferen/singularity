@@ -48,7 +48,6 @@ type WorkflowRepo struct {
 	OriginalPath   string `json:"original_path"`
 	WorktreePath   string `json:"worktree_path"`
 	WorktreeCreated bool  `json:"worktree_created"`
-	AgentID        string `json:"agent_id,omitempty"`
 	Pushed         bool   `json:"pushed"`
 	MRURL          string `json:"mr_url,omitempty"`
 	Error          string `json:"error,omitempty"`
@@ -62,6 +61,7 @@ type FeatureWorkflow struct {
 	State      WorkflowState           `json:"state"`
 	CreatedAt  time.Time               `json:"created_at"`
 	Error      string                  `json:"error,omitempty"`
+	AgentID    string                  `json:"agent_id,omitempty"`
 
 	project *Project
 	mu      sync.RWMutex
@@ -77,6 +77,8 @@ type WorkflowStatus struct {
 	MRsCreated      int           `json:"mrs_created"`
 	Errors          int           `json:"errors"`
 	Error           string        `json:"error,omitempty"`
+	AgentID         string        `json:"agent_id,omitempty"`
+	HasAgent        bool          `json:"has_agent"`
 }
 
 // sanitizeBranchForPath replaces characters that are problematic in filesystem paths
@@ -311,6 +313,8 @@ func (fw *FeatureWorkflow) Status() *WorkflowStatus {
 		State:      fw.State,
 		TotalRepos: len(fw.Repos),
 		Error:      fw.Error,
+		AgentID:    fw.AgentID,
+		HasAgent:   fw.AgentID != "",
 	}
 
 	for _, wr := range fw.Repos {
@@ -338,11 +342,24 @@ func (fw *FeatureWorkflow) GetRepo(name string) *WorkflowRepo {
 	return fw.Repos[name]
 }
 
-// SetAgentID records which agent is working on a given repo
-func (fw *FeatureWorkflow) SetAgentID(repoName, agentID string) {
+// SetWorkflowAgentID records which agent is working on this workflow
+func (fw *FeatureWorkflow) SetWorkflowAgentID(agentID string) {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
-	if wr, ok := fw.Repos[repoName]; ok {
-		wr.AgentID = agentID
-	}
+	fw.AgentID = agentID
+}
+
+// GetWorkflowAgentID returns the agent ID for this workflow
+func (fw *FeatureWorkflow) GetWorkflowAgentID() string {
+	fw.mu.RLock()
+	defer fw.mu.RUnlock()
+	return fw.AgentID
+}
+
+// WorkflowDir returns the full path to this workflow's worktree directory
+// (baseDir/sanitized-branch/), where all repo worktrees are subdirectories.
+func (fw *FeatureWorkflow) WorkflowDir() string {
+	fw.mu.RLock()
+	defer fw.mu.RUnlock()
+	return filepath.Join(fw.BaseDir, sanitizeBranchForPath(fw.BranchName))
 }
