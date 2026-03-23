@@ -78,9 +78,11 @@ func (m *Model) loadProject() {
 func (m *Model) SetEngine(eng *engine.Engine) {
 	m.engine = eng
 	if m.router != nil {
-		// Update the AgentView if it exists
 		if agentView := m.getAgentView(); agentView != nil {
 			agentView.SetEngine(eng)
+		}
+		if wv := m.getWorkflowsView(); wv != nil {
+			wv.SetEngine(eng)
 		}
 	}
 }
@@ -123,6 +125,18 @@ func (m *Model) getProjectView() *views.ProjectView {
 	view := m.router.GetView("Project")
 	if pv, ok := view.(*views.ProjectView); ok {
 		return pv
+	}
+	return nil
+}
+
+// getWorkflowsView returns the WorkflowsView from the router if it exists
+func (m *Model) getWorkflowsView() *views.WorkflowsView {
+	if m.router == nil {
+		return nil
+	}
+	view := m.router.GetView("Workflows")
+	if wv, ok := view.(*views.WorkflowsView); ok {
+		return wv
 	}
 	return nil
 }
@@ -288,12 +302,16 @@ func (m *Model) initProjectRouter() {
 
 	// Create the project overview view as the first view (landing page)
 	projectView := views.NewProjectView(m.proj)
-	projectView.SetEngine(m.engine)
 
 	router := NewRouter(projectView, "Project")
 	// Add F1 shortcut for the project view
 	router.viewKeys["Project"] = "f1"
 	router.keyToView["f1"] = "Project"
+
+	// Feature workflows view (multi-repo worktrees, push, MR, agents)
+	workflowsView := views.NewWorkflowsView(m.proj)
+	workflowsView.SetEngine(m.engine)
+	router.Register("Workflows", workflowsView, "f2")
 
 	// Use the first repo's path as the default for single-repo views.
 	// Fall back to the project directory itself.
@@ -305,23 +323,23 @@ func (m *Model) initProjectRouter() {
 	// Register single-repo views that are also useful in project mode
 	dashboard, err := NewBranchDashboard(defaultRepoPath)
 	if err == nil {
-		router.Register("Branches", dashboard, "f2")
+		router.Register("Branches", dashboard, "f3")
 	}
 
 	commitView := views.NewCommitView(defaultRepoPath)
-	router.Register("Commit", commitView, "f3")
+	router.Register("Commit", commitView, "f4")
 
 	logView := views.NewLogView(defaultRepoPath)
-	router.Register("Log", logView, "f4")
+	router.Register("Log", logView, "f5")
 
 	// Register agent console view (shared engine so agents spawned from
-	// ProjectView are visible in the AgentView)
+	// WorkflowsView are visible in the AgentView)
 	var contextFiles []string
 	if m.proj != nil {
 		contextFiles = m.proj.ContextFiles
 	}
 	agentView := views.NewAgentView(defaultRepoPath, m.engine, contextFiles)
-	router.Register("Agents", agentView, "f5")
+	router.Register("Agents", agentView, "f6")
 
 	// Git operations submenu (accessible via "g" key)
 	syncView := views.NewSyncView(defaultRepoPath)
@@ -574,7 +592,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.RepoPath != "" {
 			// Warn if leaving project mode with an active workflow
 			if m.projectMode {
-				if pv := m.getProjectView(); pv != nil && pv.HasActiveWorkflow() {
+				if wv := m.getWorkflowsView(); wv != nil && wv.HasActiveWorkflow() {
 					m.statusMsg = "Warning: leaving project mode will disconnect from active workflow"
 				}
 			}

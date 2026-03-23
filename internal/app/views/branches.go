@@ -34,6 +34,7 @@ type BranchesView struct {
 	// Modal state for delete confirmation
 	showDeleteConfirm bool
 	deleteBranch      *git.BranchInfo
+	deleteRemote      bool
 
 	// New branch input state
 	showNewBranch  bool
@@ -221,9 +222,15 @@ func (v *BranchesView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // handleDeleteConfirm handles key events during delete confirmation.
 func (v *BranchesView) handleDeleteConfirm(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
-	case "y", "enter":
+	case "l", "y", "enter":
 		if v.deleteBranch != nil {
-			v.deleteBranchCmd(v.deleteBranch.Name)
+			v.deleteBranchCmd(v.deleteBranch.Name, false)
+		}
+		v.showDeleteConfirm = false
+		v.deleteBranch = nil
+	case "r":
+		if v.deleteBranch != nil {
+			v.deleteBranchCmd(v.deleteBranch.Name, true)
 		}
 		v.showDeleteConfirm = false
 		v.deleteBranch = nil
@@ -300,8 +307,27 @@ func (v *BranchesView) checkoutBranch(branchName string) {
 	v.loadData()
 }
 
-// deleteBranchCmd deletes the specified branch.
-func (v *BranchesView) deleteBranchCmd(branchName string) {
+// deleteBranchCmd deletes the specified branch locally, and optionally from the remote too.
+func (v *BranchesView) deleteBranchCmd(branchName string, alsoRemote bool) {
+	// If deleting remote, push --delete first (before local delete removes tracking info)
+	if alsoRemote {
+		remote := "origin"
+		// Try to derive remote from the branch's upstream tracking ref
+		for _, b := range v.branches {
+			if b.Name == branchName && b.Upstream != "" {
+				if idx := strings.Index(b.Upstream, "/"); idx >= 0 {
+					remote = b.Upstream[:idx]
+				}
+				break
+			}
+		}
+		pushCmd := exec.Command("git", "-C", v.repoPath, "push", remote, "--delete", branchName)
+		if err := pushCmd.Run(); err != nil {
+			v.err = fmt.Errorf("failed to delete remote branch: %w", err)
+			return
+		}
+	}
+
 	// Use -d for delete (safe, won't delete unmerged) or -D for force
 	cmd := exec.Command("git", "-C", v.repoPath, "branch", "-d", branchName)
 	if err := cmd.Run(); err != nil {
@@ -366,8 +392,11 @@ func (v *BranchesView) renderBranchItem(branch git.BranchInfo, index int, select
 		if branch.Behind > 0 {
 			line.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf(" ↓%d", branch.Behind)))
 		}
-	} else if !branch.IsLocal {
-		line.WriteString(th.DashboardErrorStyle.Render(" (gone)"))
+		if branch.Ahead == 0 && branch.Behind == 0 {
+			line.WriteString(th.MutedTextStyle.Render(" ✓"))
+		}
+	} else {
+		line.WriteString(th.MutedTextStyle.Render(" (no remote)"))
 	}
 
 	return line.String()
@@ -497,10 +526,17 @@ func (v *BranchesView) View() string {
 
 	// Delete confirmation modal
 	if v.showDeleteConfirm && v.deleteBranch != nil {
+		hasRemote := v.deleteBranch.Upstream != ""
 		s.WriteString("\n\n")
 		s.WriteString(th.DashboardErrorStyle.Render(" ┌─────────────────────────────────────────────┐"))
 		s.WriteString("\n")
-		s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf(" │ Delete branch '%s'?  (y/n)               │", v.deleteBranch.Name)))
+		s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf(" │ Delete branch: %-29s│", v.deleteBranch.Name)))
+		s.WriteString("\n")
+		if hasRemote {
+			s.WriteString(th.DashboardErrorStyle.Render(" │  l: local only   r: local + remote   n: no │"))
+		} else {
+			s.WriteString(th.DashboardErrorStyle.Render(" │  l / y: confirm local delete      n: no   │"))
+		}
 		s.WriteString("\n")
 		s.WriteString(th.DashboardErrorStyle.Render(" └─────────────────────────────────────────────┘"))
 	}

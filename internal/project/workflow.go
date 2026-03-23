@@ -211,6 +211,59 @@ func (fw *FeatureWorkflow) RemoveAllWorktrees() error {
 	return nil
 }
 
+// ReposNeedingPush returns the names of repos that have commits to push.
+// Uses the same logic as PushAll to determine eligibility.
+func (fw *FeatureWorkflow) ReposNeedingPush() []string {
+	fw.mu.RLock()
+	repos := make([]*WorkflowRepo, 0, len(fw.Repos))
+	names := make(map[*WorkflowRepo]string, len(fw.Repos))
+	for name, wr := range fw.Repos {
+		if wr.WorktreeCreated {
+			repos = append(repos, wr)
+			names[wr] = name
+		}
+	}
+	fw.mu.RUnlock()
+
+	var mu sync.Mutex
+	var result []string
+	var wg sync.WaitGroup
+	for _, wr := range repos {
+		wg.Add(1)
+		go func(wr *WorkflowRepo, name string) {
+			defer wg.Done()
+			status, err := git.GetUpstreamStatus(wr.WorktreePath)
+			if err != nil {
+				// Include on error so PushAll can surface the error
+				mu.Lock()
+				result = append(result, name)
+				mu.Unlock()
+				return
+			}
+			if status.Upstream != "" {
+				if status.Ahead > 0 {
+					mu.Lock()
+					result = append(result, name)
+					mu.Unlock()
+				}
+			} else {
+				base := wr.DefaultBranch
+				if base == "" {
+					base = "main"
+				}
+				ahead, _, cmpErr := git.CompareBranchesSimple(wr.WorktreePath, base, "HEAD")
+				if cmpErr == nil && ahead > 0 {
+					mu.Lock()
+					result = append(result, name)
+					mu.Unlock()
+				}
+			}
+		}(wr, names[wr])
+	}
+	wg.Wait()
+	return result
+}
+
 // PushAll pushes all repos that have worktrees concurrently.
 // Repos without an upstream get one set automatically via SetUpstreamAndPush.
 func (fw *FeatureWorkflow) PushAll() error {

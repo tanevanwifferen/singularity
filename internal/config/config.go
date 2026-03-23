@@ -16,8 +16,18 @@ type Config struct {
 	Git         GitConfig         `json:"git"`
 	Forge       ForgeConfig       `json:"forge"`
 	AI          AIConfig          `json:"ai"`
+	Jira        JiraConfig        `json:"jira"`
 	Profiles    map[string]Profile `json:"profiles"`
 	ActiveProfile string          `json:"active_profile"`
+}
+
+// JiraConfig holds Jira integration settings
+type JiraConfig struct {
+	Enabled        bool   `json:"enabled"`
+	BaseURL        string `json:"base_url"`        // e.g. "https://yourcompany.atlassian.net"
+	Email          string `json:"email"`           // Jira Cloud email
+	APIToken       string `json:"api_token"`       // Jira Cloud API token (or PAT for Server)
+	DefaultProject string `json:"default_project"` // default project key, e.g. "PROJ"
 }
 
 // ThemeConfig holds UI theme settings
@@ -109,6 +119,15 @@ func LoadConfig(path string) (*Config, error) {
 	var config Config
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
+	}
+
+	// JIRA_API_TOKEN env var overrides config file value
+	if token := os.Getenv("JIRA_API_TOKEN"); token != "" {
+		config.Jira.APIToken = token
+	}
+	// Enable Jira automatically when BaseURL is set
+	if config.Jira.BaseURL != "" {
+		config.Jira.Enabled = true
 	}
 
 	return &config, nil
