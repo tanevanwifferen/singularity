@@ -23,6 +23,14 @@ import (
 // issueKeyRe matches a Jira issue key like "PROJ-123".
 var issueKeyRe = regexp.MustCompile(`(?i)^[A-Z][A-Z0-9_]+-\d+$`)
 
+// workflowStep constants drive the multi-step workflow modal.
+const (
+	workflowStepChoose       = "choose"        // pick new vs existing worktree
+	workflowStepNewConfirm   = "new-confirm"   // confirm creating a fresh worktree
+	workflowStepSelectWT     = "select-wt"     // browse existing worktrees
+	workflowStepExistConfirm = "exist-confirm" // confirm running on existing worktree
+)
+
 // jiraLoadedMsg carries freshly fetched Jira issues back to the view.
 type jiraLoadedMsg struct {
 	result *jira.SearchResult
@@ -65,6 +73,11 @@ type JiraView struct {
 	workflowIssue       *jira.Issue
 	workflowBranch      string
 	workflowStatusMsg   string
+	workflowStep        string
+
+	// Existing-worktree picker (workflowStepSelectWT)
+	existingWTs  []git.Worktree
+	selectedWTIdx int
 }
 
 // NewJiraView creates a new Jira issues view.
@@ -231,24 +244,89 @@ func (v *JiraView) triggerWorkflow(issue *jira.Issue) tea.Cmd {
 	v.workflowIssue = issue
 	v.workflowBranch = issueToBranchName(issue)
 	v.showWorkflowConfirm = true
+	v.workflowStep = workflowStepChoose
+	v.existingWTs = nil
+	v.selectedWTIdx = 0
 	return nil
 }
 
-// handleWorkflowConfirm handles key input in the workflow confirmation modal.
+// handleWorkflowConfirm handles key input in the multi-step workflow modal.
 func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
-	case "y", "enter":
-		issue := v.workflowIssue
-		branch := v.workflowBranch
-		eng := v.eng
-		proj := v.proj
-		repoPath := v.repoPath
-		return func() tea.Msg {
-			return startJiraWorkflow(issue, branch, eng, proj, repoPath)
+	switch v.workflowStep {
+
+	case workflowStepChoose:
+		switch msg.String() {
+		case "n":
+			v.workflowStep = workflowStepNewConfirm
+		case "e":
+			repoPath := v.repoPath
+			if repoPath == "" && v.proj != nil && len(v.proj.Repos) > 0 {
+				repoPath = v.proj.Repos[0].Path
+			}
+			if repoPath != "" {
+				wts, err := git.GetWorktrees(repoPath)
+				if err == nil && len(wts) > 1 {
+					v.existingWTs = wts[1:] // skip the main worktree
+				} else {
+					v.existingWTs = nil
+				}
+			}
+			v.selectedWTIdx = 0
+			v.workflowStep = workflowStepSelectWT
+		case "esc", "q":
+			v.showWorkflowConfirm = false
+			v.workflowIssue = nil
+			v.workflowStep = ""
 		}
-	case "n", "esc":
-		v.showWorkflowConfirm = false
-		v.workflowIssue = nil
+
+	case workflowStepNewConfirm:
+		switch msg.String() {
+		case "y", "enter":
+			issue := v.workflowIssue
+			branch := v.workflowBranch
+			eng := v.eng
+			proj := v.proj
+			repoPath := v.repoPath
+			return func() tea.Msg {
+				return startJiraWorkflow(issue, branch, eng, proj, repoPath)
+			}
+		case "n", "esc":
+			v.workflowStep = workflowStepChoose
+		}
+
+	case workflowStepSelectWT:
+		switch msg.String() {
+		case "up", "k":
+			if v.selectedWTIdx > 0 {
+				v.selectedWTIdx--
+			}
+		case "down", "j":
+			if v.selectedWTIdx < len(v.existingWTs)-1 {
+				v.selectedWTIdx++
+			}
+		case "enter":
+			if len(v.existingWTs) > 0 {
+				v.workflowBranch = v.existingWTs[v.selectedWTIdx].Branch
+				v.workflowStep = workflowStepExistConfirm
+			}
+		case "esc":
+			v.workflowStep = workflowStepChoose
+		}
+
+	case workflowStepExistConfirm:
+		switch msg.String() {
+		case "y", "enter":
+			if len(v.existingWTs) > 0 && v.selectedWTIdx < len(v.existingWTs) {
+				wt := v.existingWTs[v.selectedWTIdx]
+				issue := v.workflowIssue
+				eng := v.eng
+				return func() tea.Msg {
+					return startJiraWorkflowExisting(issue, wt.Path, eng)
+				}
+			}
+		case "n", "esc":
+			v.workflowStep = workflowStepSelectWT
+		}
 	}
 	return nil
 }
@@ -294,6 +372,19 @@ func startJiraWorkflow(issue *jira.Issue, branch string, eng *engine.Engine, pro
 	if err := git.CreateWorktree(repoPath, worktreePath, branch, true); err != nil {
 		return jiraWorkflowDoneMsg{err: fmt.Errorf("create worktree: %w", err)}
 	}
+	id, err := eng.StartAgent(worktreePath, agentPrompt, engine.AgentOptions{SmartRoute: true})
+	if err != nil {
+		return jiraWorkflowDoneMsg{err: fmt.Errorf("start agent: %w", err)}
+	}
+	return jiraWorkflowDoneMsg{agentID: id, repoPath: worktreePath}
+}
+
+// startJiraWorkflowExisting spawns an agent in an already-existing worktree.
+func startJiraWorkflowExisting(issue *jira.Issue, worktreePath string, eng *engine.Engine) jiraWorkflowDoneMsg {
+	if eng == nil {
+		return jiraWorkflowDoneMsg{err: fmt.Errorf("agent engine not available")}
+	}
+	agentPrompt := buildJiraAgentPrompt(issue)
 	id, err := eng.StartAgent(worktreePath, agentPrompt, engine.AgentOptions{SmartRoute: true})
 	if err != nil {
 		return jiraWorkflowDoneMsg{err: fmt.Errorf("start agent: %w", err)}
@@ -442,15 +533,10 @@ func (v *JiraView) View() string {
 		s.WriteString(v.filter.View())
 	}
 
-	// Workflow confirmation modal
+	// Workflow modal (multi-step)
 	if v.showWorkflowConfirm && v.workflowIssue != nil {
 		s.WriteString("\n")
-		s.WriteString(renderModal("Start Workflow", []string{
-			fmt.Sprintf("Ticket: %s", v.workflowIssue.Key),
-			fmt.Sprintf("Branch: %s", v.workflowBranch),
-			"",
-			"Create worktree + spawn agent? (y/n)",
-		}, modalWidth(v.width)))
+		s.WriteString(v.renderWorkflowModal())
 	}
 
 	// Status message (e.g., after workflow starts)
@@ -466,6 +552,70 @@ func (v *JiraView) View() string {
 	s.WriteString(th.Help.Render(" r: Refresh   s: JQL Search   /: Filter   ↑↓: Navigate   Enter: Detail   w: Start Workflow "))
 
 	return s.String()
+}
+
+// renderWorkflowModal renders the appropriate modal for the current workflow step.
+func (v *JiraView) renderWorkflowModal() string {
+	mw := modalWidth(v.width)
+	issue := v.workflowIssue
+
+	switch v.workflowStep {
+	case workflowStepChoose:
+		return renderModal("Start Workflow", []string{
+			fmt.Sprintf("Ticket: %s – %s", issue.Key, truncate(issue.Summary, mw-20)),
+			"",
+			"n  New worktree + branch",
+			"e  Use existing worktree",
+			"",
+			"Esc: cancel",
+		}, mw)
+
+	case workflowStepNewConfirm:
+		return renderModal("New Worktree", []string{
+			fmt.Sprintf("Ticket: %s", issue.Key),
+			fmt.Sprintf("Branch: %s", v.workflowBranch),
+			"",
+			"Create worktree + spawn agent? (y/n)",
+		}, mw)
+
+	case workflowStepSelectWT:
+		lines := []string{
+			fmt.Sprintf("Ticket: %s", issue.Key),
+			"Select a worktree (↑/↓ · Enter · Esc: back)",
+			"",
+		}
+		if len(v.existingWTs) == 0 {
+			lines = append(lines, "  (no worktrees found)")
+		} else {
+			for i, wt := range v.existingWTs {
+				prefix := "  "
+				if i == v.selectedWTIdx {
+					prefix = " >"
+				}
+				label := wt.Branch
+				if label == "" {
+					label = filepath.Base(wt.Path)
+				}
+				lines = append(lines, fmt.Sprintf("%s %s", prefix, truncate(label, mw-6)))
+			}
+		}
+		return renderModal("Existing Worktrees", lines, mw)
+
+	case workflowStepExistConfirm:
+		wt := v.existingWTs[v.selectedWTIdx]
+		label := wt.Branch
+		if label == "" {
+			label = filepath.Base(wt.Path)
+		}
+		return renderModal("Run on Worktree", []string{
+			fmt.Sprintf("Ticket: %s", issue.Key),
+			fmt.Sprintf("Worktree: %s", truncate(label, mw-12)),
+			fmt.Sprintf("Path:     %s", truncate(wt.Path, mw-10)),
+			"",
+			"Spawn agent on this worktree? (y/n)",
+		}, mw)
+	}
+	return ""
 }
 
 func (v *JiraView) renderDetail(issue *jira.Issue) string {
