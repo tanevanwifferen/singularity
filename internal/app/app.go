@@ -7,6 +7,7 @@ import (
 
 	"git-frontend/internal/app/components"
 	"git-frontend/internal/app/views"
+	"git-frontend/internal/config"
 	"git-frontend/internal/engine"
 	"git-frontend/internal/git"
 	"git-frontend/internal/project"
@@ -35,20 +36,19 @@ type Model struct {
 	wsClient         *WSClient
 	wsStatus         WSConnectionStatus
 	projectMode      bool
+	cfg              *config.Config
 }
 
 // New creates a new app model
 func New() *Model {
-	return &Model{
-		layout: NewLayout(),
-	}
+	m := &Model{layout: NewLayout()}
+	m.cfg, _ = config.LoadDefaultConfig()
+	return m
 }
 
 // NewWithWS creates a new app model with WebSocket client
 func NewWithWS(wsURL string) *Model {
-	m := &Model{
-		layout: NewLayout(),
-	}
+	m := New()
 	if wsURL != "" {
 		m.SetWSClient(wsURL)
 	}
@@ -243,7 +243,7 @@ func (m *Model) initRouter() {
 	prView := views.NewPRView(m.repoPath)
 	router.Register("CreatePR", prView)
 
-	router.RegisterSubmenu("g", "Git", []components.SubmenuItem{
+	gitItems := []components.SubmenuItem{
 		{Key: "s", Label: "Sync (push/pull/fetch)", ViewName: "Sync"},
 		{Key: "b", Label: "Branch Compare", ViewName: "BranchCompare"},
 		{Key: "t", Label: "Stashes", ViewName: "Stashes"},
@@ -251,7 +251,14 @@ func (m *Model) initRouter() {
 		{Key: "w", Label: "Worktrees", ViewName: "Worktrees"},
 		{Key: "p", Label: "Pipeline", ViewName: "Pipeline"},
 		{Key: "c", Label: "Create PR", ViewName: "CreatePR"},
-	})
+	}
+	if m.cfg != nil && m.cfg.Jira.Enabled {
+		jiraView := views.NewJiraView(m.cfg.Jira)
+		router.Register("Jira", jiraView)
+		gitItems = append(gitItems, components.SubmenuItem{Key: "j", Label: "Jira Issues", ViewName: "Jira"})
+	}
+
+	router.RegisterSubmenu("g", "Git", gitItems)
 
 	m.router = router
 
@@ -364,7 +371,7 @@ func (m *Model) initProjectRouter() {
 	prView := views.NewPRView(defaultRepoPath)
 	router.Register("CreatePR", prView)
 
-	router.RegisterSubmenu("g", "Git", []components.SubmenuItem{
+	projGitItems := []components.SubmenuItem{
 		{Key: "s", Label: "Sync (push/pull/fetch)", ViewName: "Sync"},
 		{Key: "b", Label: "Branch Compare", ViewName: "BranchCompare"},
 		{Key: "t", Label: "Stashes", ViewName: "Stashes"},
@@ -372,7 +379,14 @@ func (m *Model) initProjectRouter() {
 		{Key: "w", Label: "Worktrees", ViewName: "Worktrees"},
 		{Key: "p", Label: "Pipeline", ViewName: "Pipeline"},
 		{Key: "c", Label: "Create PR", ViewName: "CreatePR"},
-	})
+	}
+	if m.cfg != nil && m.cfg.Jira.Enabled {
+		jiraView := views.NewJiraView(m.cfg.Jira)
+		router.Register("Jira", jiraView)
+		projGitItems = append(projGitItems, components.SubmenuItem{Key: "j", Label: "Jira Issues", ViewName: "Jira"})
+	}
+
+	router.RegisterSubmenu("g", "Git", projGitItems)
 
 	m.router = router
 
