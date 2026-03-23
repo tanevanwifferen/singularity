@@ -575,12 +575,14 @@ func (a *Agent) softClose() {
 	}
 }
 
-// kill terminates the agent subprocess
+// kill terminates the agent subprocess and cleans up the worktree.
+// Worktree cleanup is deferred to here (not mergeWorktreeBack) so the agent
+// remains accessible for follow-up messages until explicitly removed.
 func (a *Agent) kill() error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 
 	if a.cmd == nil || a.cmd.Process == nil {
+		a.mu.Unlock()
 		return nil
 	}
 
@@ -597,7 +599,21 @@ func (a *Agent) kill() error {
 	}
 	a.appendOutputLocked("system", "Agent killed")
 
-	return a.cmd.Process.Kill()
+	err := a.cmd.Process.Kill()
+
+	// Capture worktree info before releasing lock
+	wtPath := a.worktreePath
+	sourceRepoPath := a.sourceRepoPath
+	wtBranch := a.worktreeBranch
+
+	a.mu.Unlock()
+
+	// Clean up worktree after releasing lock (git commands may be slow)
+	if wtPath != "" {
+		cleanupWorktree(sourceRepoPath, wtPath, wtBranch)
+	}
+
+	return err
 }
 
 // getOutput returns all output entries, optionally from a given offset
