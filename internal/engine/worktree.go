@@ -67,7 +67,7 @@ func (a *Agent) mergeWorktreeBack() string {
 	}()
 
 	// Auto-commit any uncommitted changes left by the agent
-	if committed, err := autoCommitWorktree(wtPath, a.ID); err != nil {
+	if committed, err := autoCommitWorktree(wtPath, a.ID, a.Task); err != nil {
 		a.appendOutput("error", fmt.Sprintf("Failed to auto-commit worktree changes: %v", err))
 		return "error"
 	} else if committed {
@@ -85,10 +85,15 @@ func (a *Agent) mergeWorktreeBack() string {
 		return "no-changes"
 	}
 
+	// Generate a merge commit message from the branch's commit log
+	logCmd := exec.Command("git", "-C", repoPath, "log", "--oneline", fmt.Sprintf("%s..%s", sourceBranch, wtBranch))
+	logOut, _ := logCmd.Output()
+	mergeMsg := generateMergeMessage(string(logOut), a.Task, a.ID)
+
 	// Merge the worktree branch into the source branch
 	// Use --no-ff to preserve the merge as a distinct event
 	cmd := exec.Command("git", "-C", repoPath, "merge", wtBranch, "--no-ff",
-		"-m", fmt.Sprintf("Merge agent work from %s", a.ID))
+		"-m", mergeMsg)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		// Merge conflict - abort and leave changes on the branch
 		abortCmd := exec.Command("git", "-C", repoPath, "merge", "--abort")
@@ -120,7 +125,7 @@ func cleanupWorktree(repoPath, wtPath, branch string) {
 
 // autoCommitWorktree stages and commits any uncommitted changes in the worktree.
 // Returns true if a commit was made, false if the worktree was already clean.
-func autoCommitWorktree(wtPath, agentID string) (bool, error) {
+func autoCommitWorktree(wtPath, agentID, task string) (bool, error) {
 	// Check for any changes (staged, unstaged, or untracked)
 	statusCmd := exec.Command("git", "-C", wtPath, "status", "--porcelain")
 	out, err := statusCmd.Output()
@@ -137,8 +142,12 @@ func autoCommitWorktree(wtPath, agentID string) (bool, error) {
 		return false, fmt.Errorf("git add: %w\n%s", err, string(out))
 	}
 
-	// Commit with agent attribution
-	commitMsg := fmt.Sprintf("Agent work from %s", agentID)
+	// Get the staged diff for commit message generation
+	diffCmd := exec.Command("git", "-C", wtPath, "diff", "--cached", "--stat")
+	diffOut, _ := diffCmd.Output()
+
+	// Generate a descriptive commit message using Claude
+	commitMsg := generateCommitMessage(string(diffOut), task, agentID)
 	commitCmd := exec.Command("git", "-C", wtPath, "commit", "-m", commitMsg)
 	if out, err := commitCmd.CombinedOutput(); err != nil {
 		return false, fmt.Errorf("git commit: %w\n%s", err, string(out))
@@ -166,6 +175,61 @@ func gitCurrentBranch(repoPath string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// generateCommitMessage calls Claude (haiku) to produce a concise commit message
+// from the staged diff stats and the agent's task. Falls back to a static message on failure.
+func generateCommitMessage(diffStat, task, agentID string) string {
+	fallback := fmt.Sprintf("Agent work from %s", agentID)
+
+	prompt := fmt.Sprintf(
+		"Generate a single-line git commit message (max 72 chars, no quotes) for these changes.\n\nTask: %s\n\nChanged files:\n%s",
+		task, diffStat,
+	)
+
+	cmd := exec.Command("claude", "--print", "--model", "haiku", "-p", prompt)
+	cmd.Env = append(os.Environ(), "CLAUDE_NO_ANALYTICS=true")
+	out, err := cmd.Output()
+	if err != nil {
+		return fallback
+	}
+
+	msg := strings.TrimSpace(string(out))
+	// Strip wrapping quotes if present
+	if len(msg) >= 2 && msg[0] == '"' && msg[len(msg)-1] == '"' {
+		msg = msg[1 : len(msg)-1]
+	}
+	if msg == "" {
+		return fallback
+	}
+	return msg
+}
+
+// generateMergeMessage calls Claude (haiku) to produce a concise merge commit message
+// from the branch's commit log and the agent's task. Falls back to a static message on failure.
+func generateMergeMessage(commitLog, task, agentID string) string {
+	fallback := fmt.Sprintf("Merge agent work from %s", agentID)
+
+	prompt := fmt.Sprintf(
+		"Generate a single-line git merge commit message (max 72 chars, no quotes) summarizing this agent's work.\n\nTask: %s\n\nCommits being merged:\n%s",
+		task, commitLog,
+	)
+
+	cmd := exec.Command("claude", "--print", "--model", "haiku", "-p", prompt)
+	cmd.Env = append(os.Environ(), "CLAUDE_NO_ANALYTICS=true")
+	out, err := cmd.Output()
+	if err != nil {
+		return fallback
+	}
+
+	msg := strings.TrimSpace(string(out))
+	if len(msg) >= 2 && msg[0] == '"' && msg[len(msg)-1] == '"' {
+		msg = msg[1 : len(msg)-1]
+	}
+	if msg == "" {
+		return fallback
+	}
+	return msg
 }
 
 // sanitizeBranch makes a string safe for use in git branch names.
