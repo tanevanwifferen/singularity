@@ -49,8 +49,9 @@ func (a *Agent) setupWorktree() error {
 	return nil
 }
 
-// mergeWorktreeBack merges the worktree branch back into the source branch
-// and cleans up the worktree. Returns the merge result status.
+// mergeWorktreeBack merges the worktree branch back into the source branch.
+// Returns the merge result status. Does NOT clean up the worktree — cleanup
+// is deferred to kill() so follow-up messages can still be sent after completion.
 // On merge conflict, launches a Claude session to rebase and retries.
 func (a *Agent) mergeWorktreeBack() string {
 	if a.worktreePath == "" || a.sourceRepoPath == "" {
@@ -65,7 +66,6 @@ func (a *Agent) mergeWorktreeBack() string {
 	// Auto-commit any uncommitted changes left by the agent
 	if committed, err := autoCommitWorktree(wtPath, a.ID, a.Task); err != nil {
 		a.appendOutput("error", fmt.Sprintf("Failed to auto-commit worktree changes: %v", err))
-		cleanupWorktree(repoPath, wtPath, wtBranch)
 		return "error"
 	} else if committed {
 		a.appendOutput("system", "Worktree: auto-committed uncommitted changes before merge")
@@ -75,12 +75,10 @@ func (a *Agent) mergeWorktreeBack() string {
 	hasChanges, err := branchHasNewCommits(repoPath, sourceBranch, wtBranch)
 	if err != nil {
 		a.appendOutput("error", fmt.Sprintf("Failed to check worktree changes: %v", err))
-		cleanupWorktree(repoPath, wtPath, wtBranch)
 		return "error"
 	}
 	if !hasChanges {
 		a.appendOutput("system", "Worktree: no changes to merge")
-		cleanupWorktree(repoPath, wtPath, wtBranch)
 		return "no-changes"
 	}
 
@@ -91,14 +89,12 @@ func (a *Agent) mergeWorktreeBack() string {
 		a.appendOutput("system", fmt.Sprintf("Worktree: merge conflict — launching Claude session to rebase %s onto %s", wtBranch, sourceBranch))
 		if rebaseErr := rebaseWithClaude(wtPath, sourceBranch, a.Task); rebaseErr != nil {
 			a.appendOutput("error", fmt.Sprintf("Rebase session failed: %v", rebaseErr))
-			cleanupWorktree(repoPath, wtPath, wtBranch)
 			return "conflict"
 		}
 		a.appendOutput("system", "Worktree: rebase complete — retrying merge")
 		result = a.attemptMerge(repoPath, sourceBranch, wtBranch)
 	}
 
-	cleanupWorktree(repoPath, wtPath, wtBranch)
 	return result
 }
 
