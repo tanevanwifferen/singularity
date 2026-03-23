@@ -151,6 +151,11 @@ func (v *ProjectView) SetEngine(eng *engine.Engine) {
 	v.engine = eng
 }
 
+// HasActiveWorkflow returns true if a feature workflow is currently active.
+func (v *ProjectView) HasActiveWorkflow() bool {
+	return v.activeWorkflow != nil
+}
+
 // discoverProject creates a project by auto-discovering git repos in a directory
 func discoverProject(dir string) *project.Project {
 	entries, err := os.ReadDir(dir)

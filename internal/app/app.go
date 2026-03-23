@@ -115,6 +115,18 @@ func (m *Model) SetWSClient(url string) {
 	// Register handlers for WebSocket events - these are already registered in NewWSViewUpdater
 }
 
+// getProjectView returns the ProjectView from the router if it exists
+func (m *Model) getProjectView() *views.ProjectView {
+	if m.router == nil {
+		return nil
+	}
+	view := m.router.GetView("Project")
+	if pv, ok := view.(*views.ProjectView); ok {
+		return pv
+	}
+	return nil
+}
+
 // getAgentView returns the AgentView from the router if it exists
 func (m *Model) getAgentView() *views.AgentView {
 	if m.router == nil {
@@ -281,6 +293,21 @@ func (m *Model) initProjectRouter() {
 	// Add F1 shortcut for the project view
 	router.viewKeys["Project"] = "f1"
 	router.keyToView["f1"] = "Project"
+
+	// Register agent console view (shared engine so agents spawned from
+	// ProjectView are visible in the AgentView)
+	var contextFiles []string
+	if m.proj != nil {
+		contextFiles = m.proj.ContextFiles
+	}
+	// Use the project directory as the base repo path for the agent view.
+	// Fall back to the first repo's path if available.
+	agentRepoPath := m.projectPath
+	if m.proj != nil && len(m.proj.Repos) > 0 {
+		agentRepoPath = m.proj.Repos[0].Path
+	}
+	agentView := views.NewAgentView(agentRepoPath, m.engine, contextFiles)
+	router.Register("Agents", agentView, "f5")
 
 	m.router = router
 
@@ -481,6 +508,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case views.ViewChangeMsg:
 		// Handle view changes, possibly with a specific repo path
 		if msg.RepoPath != "" {
+			// Warn if leaving project mode with an active workflow
+			if m.projectMode {
+				if pv := m.getProjectView(); pv != nil && pv.HasActiveWorkflow() {
+					m.statusMsg = "Warning: leaving project mode will disconnect from active workflow"
+				}
+			}
 			// Drill into single-repo mode for the specified repo
 			m.repoPath = msg.RepoPath
 			m.projectMode = false
