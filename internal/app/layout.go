@@ -55,7 +55,8 @@ func (l *Layout) rebuildStyles() {
 		Foreground(th.MutedText).
 		Background(th.Surface)
 	l.dividerStyle = lipgloss.NewStyle().
-		Foreground(th.Border)
+		Foreground(th.Border).
+		Background(th.Surface)
 	l.primaryTextStyle = lipgloss.NewStyle().
 		Foreground(th.PrimaryText)
 	l.mutedTextStyle = lipgloss.NewStyle().
