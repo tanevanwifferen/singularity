@@ -62,40 +62,31 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 		return "", fmt.Errorf("agent limit reached (%d/%d active)", activeCount, e.maxAgents)
 	}
 
-	// Smart routing: classify prompt with Haiku to pick model
-	var routeResult *RouteResult
-	if opts.SmartRoute && opts.Model == "" {
-		e.mu.Unlock()
-		route, err := RoutePrompt(task)
-		if err == nil {
-			opts.Model = route.Model
-			routeResult = route
-		}
-		// Fall through with whatever model we got (or empty = default)
-		e.mu.Lock()
-		// Re-check capacity after releasing lock
-		activeCount = 0
-		for _, a := range e.agents {
-			if a.IsActive() {
-				activeCount++
-			}
-		}
-		if activeCount >= e.maxAgents {
-			e.mu.Unlock()
-			return "", fmt.Errorf("agent limit reached (%d/%d active)", activeCount, e.maxAgents)
-		}
-	}
-
 	id := e.generateID()
 	agent := newAgent(id, projectPath, task, opts)
-	if routeResult != nil {
-		agent.RouteResult = routeResult
-	}
 	e.agents[id] = agent
 	e.mu.Unlock()
 
-	if err := agent.start(); err != nil {
-		return "", fmt.Errorf("failed to start agent: %w", err)
+	if opts.SmartRoute && opts.Model == "" {
+		// Route async: show agent immediately, classify in background, then start
+		agent.setState(AgentRouting)
+		agent.appendOutput("system", "Routing via Haiku...")
+		go func() {
+			route, err := RoutePrompt(task)
+			if err == nil {
+				agent.mu.Lock()
+				agent.model = route.Model
+				agent.RouteResult = route
+				agent.mu.Unlock()
+			}
+			if startErr := agent.start(); startErr != nil {
+				agent.appendOutput("error", fmt.Sprintf("Failed to start agent: %v", startErr))
+			}
+		}()
+	} else {
+		if err := agent.start(); err != nil {
+			return "", fmt.Errorf("failed to start agent: %w", err)
+		}
 	}
 
 	// Set up timeout if configured

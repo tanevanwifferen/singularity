@@ -17,6 +17,7 @@ type AgentState int
 
 const (
 	AgentIdle AgentState = iota
+	AgentRouting
 	AgentStarting
 	AgentRunning
 	AgentComplete
@@ -28,6 +29,8 @@ func (s AgentState) String() string {
 	switch s {
 	case AgentIdle:
 		return "idle"
+	case AgentRouting:
+		return "routing"
 	case AgentStarting:
 		return "starting"
 	case AgentRunning:
@@ -116,8 +119,8 @@ func (a *Agent) start() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.State != AgentIdle {
-		return fmt.Errorf("agent %s is in state %s, expected idle", a.ID, a.State)
+	if a.State != AgentIdle && a.State != AgentRouting {
+		return fmt.Errorf("agent %s is in state %s, expected idle or routing", a.ID, a.State)
 	}
 
 	a.State = AgentStarting
@@ -628,7 +631,7 @@ func (a *Agent) Done() <-chan struct{} {
 func (a *Agent) IsActive() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.State == AgentRunning || a.State == AgentStarting
+	return a.State == AgentRunning || a.State == AgentStarting || a.State == AgentRouting
 }
 
 // formatToolUseSummary creates a concise summary of a tool use

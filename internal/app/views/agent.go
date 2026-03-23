@@ -616,6 +616,9 @@ func (v *AgentView) renderAgentItem(agent AgentInfo, index int, selected bool) s
 	case engine.AgentIdle:
 		statusIcon = "○"
 		statusStyle = th.MutedTextStyle
+	case engine.AgentRouting:
+		statusIcon = "◌"
+		statusStyle = lipgloss.NewStyle().Foreground(th.Info)
 	case engine.AgentStarting:
 		statusIcon = "◐"
 		statusStyle = lipgloss.NewStyle().Foreground(th.Info)
