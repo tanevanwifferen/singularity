@@ -309,11 +309,11 @@ func (p *JiraPickerState) View() string {
 
 	// Search input row
 	if p.searchMode {
-		s.WriteString(fmt.Sprintf(" JQL > %s█\n", p.searchInput))
-		s.WriteString(th.Help.Render(" Enter: run   Esc: cancel "))
+		s.WriteString(fmt.Sprintf(" > %s█\n", p.searchInput))
+		s.WriteString(th.Help.Render(" Enter: run   Esc: cancel   (issue key e.g. PROJ-123 or JQL) "))
 		s.WriteString("\n\n")
 	} else {
-		s.WriteString(th.Help.Render(" s: JQL search   /: filter   r: refresh   ↑/↓: navigate   Enter: select   Esc: cancel "))
+		s.WriteString(th.Help.Render(" s: search (issue key or JQL)   /: filter   r: refresh   ↑/↓: navigate   Enter: select   Esc: cancel "))
 		s.WriteString("\n\n")
 	}
 

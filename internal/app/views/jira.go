@@ -420,11 +420,11 @@ func (v *JiraView) View() string {
 
 	// Search input
 	if v.searchMode {
-		s.WriteString(th.DashboardTitle.Render(" JQL Search "))
+		s.WriteString(th.DashboardTitle.Render(" Search "))
 		s.WriteString("\n")
 		s.WriteString(fmt.Sprintf(" > %s_", v.searchInput))
 		s.WriteString("\n")
-		s.WriteString(th.Help.Render(" Enter: run query   Esc: cancel "))
+		s.WriteString(th.Help.Render(" Enter: run query   Esc: cancel   (issue key e.g. PROJ-123 or JQL) "))
 		s.WriteString("\n\n")
 	}
 
