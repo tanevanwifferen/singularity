@@ -8,6 +8,7 @@ import (
 	"git-frontend/internal/app/views"
 	"git-frontend/internal/engine"
 	"git-frontend/internal/git"
+	"git-frontend/internal/project"
 	"git-frontend/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -18,16 +19,19 @@ const version = "0.0.1"
 
 // Model represents the application state
 type Model struct {
-	quitting   bool
-	repoPath   string
-	repoInfo   *git.RepoInfo
-	engine     *engine.Engine
-	statusMsg  string
-	errorMsg   string
-	router     *Router
-	layout     *Layout
-	wsClient   *WSClient
-	wsStatus   WSConnectionStatus
+	quitting     bool
+	repoPath     string
+	projectPath  string
+	repoInfo     *git.RepoInfo
+	proj         *project.Project
+	engine       *engine.Engine
+	statusMsg    string
+	errorMsg     string
+	router       *Router
+	layout       *Layout
+	wsClient     *WSClient
+	wsStatus     WSConnectionStatus
+	projectMode  bool
 }
 
 // New creates a new app model
@@ -51,7 +55,20 @@ func NewWithWS(wsURL string) *Model {
 // SetRepoPath sets the repository path
 func (m *Model) SetRepoPath(path string) {
 	m.repoPath = path
+	m.projectMode = false
 	m.loadRepo()
+}
+
+// SetProjectPath sets the project path for multi-repo mode
+func (m *Model) SetProjectPath(path string) {
+	m.projectPath = path
+	m.projectMode = true
+	m.loadProject()
+}
+
+// loadProject loads the project and initializes router with project views
+func (m *Model) loadProject() {
+	m.initProjectRouter()
 }
 
 // SetEngine sets the agent engine (for server mode)
@@ -205,6 +222,94 @@ func (m *Model) initRouter() {
 	}
 }
 
+// initProjectRouter initializes the router with project-level views for multi-repo mode.
+func (m *Model) initProjectRouter() {
+	// Load project from path
+	if m.projectPath == "" {
+		m.projectPath = "."
+	}
+
+	// Try to load project config
+	configPath := project.GetDefaultConfigPath()
+	loader, err := project.NewLoaderFromFile(configPath)
+	if err != nil {
+		// No config file, try auto-discovery in current directory
+		// Create a project with all subdirectories that are git repos
+		m.statusMsg = "No project config found, using auto-discovery"
+		proj := m.discoverProject(m.projectPath)
+		if proj == nil {
+			m.errorMsg = "No git repositories found"
+			return
+		}
+		m.proj = proj
+	} else {
+		// Load the first project from config
+		keys := loader.ListProjectKeys()
+		if len(keys) == 0 {
+			m.errorMsg = "No projects in config"
+			return
+		}
+		proj, err := loader.LoadProject(keys[0])
+		if err != nil {
+			m.errorMsg = fmt.Sprintf("Failed to load project: %v", err)
+			return
+		}
+		m.proj = proj
+	}
+
+	// Create the project overview view as the first view (landing page)
+	projectView := views.NewProjectView(m.proj)
+	router := NewRouter(projectView, "Project")
+
+	// Register stub views for testing routing (same as single repo mode)
+	stub1 := NewStubView1("")
+	stub2 := NewStubView2("")
+	router.Register("stub1", stub1)
+	router.Register("stub2", stub2)
+
+	m.router = router
+
+	// Notify router of initial window size
+	if m.layout != nil {
+		m.router.NotifySize(m.layout.width, m.layout.height)
+	}
+}
+
+// discoverProject creates a project by auto-discovering git repos in a directory
+func (m *Model) discoverProject(dir string) *project.Project {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+
+	var repos []project.RepoDef
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		repoPath := filepath.Join(dir, entry.Name(), ".git")
+		if _, err := os.Stat(repoPath); err == nil {
+			// It's a git repo
+			repos = append(repos, project.RepoDef{
+				Name:          entry.Name(),
+				Path:          filepath.Join(dir, entry.Name()),
+				DefaultBranch: "main",
+			})
+		}
+	}
+
+	if len(repos) == 0 {
+		return nil
+	}
+
+	proj := project.NewProject(project.ProjectDef{
+		Name:  filepath.Base(dir),
+		Repos: repos,
+	})
+	proj.Refresh()
+	return proj
+}
+
 // Init initializes the tea program
 func (m Model) Init() tea.Cmd {
 	if m.router == nil {
@@ -306,6 +411,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.router != nil {
 			if av, ok := m.router.ActiveView().(interface{ Refresh() error }); ok {
 				av.Refresh()
+			}
+		}
+		return m, nil
+	case views.ViewChangeMsg:
+		// Handle view changes, possibly with a specific repo path
+		if msg.RepoPath != "" {
+			// Drill into single-repo mode for the specified repo
+			m.repoPath = msg.RepoPath
+			m.projectMode = false
+			m.loadRepo()
+		} else {
+			// Simple view switch
+			if m.router != nil {
+				m.router.SwitchTo(msg.ViewName)
 			}
 		}
 		return m, nil

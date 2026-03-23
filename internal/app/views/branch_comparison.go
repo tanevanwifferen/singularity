@@ -243,6 +243,7 @@ func (v *BranchComparisonView) switchToPrevBranch() {
 // ViewChangeMsg signals a view change request.
 type ViewChangeMsg struct {
 	ViewName string
+	RepoPath string // Optional: when set, indicates a repo-specific view change
 }
 
 // View renders the split panel view.
