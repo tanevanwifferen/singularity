@@ -313,7 +313,7 @@ func GetWorkdirStatus(repoPath string) (*WorkdirDiff, error) {
 	}
 
 	// Get git status for accurate status indicators
-	cmd := exec.Command("git", "-C", repoPath, "status", "--porcelane=v1")
+	cmd := exec.Command("git", "-C", repoPath, "status", "--porcelain=v1")
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get workdir status: %w", err)
