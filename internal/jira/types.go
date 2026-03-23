@@ -19,7 +19,7 @@ type SearchResult struct {
 	Issues []Issue `json:"issues"`
 }
 
-// apiSearchResponse is the raw JSON structure returned by /rest/api/2/search.
+// apiSearchResponse is the raw JSON structure returned by /rest/api/3/search/jql.
 type apiSearchResponse struct {
 	Total  int        `json:"total"`
 	Issues []apiIssue `json:"issues"`

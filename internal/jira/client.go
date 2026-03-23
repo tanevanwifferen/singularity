@@ -1,13 +1,13 @@
 package jira
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"time"
 )
 
@@ -37,12 +37,13 @@ func NewClient(baseURL, email, apiToken string) *Client {
 
 // SearchIssues executes a JQL query and returns up to maxResults issues.
 func (c *Client) SearchIssues(jql string, maxResults int) (*SearchResult, error) {
-	params := url.Values{}
-	params.Set("jql", jql)
-	params.Set("maxResults", strconv.Itoa(maxResults))
-	params.Set("fields", "summary,description,status,priority,assignee,labels,issuetype,sprint")
+	body := map[string]interface{}{
+		"jql":        jql,
+		"maxResults": maxResults,
+		"fields":     []string{"summary", "description", "status", "priority", "assignee", "labels", "issuetype", "sprint"},
+	}
 
-	raw, err := c.get("/rest/api/2/search?" + params.Encode())
+	raw, err := c.post("/rest/api/3/search/jql", body)
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +87,48 @@ func (c *Client) GetMyIssues(projectKey string) (*SearchResult, error) {
 		jql = "project = " + projectKey + " AND " + jql
 	}
 	return c.SearchIssues(jql, 50)
+}
+
+// post performs a POST request with a JSON body and returns the response body.
+func (c *Client) post(path string, payload interface{}) ([]byte, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("jira: failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+path, bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("jira: failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", c.authHeader)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("jira: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("jira: failed to read response: %w", err)
+	}
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return body, nil
+	case http.StatusTooManyRequests:
+		return nil, fmt.Errorf("jira: rate limited (429) — retry after a moment")
+	case http.StatusUnauthorized:
+		return nil, fmt.Errorf("jira: authentication failed — check email/token")
+	case http.StatusForbidden:
+		return nil, fmt.Errorf("jira: forbidden — insufficient permissions")
+	case http.StatusNotFound:
+		return nil, fmt.Errorf("jira: resource not found")
+	default:
+		return nil, fmt.Errorf("jira: unexpected status %d: %s", resp.StatusCode, string(body))
+	}
 }
 
 // get performs a GET request and returns the response body.
