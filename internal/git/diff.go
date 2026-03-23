@@ -556,3 +556,137 @@ func GetCommitFileDiff(repoPath, hash, filePath string) (string, error) {
 	}
 	return string(output), nil
 }
+
+// DiffHunk represents a single hunk in a unified diff
+type DiffHunk struct {
+	Header   string     // The @@ header line
+	Lines    []DiffLine // All lines in this hunk (context, additions, deletions)
+	OldStart int
+	OldCount int
+	NewStart int
+	NewCount int
+}
+
+// DiffLine represents a single line within a diff hunk
+type DiffLine struct {
+	Content  string
+	LineType string // "+", "-", " " (context)
+}
+
+// ParseHunks parses raw unified diff output into structured hunks.
+// The rawDiff should be the output of git diff for a single file.
+func ParseHunks(rawDiff string) []DiffHunk {
+	var hunks []DiffHunk
+	var current *DiffHunk
+
+	for _, line := range strings.Split(rawDiff, "\n") {
+		if strings.HasPrefix(line, "@@") {
+			// Parse hunk header: @@ -oldStart,oldCount +newStart,newCount @@
+			hunk := DiffHunk{Header: line}
+			parseHunkHeader(line, &hunk)
+			hunks = append(hunks, hunk)
+			current = &hunks[len(hunks)-1]
+		} else if current != nil {
+			// Lines belonging to the current hunk
+			dl := DiffLine{Content: line}
+			if strings.HasPrefix(line, "+") {
+				dl.LineType = "+"
+			} else if strings.HasPrefix(line, "-") {
+				dl.LineType = "-"
+			} else if strings.HasPrefix(line, " ") {
+				dl.LineType = " "
+			} else if line == "\\ No newline at end of file" {
+				dl.LineType = "\\"
+			} else {
+				// Non-diff line (e.g., empty trailing line) -- skip
+				continue
+			}
+			current.Lines = append(current.Lines, dl)
+		}
+	}
+
+	return hunks
+}
+
+// parseHunkHeader extracts line numbers from a hunk header like "@@ -1,5 +1,7 @@"
+func parseHunkHeader(header string, hunk *DiffHunk) {
+	// Find the range specifications between @@ markers
+	parts := strings.SplitN(header, "@@", 3)
+	if len(parts) < 2 {
+		return
+	}
+	rangeStr := strings.TrimSpace(parts[1])
+	fields := strings.Fields(rangeStr)
+
+	for _, f := range fields {
+		if strings.HasPrefix(f, "-") {
+			nums := strings.TrimPrefix(f, "-")
+			if idx := strings.Index(nums, ","); idx >= 0 {
+				if n, err := strconv.Atoi(nums[:idx]); err == nil {
+					hunk.OldStart = n
+				}
+				if n, err := strconv.Atoi(nums[idx+1:]); err == nil {
+					hunk.OldCount = n
+				}
+			} else {
+				if n, err := strconv.Atoi(nums); err == nil {
+					hunk.OldStart = n
+					hunk.OldCount = 1
+				}
+			}
+		} else if strings.HasPrefix(f, "+") {
+			nums := strings.TrimPrefix(f, "+")
+			if idx := strings.Index(nums, ","); idx >= 0 {
+				if n, err := strconv.Atoi(nums[:idx]); err == nil {
+					hunk.NewStart = n
+				}
+				if n, err := strconv.Atoi(nums[idx+1:]); err == nil {
+					hunk.NewCount = n
+				}
+			} else {
+				if n, err := strconv.Atoi(nums); err == nil {
+					hunk.NewStart = n
+					hunk.NewCount = 1
+				}
+			}
+		}
+	}
+}
+
+// buildPatch constructs a minimal patch that can be applied with git apply.
+// It includes the file header lines and a single hunk.
+func buildPatch(filePath string, hunk DiffHunk) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", filePath, filePath))
+	sb.WriteString(fmt.Sprintf("--- a/%s\n", filePath))
+	sb.WriteString(fmt.Sprintf("+++ b/%s\n", filePath))
+	sb.WriteString(hunk.Header + "\n")
+	for _, line := range hunk.Lines {
+		sb.WriteString(line.Content + "\n")
+	}
+	return sb.String()
+}
+
+// StageHunk stages a single hunk using git apply --cached.
+func StageHunk(repoPath, filePath string, hunk DiffHunk) error {
+	patch := buildPatch(filePath, hunk)
+	cmd := exec.Command("git", "-C", repoPath, "apply", "--cached", "--unidiff-zero")
+	cmd.Stdin = strings.NewReader(patch)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to stage hunk: %w: %s", err, string(output))
+	}
+	return nil
+}
+
+// UnstageHunk unstages a single hunk using git apply --cached --reverse.
+func UnstageHunk(repoPath, filePath string, hunk DiffHunk) error {
+	patch := buildPatch(filePath, hunk)
+	cmd := exec.Command("git", "-C", repoPath, "apply", "--cached", "--reverse", "--unidiff-zero")
+	cmd.Stdin = strings.NewReader(patch)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to unstage hunk: %w: %s", err, string(output))
+	}
+	return nil
+}

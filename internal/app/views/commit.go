@@ -31,6 +31,7 @@ const (
 	StageEditMode EditMode = iota // Default: staging area navigation
 	MessageEditMode                // Editing commit message
 	ConfirmCommitMode             // Confirmation dialog
+	HunkDiffMode                  // Viewing file diff with hunk navigation
 )
 
 // CommitView displays the staging area and allows creating commits.
@@ -59,6 +60,14 @@ type CommitView struct {
 
 	// Confirmation state
 	confirmPending bool // Set to true after Ctrl+Enter to show confirm dialog
+
+	// Hunk diff preview state
+	hunkDiffRaw     string         // Raw diff output for the selected file
+	hunkList        []git.DiffHunk // Parsed hunks for the selected file
+	hunkIndex       int            // Currently selected hunk
+	hunkScrollOff   int            // Scroll offset within diff display
+	hunkIsStaged    bool           // Whether we are viewing staged hunks (true) or unstaged (false)
+	hunkFilePath    string         // Path of the file whose hunks are displayed
 }
 
 // NewCommitView creates a new commit view.
@@ -316,6 +325,11 @@ func (v *CommitView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v.handleConfirmMode(msg)
 		}
 
+		// Handle hunk diff preview mode
+		if v.editMode == HunkDiffMode {
+			return v.handleHunkDiffMode(msg)
+		}
+
 		// Stage edit mode - navigation and staging
 		switch msg.String() {
 		case "r":
@@ -393,6 +407,10 @@ func (v *CommitView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.selectedIndex = 0
 
 		case "enter":
+			// Open hunk diff preview for the selected file
+			v.openHunkDiff()
+
+		case "c":
 			// Enter message editing mode if there are staged files
 			if len(v.stagedFiles) > 0 {
 				v.editMode = MessageEditMode
@@ -593,6 +611,143 @@ type CommitErrorMsg struct {
 	Error string
 }
 
+// openHunkDiff loads the diff for the currently selected file and enters hunk diff mode.
+func (v *CommitView) openHunkDiff() {
+	var filePath string
+	var rawDiff string
+	var err error
+	isStaged := false
+
+	if v.activeSection == 0 && v.selectedIndex < len(v.stagedFiles) {
+		filePath = v.stagedFiles[v.selectedIndex].Path
+		rawDiff, err = git.GetStagedFileDiff(v.repoPath, filePath)
+		isStaged = true
+	} else if v.activeSection == 1 && v.selectedIndex < len(v.unstagedFiles) {
+		filePath = v.unstagedFiles[v.selectedIndex].Path
+		rawDiff, err = git.GetUnstagedFileDiff(v.repoPath, filePath)
+		isStaged = false
+	} else {
+		return
+	}
+
+	if err != nil {
+		v.err = err
+		return
+	}
+	if rawDiff == "" {
+		return
+	}
+
+	hunks := git.ParseHunks(rawDiff)
+	if len(hunks) == 0 {
+		return
+	}
+
+	v.hunkDiffRaw = rawDiff
+	v.hunkList = hunks
+	v.hunkIndex = 0
+	v.hunkScrollOff = 0
+	v.hunkIsStaged = isStaged
+	v.hunkFilePath = filePath
+	v.editMode = HunkDiffMode
+}
+
+// handleHunkDiffMode handles key events in hunk diff preview mode.
+func (v *CommitView) handleHunkDiffMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		// Return to file list
+		v.editMode = StageEditMode
+		v.hunkList = nil
+		v.hunkDiffRaw = ""
+		v.hunkFilePath = ""
+		return v, nil
+
+	case "up", "k":
+		// Move to previous hunk
+		if v.hunkIndex > 0 {
+			v.hunkIndex--
+			v.hunkScrollOff = 0
+		}
+		return v, nil
+
+	case "down", "j":
+		// Move to next hunk
+		if v.hunkIndex < len(v.hunkList)-1 {
+			v.hunkIndex++
+			v.hunkScrollOff = 0
+		}
+		return v, nil
+
+	case " ":
+		// Stage or unstage the selected hunk
+		if v.hunkIndex >= len(v.hunkList) {
+			return v, nil
+		}
+		hunk := v.hunkList[v.hunkIndex]
+
+		if v.hunkIsStaged {
+			// Unstage this hunk
+			if err := git.UnstageHunk(v.repoPath, v.hunkFilePath, hunk); err != nil {
+				v.err = err
+				return v, nil
+			}
+		} else {
+			// Stage this hunk
+			if err := git.StageHunk(v.repoPath, v.hunkFilePath, hunk); err != nil {
+				v.err = err
+				return v, nil
+			}
+		}
+
+		// Refresh the diff and files after staging/unstaging
+		v.loadFiles()
+		v.refreshHunkDiff()
+		return v, nil
+	}
+
+	return v, nil
+}
+
+// refreshHunkDiff reloads the diff for the current file and updates the hunk list.
+// If no hunks remain, returns to the file list.
+func (v *CommitView) refreshHunkDiff() {
+	var rawDiff string
+	var err error
+
+	if v.hunkIsStaged {
+		rawDiff, err = git.GetStagedFileDiff(v.repoPath, v.hunkFilePath)
+	} else {
+		rawDiff, err = git.GetUnstagedFileDiff(v.repoPath, v.hunkFilePath)
+	}
+
+	if err != nil || rawDiff == "" {
+		// No more diff for this file -- return to file list
+		v.editMode = StageEditMode
+		v.hunkList = nil
+		v.hunkDiffRaw = ""
+		v.hunkFilePath = ""
+		return
+	}
+
+	hunks := git.ParseHunks(rawDiff)
+	if len(hunks) == 0 {
+		v.editMode = StageEditMode
+		v.hunkList = nil
+		v.hunkDiffRaw = ""
+		v.hunkFilePath = ""
+		return
+	}
+
+	v.hunkDiffRaw = rawDiff
+	v.hunkList = hunks
+	// Keep hunk index in bounds
+	if v.hunkIndex >= len(hunks) {
+		v.hunkIndex = len(hunks) - 1
+	}
+	v.hunkScrollOff = 0
+}
+
 // View renders the commit view.
 func (v *CommitView) View() string {
 	th := theme.GetTheme()
@@ -630,6 +785,11 @@ func (v *CommitView) View() string {
 	// Handle confirmation mode
 	if v.editMode == ConfirmCommitMode {
 		return v.renderConfirmDialog(&s, th)
+	}
+
+	// Handle hunk diff preview mode
+	if v.editMode == HunkDiffMode {
+		return v.renderHunkDiffView(&s, th)
 	}
 
 	// Render staging area view (original content)
@@ -775,9 +935,9 @@ func (v *CommitView) renderStagingView(s *strings.Builder, th theme.Theme) strin
 	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
 	s.WriteString("\n")
 	if stagedCount > 0 {
-		s.WriteString(th.Help.Render(" Space: Stage/Unstage   a: Stage all   u: Unstage all   Tab: Switch   ↑↓: Navigate   Enter: Write commit message   r: Refresh "))
+		s.WriteString(th.Help.Render(" Space: Stage/Unstage   Enter: Hunk diff   a: Stage all   u: Unstage all   Tab: Switch   c: Commit   r: Refresh "))
 	} else {
-		s.WriteString(th.Help.Render(" Space: Stage/Unstage   a: Stage all   u: Unstage all   Tab: Switch   ↑↓: Navigate   r: Refresh "))
+		s.WriteString(th.Help.Render(" Space: Stage/Unstage   Enter: Hunk diff   a: Stage all   u: Unstage all   Tab: Switch   r: Refresh "))
 	}
 
 	return s.String()
@@ -912,6 +1072,114 @@ func (v *CommitView) renderConfirmDialog(s *strings.Builder, th theme.Theme) str
 	return s.String()
 }
 
+// renderHunkDiffView renders the hunk diff preview with selectable hunks
+func (v *CommitView) renderHunkDiffView(s *strings.Builder, th theme.Theme) string {
+	// Title
+	sectionLabel := "unstaged"
+	if v.hunkIsStaged {
+		sectionLabel = "staged"
+	}
+	s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" Hunk Diff: %s (%s) ", v.hunkFilePath, sectionLabel)))
+	s.WriteString("\n")
+	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
+	s.WriteString("\n")
+
+	s.WriteString(fmt.Sprintf(" Hunk %s of %s\n",
+		th.DashboardAccentStyle.Render(fmt.Sprintf("%d", v.hunkIndex+1)),
+		th.StatsStyle.Render(fmt.Sprintf("%d", len(v.hunkList)))))
+	s.WriteString("\n")
+
+	// Render all hunks with the selected one highlighted
+	maxLines := v.height - 10
+	if maxLines < 10 {
+		maxLines = 10
+	}
+	linesRendered := 0
+
+	for hIdx, hunk := range v.hunkList {
+		if linesRendered >= maxLines {
+			break
+		}
+
+		isSelected := hIdx == v.hunkIndex
+
+		// Hunk header line
+		headerPrefix := "  "
+		if isSelected {
+			headerPrefix = "> "
+		}
+
+		action := "Space: stage"
+		if v.hunkIsStaged {
+			action = "Space: unstage"
+		}
+
+		headerLine := fmt.Sprintf("%s%s", headerPrefix, hunk.Header)
+		if isSelected {
+			s.WriteString(th.DashboardAccentStyle.Render(headerLine))
+			s.WriteString(th.Help.Render(fmt.Sprintf("  [%s]", action)))
+		} else {
+			s.WriteString(th.InfoStyle.Render(headerLine))
+		}
+		s.WriteString("\n")
+		linesRendered++
+
+		// Render hunk lines
+		for _, line := range hunk.Lines {
+			if linesRendered >= maxLines {
+				remaining := len(hunk.Lines) - linesRendered
+				if remaining > 0 {
+					s.WriteString(th.Help.Render(fmt.Sprintf("    ... %d more lines", remaining)))
+					s.WriteString("\n")
+				}
+				break
+			}
+
+			linePrefix := "    "
+			if isSelected {
+				linePrefix = "  | "
+			}
+
+			content := line.Content
+			// Truncate long lines
+			displayWidth := v.width - 8
+			if displayWidth < 20 {
+				displayWidth = 20
+			}
+			if len(content) > displayWidth {
+				content = content[:displayWidth-3] + "..."
+			}
+
+			switch line.LineType {
+			case "+":
+				s.WriteString(th.DashboardAccentStyle.Render(linePrefix + content))
+			case "-":
+				s.WriteString(th.DashboardErrorStyle.Render(linePrefix + content))
+			case " ":
+				s.WriteString(th.Help.Render(linePrefix + content))
+			case "\\":
+				s.WriteString(th.Help.Render(linePrefix + content))
+			}
+			s.WriteString("\n")
+			linesRendered++
+		}
+
+		// Separator between hunks
+		if hIdx < len(v.hunkList)-1 && linesRendered < maxLines {
+			s.WriteString(th.StatsStyle.Render("  ---"))
+			s.WriteString("\n")
+			linesRendered++
+		}
+	}
+
+	s.WriteString("\n")
+	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
+	s.WriteString("\n")
+	s.WriteString(th.Help.Render(" Up/Down: Select hunk   Space: Stage/Unstage hunk   Esc: Back to file list "))
+
+	return s.String()
+}
+
 // getCurrentLineIndex returns the current line index based on cursor position
 func (v *CommitView) getCurrentLineIndex() int {
 	if v.commitMessage == "" {
@@ -944,7 +1212,10 @@ func (v *CommitView) ShortHelp() string {
 	if v.editMode == ConfirmCommitMode {
 		return "Y/n: Confirm/Cancel commit"
 	}
-	return "Space: Toggle  a/u: Stage all/Unstage all  Tab: Switch section  Enter: Write message"
+	if v.editMode == HunkDiffMode {
+		return "Up/Down: Select hunk  Space: Stage/Unstage hunk  Esc: Back"
+	}
+	return "Space: Toggle  Enter: Hunk diff  a/u: Stage/Unstage all  Tab: Switch  c: Commit"
 }
 
 // SetSize updates the view dimensions.
@@ -972,9 +1243,10 @@ func (v *CommitView) KeyBindings() []components.KeyBinding {
 		{Key: "↑/k", Description: "Navigate up"},
 		{Key: "↓/j", Description: "Navigate down"},
 		{Key: "Space", Description: "Stage/unstage selected file"},
+		{Key: "Enter", Description: "View file diff with hunk navigation"},
 		{Key: "a", Description: "Stage all files"},
 		{Key: "u", Description: "Unstage all files"},
-		{Key: "Enter", Description: "Write commit message (when files staged)"},
+		{Key: "c", Description: "Write commit message (when files staged)"},
 		{Key: "Esc", Description: "Cancel / Go back"},
 	}
 }
