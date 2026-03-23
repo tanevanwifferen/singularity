@@ -539,7 +539,6 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for _, a := range v.agents {
 				if a.ID == msg.ID {
 					v.selectAgent(a)
-					v.focus = focusOutput
 					break
 				}
 			}
