@@ -26,6 +26,8 @@ type Model struct {
 	errorMsg   string
 	router     *Router
 	layout     *Layout
+	wsClient   *WSClient
+	wsStatus   WSConnectionStatus
 }
 
 // New creates a new app model
@@ -33,6 +35,17 @@ func New() *Model {
 	return &Model{
 		layout: NewLayout(),
 	}
+}
+
+// NewWithWS creates a new app model with WebSocket client
+func NewWithWS(wsURL string) *Model {
+	m := &Model{
+		layout: NewLayout(),
+	}
+	if wsURL != "" {
+		m.SetWSClient(wsURL)
+	}
+	return m
 }
 
 // SetRepoPath sets the repository path
@@ -50,6 +63,36 @@ func (m *Model) SetEngine(eng *engine.Engine) {
 			agentView.SetEngine(eng)
 		}
 	}
+}
+
+// SetWSClient configures the WebSocket client for receiving server events
+func (m *Model) SetWSClient(url string) {
+	if m.wsClient != nil {
+		m.wsClient.Disconnect()
+	}
+
+	m.wsClient = NewWSViewUpdater(url, m.repoPath)
+
+	// Register for connection status updates
+	statusCh := make(chan WSConnectionStatus, 5)
+	m.wsClient.SubscribeStatus(statusCh)
+
+	// Goroutine to handle status updates
+	go func() {
+		for status := range statusCh {
+			// Post to tea message queue via command
+			_ = status // Status is already tracked via WSConnectionMsg in Update
+		}
+	}()
+
+	// Start connection
+	go func() {
+		if err := m.wsClient.Connect(); err != nil {
+			m.errorMsg = fmt.Sprintf("WebSocket connection failed: %v", err)
+		}
+	}()
+
+	// Register handlers for WebSocket events - these are already registered in NewWSViewUpdater
 }
 
 // getAgentView returns the AgentView from the router if it exists
@@ -192,6 +235,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c", "q":
 			m.quitting = true
+			if m.wsClient != nil {
+				m.wsClient.Disconnect()
+			}
 			return m, tea.Quit
 		case "r":
 			// Refresh repo
@@ -204,6 +250,65 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.layout.SetSize(msg.Width, msg.Height)
 		m.router.NotifySize(msg.Width, msg.Height)
+	case WSConnectionMsg:
+		m.wsStatus = msg.Status
+		// Update status message based on connection state
+		if msg.Status.Connected {
+			m.statusMsg = fmt.Sprintf("Connected to %s", msg.Status.URL)
+		} else if msg.Status.Reconnecting {
+			m.statusMsg = fmt.Sprintf("Reconnecting to %s...", msg.Status.URL)
+		} else if msg.Status.Error != "" {
+			m.errorMsg = fmt.Sprintf("Connection error: %s", msg.Status.Error)
+		}
+	case WSRepoUpdateMsg:
+		// Repo was updated on server, refresh the current view
+		m.repoInfo = msg.Repo
+		return m, func() tea.Msg {
+			return views.RefreshMsg{}
+		}
+	case WSBranchUpdateMsg:
+		// Branch was updated, switch to Branches view and refresh
+		if m.router != nil {
+			m.router.SwitchTo("Branches")
+		}
+		return m, func() tea.Msg {
+			return views.RefreshMsg{}
+		}
+	case WSPipelineUpdateMsg:
+		// Pipeline was updated, switch to Pipeline view and refresh
+		if m.router != nil {
+			m.router.SwitchTo("Pipeline")
+		}
+		return m, func() tea.Msg {
+			return views.RefreshMsg{}
+		}
+	case WSAgentOutputMsg:
+		// Agent output received, switch to Agents view
+		if m.router != nil {
+			m.router.SwitchTo("Agents")
+		}
+		// The AgentView will handle the refresh via its Update
+		return m, nil
+	case WSAgentEventMsg:
+		// Agent lifecycle event, switch to Agents view and refresh
+		if m.router != nil {
+			m.router.SwitchTo("Agents")
+		}
+		return m, func() tea.Msg {
+			return views.RefreshMsg{}
+		}
+	case WSProjectUpdateMsg:
+		// Project update, could show a notification or refresh overview
+		m.statusMsg = fmt.Sprintf("Project updated: %s", msg.Status)
+		return m, nil
+	case views.RefreshMsg:
+		// Forward refresh to active view
+		if m.router != nil {
+			if av, ok := m.router.ActiveView().(interface{ Refresh() error }); ok {
+				av.Refresh()
+			}
+		}
+		return m, nil
 	}
 
 	// Delegate to router
