@@ -69,7 +69,11 @@ func NewLogView(repoPath string) *LogView {
 	// Initialize the filter with commit items
 	commits := []LogCommit{}
 	v.filter = components.NewFilter(commits, v.renderCommitItem)
-	v.filter.SetHeight(v.height)
+	listHeight := v.height - v.headerFooterLines()
+	if listHeight < 3 {
+		listHeight = 3
+	}
+	v.filter.SetHeight(listHeight)
 
 	return v
 }
@@ -384,7 +388,11 @@ func (v *LogView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.width = msg.Width
 		v.height = msg.Height
 		if v.filter != nil {
-			v.filter.SetHeight(msg.Height)
+			listHeight := msg.Height - v.headerFooterLines()
+			if listHeight < 3 {
+				listHeight = 3
+			}
+			v.filter.SetHeight(listHeight)
 		}
 
 	case tea.MouseMsg:
@@ -637,12 +645,49 @@ func (v *LogView) ShortHelp() string {
 	return "a: Author filter  s: Message search  Enter: View detail  ↑↓: Navigate  g: Load more  r: Refresh"
 }
 
+// headerFooterLines returns the number of lines used by the view chrome
+// (header, repo info, filter prompts, help bar, footer) so the list gets
+// the remaining space.
+func (v *LogView) headerFooterLines() int {
+	lines := 0
+	// Title + blank line
+	lines += 2
+	// Repo info line
+	if v.repo != nil {
+		lines++
+	}
+	// Filter status lines
+	if v.authorFilter != "" {
+		lines++
+	}
+	if v.messageFilter != "" {
+		lines++
+	}
+	// Filter mode prompt or blank line
+	if v.filterMode != "" {
+		lines += 2 // prompt + blank line
+	} else {
+		lines++ // blank line
+	}
+	// Help text + blank line (when not in filter mode and filter not active)
+	if v.filterMode == "" && (v.filter == nil || !v.filter.IsActive()) {
+		lines += 2
+	}
+	// Footer (separator + help line + blank)
+	lines += 3
+	return lines
+}
+
 // SetSize updates the view dimensions.
 func (v *LogView) SetSize(width, height int) {
 	v.width = width
 	v.height = height
 	if v.filter != nil {
-		v.filter.SetHeight(height)
+		listHeight := height - v.headerFooterLines()
+		if listHeight < 3 {
+			listHeight = 3
+		}
+		v.filter.SetHeight(listHeight)
 	}
 }
 

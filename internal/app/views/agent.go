@@ -183,6 +183,9 @@ func (v *AgentView) loadAgents() {
 			}
 		}
 		v.refreshSelectedAgentOutput()
+	} else if len(v.agents) > 0 {
+		// Auto-preview the agent under the cursor
+		v.syncPreview()
 	}
 
 	v.loading = false
@@ -302,6 +305,15 @@ func (v *AgentView) rebuildOutputViewport() {
 
 	if v.outputAutoScroll {
 		v.outputViewport.GotoBottom()
+	}
+}
+
+// syncPreview updates the output pane to show the agent under the cursor.
+func (v *AgentView) syncPreview() {
+	if item, idx := v.filter.SelectedItem(); idx >= 0 {
+		if v.selectedAgent == nil || v.selectedAgent.ID != item.ID {
+			v.selectAgent(item)
+		}
 	}
 }
 
@@ -460,12 +472,14 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "j", "down", "k", "up", "g", "G":
 			v.filter.Update(msg)
+			v.syncPreview()
 			return v, nil
 		}
 
 		// Pass remaining keys to filter
 		if v.filter != nil {
 			v.filter.Update(msg)
+			v.syncPreview()
 		}
 
 	case RefreshDoneMsg:

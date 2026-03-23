@@ -7,11 +7,29 @@ import (
 	"strings"
 
 	"git-frontend/internal/app/components"
+	"git-frontend/internal/git"
 	"git-frontend/internal/project"
 	"git-frontend/internal/theme"
 
-	"github.com/charmbracelet/bubbletea"
+	tea "github.com/charmbracelet/bubbletea"
 )
+
+// treeNode represents a row in the project tree (either a repo or a branch).
+type treeNode struct {
+	IsRepo   bool
+	RepoIdx  int
+	Repo     *project.RepoStatus
+	Branch   *git.BranchInfo
+	RepoName string // set on branch nodes for context
+}
+
+// String returns the display name for filtering purposes.
+func (n treeNode) String() string {
+	if n.IsRepo {
+		return n.Repo.Name
+	}
+	return n.Branch.Name
+}
 
 // ProjectView displays aggregate multi-repo project status.
 type ProjectView struct {
@@ -24,29 +42,28 @@ type ProjectView struct {
 	width       int
 	height      int
 
-	// Navigation state
-	selectedIdx int
+	// Tree state
+	expanded map[int]bool // repo index -> expanded
 
 	// Branch check state
-	showBranchCheck   bool
-	branchCheckName   string
-	branchExistence   *project.BranchExistence
+	showBranchCheck bool
+	branchCheckName string
+	branchExistence *project.BranchExistence
 
-	// Filter for repo list
-	filter *components.Filter[project.RepoStatus]
+	// Filter for tree list
+	filter *components.Filter[treeNode]
 }
 
 // NewProjectView creates a new project view with an already-loaded project.
 func NewProjectView(proj *project.Project) *ProjectView {
 	v := &ProjectView{
-		proj:      proj,
-		width:     80,
-		height:    24,
+		proj:     proj,
+		width:    80,
+		height:   24,
+		expanded: make(map[int]bool),
 	}
 
-	// Initialize filter
-	statuses := []project.RepoStatus{}
-	v.filter = components.NewFilter(statuses, v.renderRepoItem)
+	v.filter = components.NewFilter([]treeNode{}, v.renderTreeNode)
 	v.filter.SetHeight(v.height)
 
 	return v
@@ -59,11 +76,10 @@ func NewProjectViewWithPath(projectPath string) *ProjectView {
 		projectPath: projectPath,
 		width:       80,
 		height:      24,
+		expanded:    make(map[int]bool),
 	}
 
-	// Initialize filter
-	statuses := []project.RepoStatus{}
-	v.filter = components.NewFilter(statuses, v.renderRepoItem)
+	v.filter = components.NewFilter([]treeNode{}, v.renderTreeNode)
 	v.filter.SetHeight(v.height)
 
 	return v
@@ -89,7 +105,6 @@ func discoverProject(dir string) *project.Project {
 		}
 		repoPath := filepath.Join(dir, entry.Name(), ".git")
 		if _, err := os.Stat(repoPath); err == nil {
-			// It's a git repo
 			repos = append(repos, project.RepoDef{
 				Name:          entry.Name(),
 				Path:          filepath.Join(dir, entry.Name()),
@@ -123,7 +138,6 @@ func (v *ProjectView) Init() tea.Cmd {
 func (v *ProjectView) loadData() {
 	v.err = nil
 
-	// If we don't have a project yet, try to load from path
 	if v.proj == nil && v.projectPath != "" {
 		proj := discoverProject(v.projectPath)
 		if proj == nil {
@@ -142,45 +156,131 @@ func (v *ProjectView) loadData() {
 
 	v.proj.Refresh()
 	v.status = v.proj.Status()
-
-	// Update filter with repos
-	if v.status != nil {
-		v.filter.SetItems(v.status.Repos)
-	}
-
+	v.rebuildTree()
 	v.loading = false
 }
 
-// renderRepoItem renders a single repo item for the filter
-func (v *ProjectView) renderRepoItem(repo project.RepoStatus, index int, selected bool) string {
-	var statusIcon string
+// rebuildTree flattens repos and their branches into the filter list.
+func (v *ProjectView) rebuildTree() {
+	if v.status == nil {
+		return
+	}
 
-	if repo.Error != "" {
-		statusIcon = "✗"
-	} else if repo.IsDirty {
-		statusIcon = "●"
+	var nodes []treeNode
+	for i := range v.status.Repos {
+		repo := &v.status.Repos[i]
+		nodes = append(nodes, treeNode{
+			IsRepo:  true,
+			RepoIdx: i,
+			Repo:    repo,
+		})
+		if v.expanded[i] {
+			for j := range repo.Branches {
+				nodes = append(nodes, treeNode{
+					IsRepo:   false,
+					RepoIdx:  i,
+					Repo:     repo,
+					Branch:   &repo.Branches[j],
+					RepoName: repo.Name,
+				})
+			}
+		}
+	}
+
+	v.filter.SetItems(nodes)
+}
+
+// selectedNode returns the currently selected tree node.
+func (v *ProjectView) selectedNode() *treeNode {
+	item, idx := v.filter.SelectedItem()
+	if idx < 0 {
+		return nil
+	}
+	return &item
+}
+
+// renderTreeNode renders a single tree item for the filter.
+func (v *ProjectView) renderTreeNode(node treeNode, index int, selected bool) string {
+	th := theme.GetTheme()
+	var line strings.Builder
+
+	if node.IsRepo {
+		// Repo row: [▼/▶] [status] name (current-branch)
+		prefix := "  "
+		if selected {
+			prefix = "> "
+		}
+		line.WriteString(prefix)
+
+		// Expand indicator
+		if v.expanded[node.RepoIdx] {
+			line.WriteString("▼ ")
+		} else {
+			line.WriteString("▶ ")
+		}
+
+		// Status icon
+		if node.Repo.Error != "" {
+			line.WriteString(th.DashboardErrorStyle.Render("✗ "))
+		} else if node.Repo.IsDirty {
+			line.WriteString(th.DashboardAccentStyle.Render("● "))
+		} else {
+			line.WriteString(th.StatsStyle.Render("✓ "))
+		}
+
+		// Repo name
+		if selected {
+			line.WriteString(th.SelectedBranchStyle.Render(node.Repo.Name))
+		} else {
+			line.WriteString(th.BranchStyle.Render(node.Repo.Name))
+		}
+
+		// Current branch
+		if node.Repo.CurrentBranch != "" {
+			line.WriteString(th.MutedTextStyle.Render(fmt.Sprintf("  %s", node.Repo.CurrentBranch)))
+		}
+
+		// Branch count
+		line.WriteString(th.MutedTextStyle.Render(fmt.Sprintf("  (%d branches)", node.Repo.BranchCount)))
 	} else {
-		statusIcon = "✓"
+		// Branch row: indented under repo
+		prefix := "     "
+		if selected {
+			prefix = "   > "
+		}
+		line.WriteString(prefix)
+
+		// Current branch marker
+		isCurrent := node.Repo.CurrentBranch == node.Branch.Name
+		if isCurrent {
+			line.WriteString(th.DashboardAccentStyle.Render("* "))
+		} else {
+			line.WriteString("  ")
+		}
+
+		// Branch name
+		if selected {
+			line.WriteString(th.SelectedBranchStyle.Render(node.Branch.Name))
+		} else if isCurrent {
+			line.WriteString(th.DashboardAccentStyle.Render(node.Branch.Name))
+		} else {
+			line.WriteString(th.BranchStyle.Render(node.Branch.Name))
+		}
+
+		// Ahead/behind indicators
+		if node.Branch.Ahead > 0 || node.Branch.Behind > 0 {
+			var ab []string
+			if node.Branch.Ahead > 0 {
+				ab = append(ab, fmt.Sprintf("↑%d", node.Branch.Ahead))
+			}
+			if node.Branch.Behind > 0 {
+				ab = append(ab, fmt.Sprintf("↓%d", node.Branch.Behind))
+			}
+			line.WriteString(th.MutedTextStyle.Render(fmt.Sprintf("  %s", strings.Join(ab, " "))))
+		}
 	}
 
-	// Build the line
-	line := fmt.Sprintf(" %s %s", statusIcon, repo.Name)
-
-	// Add branch info
-	if repo.Error == "" && repo.CurrentBranch != "" {
-		line += fmt.Sprintf(" %s", repo.CurrentBranch)
-	}
-
-	if repo.IsDirty {
-		line += " dirty"
-	}
-
-	// Apply selection highlighting
-	if selected {
-		line = ">" + line
-	}
-
-	return line
+	return line.String()
 }
 
 // Update handles update events.
@@ -195,7 +295,6 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					v.branchCheckName = v.branchCheckName[:len(v.branchCheckName)-1]
 				}
 			case tea.KeyEnter:
-				// Perform branch check
 				if v.branchCheckName != "" && v.proj != nil {
 					v.branchExistence = v.proj.BranchExistsAcross(v.branchCheckName)
 				}
@@ -209,6 +308,15 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, nil
 		}
 
+		// If filter is active, let it handle keys
+		if v.filter != nil && v.filter.IsActive() {
+			v.filter.Update(msg)
+			if msg.String() == "esc" {
+				// filter deactivated
+			}
+			return v, nil
+		}
+
 		switch msg.String() {
 		case "r":
 			v.loading = true
@@ -216,43 +324,40 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				v.loadData()
 				return RefreshDoneMsg{}
 			}
-		case "up", "k":
-			if v.selectedIdx > 0 {
-				v.selectedIdx--
-				v.filter.CursorUp()
-			}
-		case "down", "j":
-			if v.status != nil && v.selectedIdx < len(v.status.Repos)-1 {
-				v.selectedIdx++
-				v.filter.CursorDown()
-			}
 		case "enter":
-			// Drill into selected repo
-			if v.status != nil && v.selectedIdx < len(v.status.Repos) {
-				selectedRepo := v.status.Repos[v.selectedIdx]
-				// Switch to Overview view with this repo's path
+			node := v.selectedNode()
+			if node == nil {
+				break
+			}
+			if node.IsRepo {
+				// Toggle expand/collapse
+				v.expanded[node.RepoIdx] = !v.expanded[node.RepoIdx]
+				v.rebuildTree()
+			} else {
+				// Drill into repo overview
 				return v, func() tea.Msg {
-					return ViewChangeMsg{ViewName: "Overview", RepoPath: selectedRepo.Path}
+					return ViewChangeMsg{ViewName: "Overview", RepoPath: node.Repo.Path}
+				}
+			}
+		case "o":
+			// Open repo regardless of node type
+			node := v.selectedNode()
+			if node != nil {
+				return v, func() tea.Msg {
+					return ViewChangeMsg{ViewName: "Overview", RepoPath: node.Repo.Path}
 				}
 			}
 		case "b":
-			// Toggle branch check mode
 			v.showBranchCheck = true
 			v.branchCheckName = ""
 			v.branchExistence = nil
 		case "/":
-			// Activate filter
 			if v.filter != nil {
-				v.filter.Update(msg)
-			}
-		case "esc":
-			// Deactivate filter if active
-			if v.filter != nil && v.filter.IsActive() {
 				v.filter.Update(msg)
 			}
 		}
 
-		// Also pass to filter for filtering
+		// Pass navigation keys to filter
 		if v.filter != nil {
 			v.filter.Update(msg)
 		}
@@ -261,7 +366,6 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.loading = false
 
 	case tea.MouseMsg:
-		// Handle mouse events for the filter/list
 		if v.filter != nil {
 			if v.filter.HandleMouse(msg) {
 				return v, nil
@@ -305,19 +409,13 @@ func (v *ProjectView) View() string {
 	}
 
 	// Project summary
-	s.WriteString(th.StatsStyle.Render(" Aggregate Status "))
-	s.WriteString("\n")
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
-
-	// Status indicators
 	cleanCount := v.status.RepoCount - v.status.DirtyCount - v.status.ErrorCount
 	s.WriteString(fmt.Sprintf(" %s %d clean   %s %d dirty   %s %d errors\n\n",
 		th.StatsStyle.Render("✓"), cleanCount,
 		th.DashboardAccentStyle.Render("●"), v.status.DirtyCount,
 		th.DashboardErrorStyle.Render("✗"), v.status.ErrorCount))
 
-	// Branch check section (shown at top when active)
+	// Branch check section
 	if v.showBranchCheck {
 		s.WriteString(th.StatsStyle.Render(" Cross-Repo Branch Check "))
 		s.WriteString("\n")
@@ -330,7 +428,6 @@ func (v *ProjectView) View() string {
 		s.WriteString(th.Help.Render("Enter: Check   Esc: Cancel"))
 		s.WriteString("\n\n")
 
-		// Show branch check results
 		if v.proj != nil && v.branchCheckName != "" && v.branchExistence != nil {
 			s.WriteString(th.StatsStyle.Render(" Results "))
 			s.WriteString("\n")
@@ -347,7 +444,6 @@ func (v *ProjectView) View() string {
 				}
 			}
 
-			// Summary
 			s.WriteString("\n")
 			if allHave {
 				s.WriteString(th.DashboardAccentStyle.Render(fmt.Sprintf(" Branch '%s' exists in ALL repos ✓",
@@ -372,7 +468,7 @@ func (v *ProjectView) View() string {
 	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
 	s.WriteString("\n")
 
-	// List repos using filter view
+	// Tree list
 	if v.status != nil && len(v.status.Repos) > 0 {
 		s.WriteString(v.filter.View())
 	} else {
@@ -384,14 +480,14 @@ func (v *ProjectView) View() string {
 	// Footer
 	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
 	s.WriteString("\n")
-	s.WriteString(th.Help.Render("↑↓: Select  Enter: Open repo  b: Check branch  /: Filter  r: Refresh"))
+	s.WriteString(th.Help.Render("↑↓: Navigate  Enter: Expand/collapse  o: Open repo  b: Check branch  /: Filter  r: Refresh"))
 
 	return s.String()
 }
 
 // ShortHelp returns a short help string.
 func (v *ProjectView) ShortHelp() string {
-	return "↑↓: Select  Enter: Open repo  b: Check branch  /: Filter  r: Refresh"
+	return "↑↓: Navigate  Enter: Expand/collapse  o: Open repo  b: Check branch  /: Filter  r: Refresh"
 }
 
 // SetSize updates the view dimensions.
@@ -405,8 +501,9 @@ func (v *ProjectView) SetSize(width, height int) {
 
 // GetSelectedRepoPath returns the path of the currently selected repo.
 func (v *ProjectView) GetSelectedRepoPath() string {
-	if v.status != nil && v.selectedIdx < len(v.status.Repos) {
-		return v.status.Repos[v.selectedIdx].Path
+	node := v.selectedNode()
+	if node != nil {
+		return node.Repo.Path
 	}
 	return ""
 }
@@ -420,11 +517,12 @@ func (v *ProjectView) Refresh() error {
 // KeyBindings returns the keybindings for this view.
 func (v *ProjectView) KeyBindings() []components.KeyBinding {
 	return []components.KeyBinding{
-		{Key: "↑/k", Description: "Select previous repository"},
-		{Key: "↓/j", Description: "Select next repository"},
-		{Key: "enter", Description: "Open selected repository"},
+		{Key: "↑/k", Description: "Select previous item"},
+		{Key: "↓/j", Description: "Select next item"},
+		{Key: "enter", Description: "Expand/collapse repo"},
+		{Key: "o", Description: "Open selected repository"},
 		{Key: "b", Description: "Check if branch exists in all repos"},
-		{Key: "/", Description: "Filter repositories"},
+		{Key: "/", Description: "Filter"},
 		{Key: "r", Description: "Refresh all repos"},
 	}
 }

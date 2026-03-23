@@ -26,14 +26,15 @@ type Repo struct {
 
 // RepoStatus summarizes a repo's state for the dashboard
 type RepoStatus struct {
-	Name          string `json:"name"`
-	Path          string `json:"path"`
-	CurrentBranch string `json:"current_branch"`
-	DefaultBranch string `json:"default_branch"`
-	IsDirty       bool   `json:"is_dirty"`
-	HEAD          string `json:"head"`
-	BranchCount   int    `json:"branch_count"`
-	Error         string `json:"error,omitempty"`
+	Name          string           `json:"name"`
+	Path          string           `json:"path"`
+	CurrentBranch string           `json:"current_branch"`
+	DefaultBranch string           `json:"default_branch"`
+	IsDirty       bool             `json:"is_dirty"`
+	HEAD          string           `json:"head"`
+	BranchCount   int              `json:"branch_count"`
+	Branches      []git.BranchInfo `json:"branches"`
+	Error         string           `json:"error,omitempty"`
 }
 
 // ProjectStatus is the aggregate status of all repos in a project
@@ -229,6 +230,7 @@ func (r *Repo) Status() RepoStatus {
 		rs.IsDirty = r.Info.IsDirty
 		rs.HEAD = r.Info.HEAD
 		rs.BranchCount = len(r.Info.Branches)
+		rs.Branches = r.Info.Branches
 	}
 
 	return rs

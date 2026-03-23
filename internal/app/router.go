@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"strings"
 
 	"git-frontend/internal/app/components"
 	"git-frontend/internal/app/views"
@@ -289,7 +290,8 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Check submenu trigger keys first (e.g. "g" for Git Operations)
 		// These take priority over view key claims.
-		if sm, ok := r.submenus[key]; ok {
+		// Use case-insensitive matching so both "g" and "G" trigger the submenu.
+		if sm, ok := r.submenus[strings.ToLower(key)]; ok {
 			r.showSubmenu = true
 			r.activeSubmenu = sm
 			r.activeSubmenu.SetSize(r.viewWidth, r.viewHeight)
