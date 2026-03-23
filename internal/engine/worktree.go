@@ -66,6 +66,14 @@ func (a *Agent) mergeWorktreeBack() string {
 		cleanupWorktree(repoPath, wtPath, wtBranch)
 	}()
 
+	// Auto-commit any uncommitted changes left by the agent
+	if committed, err := autoCommitWorktree(wtPath, a.ID); err != nil {
+		a.appendOutput("error", fmt.Sprintf("Failed to auto-commit worktree changes: %v", err))
+		return "error"
+	} else if committed {
+		a.appendOutput("system", "Worktree: auto-committed uncommitted changes before merge")
+	}
+
 	// Check if the worktree branch has any new commits compared to source
 	hasChanges, err := branchHasNewCommits(repoPath, sourceBranch, wtBranch)
 	if err != nil {
@@ -108,6 +116,35 @@ func cleanupWorktree(repoPath, wtPath, branch string) {
 	if delCmd.Run() != nil {
 		// -d failed (not merged) — don't force-delete, leave the branch for manual recovery
 	}
+}
+
+// autoCommitWorktree stages and commits any uncommitted changes in the worktree.
+// Returns true if a commit was made, false if the worktree was already clean.
+func autoCommitWorktree(wtPath, agentID string) (bool, error) {
+	// Check for any changes (staged, unstaged, or untracked)
+	statusCmd := exec.Command("git", "-C", wtPath, "status", "--porcelain")
+	out, err := statusCmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("git status: %w", err)
+	}
+	if strings.TrimSpace(string(out)) == "" {
+		return false, nil // nothing to commit
+	}
+
+	// Stage everything
+	addCmd := exec.Command("git", "-C", wtPath, "add", "-A")
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		return false, fmt.Errorf("git add: %w\n%s", err, string(out))
+	}
+
+	// Commit with agent attribution
+	commitMsg := fmt.Sprintf("Agent work from %s", agentID)
+	commitCmd := exec.Command("git", "-C", wtPath, "commit", "-m", commitMsg)
+	if out, err := commitCmd.CombinedOutput(); err != nil {
+		return false, fmt.Errorf("git commit: %w\n%s", err, string(out))
+	}
+
+	return true, nil
 }
 
 // branchHasNewCommits checks whether branchB has commits not in branchA.
