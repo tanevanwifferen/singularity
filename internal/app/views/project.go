@@ -6,8 +6,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"git-frontend/internal/app/components"
+	"git-frontend/internal/engine"
 	"git-frontend/internal/git"
 	"git-frontend/internal/project"
 	"git-frontend/internal/theme"
@@ -72,6 +74,12 @@ type ProjectView struct {
 	workflowBaseDir      string // default ~/.worktrees/<projectName>/
 	showWorkflowStatus   bool   // toggle for status panel
 
+	// Agent orchestration
+	engine            *engine.Engine
+	showAgentPrompt   bool   // modal for entering agent task prompt
+	agentPromptText   string // the task text input
+	agentSpawnResults string // flash message showing which repos got agents
+
 	// Filter for tree list
 	filter *components.Filter[treeNode]
 }
@@ -122,6 +130,11 @@ func defaultWorkflowBaseDir(projectName string) string {
 func (v *ProjectView) SetProject(proj *project.Project) {
 	v.proj = proj
 	v.loadData()
+}
+
+// SetEngine sets the agent engine (allows late binding, matches AgentView pattern).
+func (v *ProjectView) SetEngine(eng *engine.Engine) {
+	v.engine = eng
 }
 
 // discoverProject creates a project by auto-discovering git repos in a directory
@@ -230,6 +243,67 @@ func (v *ProjectView) selectedNode() *treeNode {
 		return nil
 	}
 	return &item
+}
+
+// spawnAgentsIntoWorktrees spawns an agent into each repo's worktree directory.
+// StartAgent returns immediately (it spawns a background process), so this is safe
+// to call synchronously in the Update handler.
+func (v *ProjectView) spawnAgentsIntoWorktrees(task string) {
+	if v.activeWorkflow == nil || v.engine == nil {
+		return
+	}
+
+	// Gather context files from the project
+	var ctxFiles []string
+	if v.proj != nil {
+		ctxFiles = v.proj.ContextFiles
+	}
+
+	// Count how many worktrees need agents
+	var needed int
+	for _, wr := range v.activeWorkflow.Repos {
+		if wr.WorktreeCreated {
+			needed++
+		}
+	}
+
+	// Check engine capacity
+	stats := v.engine.Stats()
+	available := stats.MaxAgents - stats.Active
+	if needed > available {
+		v.agentSpawnResults = fmt.Sprintf("Engine capacity exceeded: need %d agents but only %d/%d slots available",
+			needed, available, stats.MaxAgents)
+		return
+	}
+
+	// Sort repo names for deterministic output
+	names := make([]string, 0, len(v.activeWorkflow.Repos))
+	for name := range v.activeWorkflow.Repos {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var results []string
+	for _, name := range names {
+		wr := v.activeWorkflow.Repos[name]
+		if !wr.WorktreeCreated {
+			results = append(results, fmt.Sprintf("  - %s: skipped (no worktree)", name))
+			continue
+		}
+
+		id, err := v.engine.StartAgent(wr.WorktreePath, task, engine.AgentOptions{
+			ContextFiles: ctxFiles,
+			SmartRoute:   true,
+		})
+		if err != nil {
+			results = append(results, fmt.Sprintf("  ✗ %s: %v", name, err))
+		} else {
+			v.activeWorkflow.SetAgentID(name, id)
+			results = append(results, fmt.Sprintf("  ✓ %s: agent %s", name, id))
+		}
+	}
+
+	v.agentSpawnResults = strings.Join(results, "\n")
 }
 
 // renderTreeNode renders a single tree item for the filter.
@@ -352,6 +426,9 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.workflowStatusMsg != "" {
 			v.workflowStatusMsg = ""
 		}
+		if v.agentSpawnResults != "" {
+			v.agentSpawnResults = ""
+		}
 
 		// Handle workflow start modal
 		if v.showWorkflowStart {
@@ -385,6 +462,38 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					r := msg.Runes[0]
 					if r >= 32 && r <= 126 {
 						v.workflowBranchName += string(r)
+					}
+				}
+			}
+			return v, nil
+		}
+
+		// Handle agent prompt modal
+		if v.showAgentPrompt {
+			switch msg.String() {
+			case "enter":
+				if v.agentPromptText != "" && v.engine != nil && v.activeWorkflow != nil {
+					promptText := v.agentPromptText
+					v.showAgentPrompt = false
+					v.agentPromptText = ""
+					v.spawnAgentsIntoWorktrees(promptText)
+				} else {
+					v.showAgentPrompt = false
+				}
+			case "esc":
+				v.showAgentPrompt = false
+				v.agentPromptText = ""
+			case "backspace":
+				if len(v.agentPromptText) > 0 {
+					v.agentPromptText = v.agentPromptText[:len(v.agentPromptText)-1]
+				}
+			case "ctrl+w":
+				v.agentPromptText = components.DeleteWordEnd(v.agentPromptText)
+			default:
+				if len(msg.Runes) == 1 {
+					r := msg.Runes[0]
+					if r >= 32 && r <= 126 {
+						v.agentPromptText += string(r)
 					}
 				}
 			}
@@ -559,6 +668,24 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if v.activeWorkflow != nil {
 				v.showWorkflowCleanup = true
 			}
+		case "a":
+			// Spawn agents into worktrees (only when workflow is active with worktrees)
+			if v.activeWorkflow != nil && v.engine != nil {
+				// Check that at least one worktree was created
+				hasWorktree := false
+				for _, wr := range v.activeWorkflow.Repos {
+					if wr.WorktreeCreated {
+						hasWorktree = true
+						break
+					}
+				}
+				if hasWorktree {
+					v.showAgentPrompt = true
+					v.agentPromptText = ""
+				} else {
+					v.agentSpawnResults = "No worktrees created yet -- create worktrees first"
+				}
+			}
 		case "W":
 			// Toggle workflow status panel
 			v.showWorkflowStatus = !v.showWorkflowStatus
@@ -732,6 +859,20 @@ func (v *ProjectView) View() string {
 		s.WriteString("\n\n")
 	}
 
+	// Agent prompt modal
+	if v.showAgentPrompt {
+		s.WriteString(th.StatsStyle.Render(" Spawn Agents into Worktrees "))
+		s.WriteString("\n")
+		s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
+		s.WriteString("\n\n")
+		s.WriteString(th.Help.Render("Task: "))
+		s.WriteString(th.InfoStyle.Render(v.agentPromptText))
+		s.WriteString(th.MutedTextStyle.Render("_"))
+		s.WriteString("\n\n")
+		s.WriteString(th.Help.Render("Enter: Spawn agents   Esc: Cancel   Ctrl+W: Delete word"))
+		s.WriteString("\n\n")
+	}
+
 	// Workflow cleanup confirmation
 	if v.showWorkflowCleanup && v.activeWorkflow != nil {
 		s.WriteString(th.DashboardAccentStyle.Render(" Remove all worktrees? "))
@@ -780,6 +921,15 @@ func (v *ProjectView) View() string {
 			if wr.Error != "" {
 				s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf("  %s", wr.Error)))
 			}
+			// Agent status
+			if wr.AgentID != "" && v.engine != nil {
+				agentStatus := v.renderAgentStatus(wr.AgentID)
+				s.WriteString("  ")
+				s.WriteString(agentStatus)
+			} else if wr.WorktreeCreated && wr.AgentID == "" {
+				s.WriteString("  ")
+				s.WriteString(th.MutedTextStyle.Render("-"))
+			}
 			s.WriteString("\n")
 		}
 		s.WriteString("\n")
@@ -789,6 +939,19 @@ func (v *ProjectView) View() string {
 	if v.workflowStatusMsg != "" {
 		for _, line := range strings.Split(v.workflowStatusMsg, "\n") {
 			if strings.Contains(line, "✓") || strings.HasPrefix(line, "Worktrees for") {
+				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
+			} else {
+				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
+			}
+			s.WriteString("\n")
+		}
+		s.WriteString("\n")
+	}
+
+	// Agent spawn results flash message
+	if v.agentSpawnResults != "" {
+		for _, line := range strings.Split(v.agentSpawnResults, "\n") {
+			if strings.Contains(line, "✓") {
 				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
 			} else {
 				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
@@ -853,25 +1016,53 @@ func (v *ProjectView) View() string {
 	s.WriteString("\n")
 	s.WriteString(th.Help.Render("⚡current  ✓synced  ↑ahead  ↓behind  ⊘no remote  ●dirty  ✗error"))
 	s.WriteString("\n")
-	s.WriteString(th.Help.Render("↑↓: Navigate  Enter: Expand/collapse  o: Open  c: Checkout  n: New branch  m: MR/PR  b: Check  w: Workflow  D: Cleanup  W: Status  /: Filter  r: Refresh"))
+	s.WriteString(th.Help.Render("↑↓: Navigate  Enter: Expand/collapse  o: Open  c: Checkout  n: New branch  m: MR/PR  b: Check  w: Workflow  a: Agents  D: Cleanup  W: Status  /: Filter  r: Refresh"))
 
 	return s.String()
 }
 
+// renderAgentStatus returns a styled status string for an agent.
+func (v *ProjectView) renderAgentStatus(agentID string) string {
+	th := theme.GetTheme()
+	if v.engine == nil {
+		return th.MutedTextStyle.Render("-")
+	}
+
+	agent := v.engine.GetAgent(agentID)
+	if agent == nil {
+		return th.MutedTextStyle.Render("- (not found)")
+	}
+
+	snap := agent.Snapshot()
+	switch snap.State {
+	case engine.AgentRunning, engine.AgentStarting, engine.AgentRouting:
+		elapsed := time.Since(snap.CreatedAt).Truncate(time.Second)
+		return th.DashboardAccentStyle.Render(fmt.Sprintf("● %s (%s)", snap.State.String(), elapsed))
+	case engine.AgentComplete:
+		return th.StatsStyle.Render("✓ done")
+	case engine.AgentError:
+		return th.DashboardErrorStyle.Render("✗ error")
+	case engine.AgentKilled:
+		return th.DashboardErrorStyle.Render("✗ killed")
+	default:
+		return th.MutedTextStyle.Render(snap.State.String())
+	}
+}
+
 // ShortHelp returns a short help string.
 func (v *ProjectView) ShortHelp() string {
-	return "↑↓: Navigate  Enter: Expand/collapse  o: Open  c: Checkout  n: New branch  m: MR/PR  b: Check  w: Workflow  D: Cleanup  W: Status  /: Filter  r: Refresh"
+	return "↑↓: Navigate  Enter: Expand/collapse  o: Open  c: Checkout  n: New branch  m: MR/PR  b: Check  w: Workflow  a: Agents  D: Cleanup  W: Status  /: Filter  r: Refresh"
 }
 
 // CapturesInput returns true when the view is in an input mode.
 func (v *ProjectView) CapturesInput() bool {
-	return v.showBranchCheck || v.showNewBranch || v.showMRConfirm || v.showWorkflowStart || v.showWorkflowCleanup
+	return v.showBranchCheck || v.showNewBranch || v.showMRConfirm || v.showWorkflowStart || v.showWorkflowCleanup || v.showAgentPrompt
 }
 
 // CapturesKey returns true for keys this view handles directly.
 func (v *ProjectView) CapturesKey(key string) bool {
 	switch key {
-	case "r", "o", "b", "c", "n", "m", "w", "D", "W", "enter", "/", "j", "k", "up", "down":
+	case "r", "o", "b", "c", "n", "m", "w", "a", "D", "W", "enter", "/", "j", "k", "up", "down":
 		return true
 	}
 	return false
@@ -913,6 +1104,7 @@ func (v *ProjectView) KeyBindings() []components.KeyBinding {
 		{Key: "m", Description: "Create MR/PR for selected branch"},
 		{Key: "b", Description: "Check if branch exists in all repos"},
 		{Key: "w", Description: "Start feature workflow (create worktrees)"},
+		{Key: "a", Description: "Spawn agents into worktrees"},
 		{Key: "D", Description: "Cleanup feature workflow (remove worktrees)"},
 		{Key: "W", Description: "Toggle workflow status panel"},
 		{Key: "/", Description: "Filter"},

@@ -268,8 +268,15 @@ func (m *Model) initProjectRouter() {
 		m.proj = proj
 	}
 
+	// Create engine if not already set (same pattern as initRouter)
+	if m.engine == nil {
+		m.engine = engine.New(10)
+	}
+
 	// Create the project overview view as the first view (landing page)
 	projectView := views.NewProjectView(m.proj)
+	projectView.SetEngine(m.engine)
+
 	router := NewRouter(projectView, "Project")
 	// Add F1 shortcut for the project view
 	router.viewKeys["Project"] = "f1"
