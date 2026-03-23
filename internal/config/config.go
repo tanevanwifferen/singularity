@@ -96,13 +96,7 @@ func DefaultConfig() *Config {
 			MaxTokens:    1024,
 			Temperature:  0.7,
 		},
-		Profiles: map[string]Profile{
-			"default": {
-				Name:        "default",
-				Description: "Default configuration",
-				Config:      *DefaultConfig(),
-			},
-		},
+		Profiles: map[string]Profile{},
 	}
 }
 

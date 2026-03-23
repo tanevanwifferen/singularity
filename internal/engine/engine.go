@@ -17,6 +17,7 @@ type AgentOptions struct {
 	Timeout      time.Duration // Kill agent after this duration (0 = no timeout)
 	ContextFiles []string      // Files to read and inject into the prompt on startup
 	SmartRoute   bool          // Use Haiku to classify prompt and pick model (opus for planning, sonnet for implementation)
+	UseWorktree  bool          // Create a git worktree for isolation; merge back on completion
 }
 
 // Engine manages a pool of Claude Code agent subprocesses
@@ -66,6 +67,17 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 	agent := newAgent(id, projectPath, task, opts)
 	e.agents[id] = agent
 	e.mu.Unlock()
+
+	// Set up worktree isolation if requested
+	if opts.UseWorktree {
+		if err := agent.setupWorktree(); err != nil {
+			agent.setState(AgentError)
+			agent.Error = fmt.Sprintf("worktree setup: %v", err)
+			agent.appendOutput("error", fmt.Sprintf("Failed to create worktree: %v", err))
+			return id, fmt.Errorf("worktree setup: %w", err)
+		}
+		agent.appendOutput("system", fmt.Sprintf("Worktree created at %s (branch: %s)", agent.worktreePath, agent.worktreeBranch))
+	}
 
 	if opts.SmartRoute && opts.Model == "" {
 		// Route async: show agent immediately, classify in background, then start

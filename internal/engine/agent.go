@@ -85,6 +85,14 @@ type Agent struct {
 
 	// sessionID is the actual session ID assigned by Claude (from system/init event)
 	sessionID string
+
+	// Worktree isolation fields
+	useWorktree    bool   // whether this agent runs in a worktree
+	worktreePath   string // path to the created worktree
+	worktreeBranch string // temporary branch name for the worktree
+	sourceRepoPath string // original repo path (for merge-back)
+	sourceBranch   string // branch to merge back into
+	MergeResult    string `json:"merge_result,omitempty"` // result of merge-back ("merged", "conflict", "no-changes", "")
 }
 
 // OutputEntry represents a single output chunk from the agent.
@@ -114,6 +122,7 @@ func newAgent(id, workDir, task string, opts AgentOptions) *Agent {
 		allowedTools: opts.AllowedTools,
 		maxTurns:     opts.MaxTurns,
 		contextFiles: opts.ContextFiles,
+		useWorktree:  opts.UseWorktree,
 	}
 }
 
@@ -406,6 +415,18 @@ func (a *Agent) processResultEvent(event map[string]interface{}) {
 		}
 		a.appendOutput("result", fmt.Sprintf("Agent %s%s", status, costStr))
 	}
+
+	// Merge worktree back on completion (not error)
+	if a.useWorktree && !isError {
+		go func() {
+			mergeResult := a.mergeWorktreeBack()
+			a.mu.Lock()
+			a.MergeResult = mergeResult
+			a.mu.Unlock()
+		}()
+	} else if a.useWorktree && isError {
+		a.appendOutput("system", "Worktree preserved (agent errored) — merge manually or clean up later")
+	}
 }
 
 // streamStderr reads stderr and appends as error entries
@@ -446,6 +467,7 @@ func (a *Agent) waitForExit() {
 			a.State = AgentComplete
 		}
 	}
+
 	a.mu.Unlock()
 
 	close(a.done)
@@ -638,6 +660,7 @@ func (a *Agent) Snapshot() AgentSnapshot {
 		Error:        a.Error,
 		TotalCostUSD: a.TotalCostUSD,
 		RouteResult:  a.RouteResult,
+		MergeResult:  a.MergeResult,
 	}
 }
 
@@ -654,6 +677,7 @@ type AgentSnapshot struct {
 	Error        string
 	TotalCostUSD float64
 	RouteResult  *RouteResult
+	MergeResult  string
 }
 
 // Done returns a channel that closes when the agent exits

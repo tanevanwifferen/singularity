@@ -1,12 +1,15 @@
 package git
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // MergeRequest represents a merge/pull request
@@ -44,6 +47,40 @@ func CreateMR(repoPath, sourceBranch, targetBranch, title, description string, r
 	return nil, fmt.Errorf("unsupported forge type: %s", auth.Type)
 }
 
+// getCurrentGitLabUserID fetches the current authenticated user's ID from GitLab.
+func getCurrentGitLabUserID(apiURL, token string) (int, error) {
+	resp, err := makeGitLabRequest("GET", apiURL+"/user", token, nil)
+	if err != nil {
+		return 0, err
+	}
+	var user map[string]interface{}
+	if err := json.Unmarshal(resp, &user); err != nil {
+		return 0, err
+	}
+	id, ok := user["id"].(float64)
+	if !ok {
+		return 0, fmt.Errorf("user id not found in response")
+	}
+	return int(id), nil
+}
+
+// getCurrentGitHubLogin fetches the current authenticated user's login from GitHub.
+func getCurrentGitHubLogin(apiURL, token string) (string, error) {
+	resp, err := makeGitHubRequest("GET", apiURL+"/user", token, nil)
+	if err != nil {
+		return "", err
+	}
+	var user map[string]interface{}
+	if err := json.Unmarshal(resp, &user); err != nil {
+		return "", err
+	}
+	login, ok := user["login"].(string)
+	if !ok {
+		return "", fmt.Errorf("login not found in response")
+	}
+	return login, nil
+}
+
 // createGitLabMR creates a merge request on GitLab
 func createGitLabMR(repoPath, sourceBranch, targetBranch, title, description string, reviewers []string, auth *ForgeAuth) (*MergeRequest, error) {
 	// Get project path from remote
@@ -69,6 +106,11 @@ func createGitLabMR(repoPath, sourceBranch, targetBranch, title, description str
 
 	if len(reviewers) > 0 {
 		body["reviewer_ids"] = reviewers
+	}
+
+	// Assign to current user
+	if userID, err := getCurrentGitLabUserID(apiURL, auth.AuthToken); err == nil {
+		body["assignee_id"] = userID
 	}
 
 	// Make request
@@ -124,6 +166,11 @@ func createGitHubPR(repoPath, sourceBranch, targetBranch, title, description str
 		"body":  description,
 	}
 
+	// Assign to current user
+	if login, err := getCurrentGitHubLogin(apiURL, auth.AuthToken); err == nil {
+		body["assignees"] = []string{login}
+	}
+
 	// Make request
 	resp, err := makeGitHubRequest("POST", url, auth.AuthToken, body)
 	if err != nil {
@@ -152,6 +199,112 @@ func createGitHubPR(repoPath, sourceBranch, targetBranch, title, description str
 	}
 
 	return mr, nil
+}
+
+// MRContent holds a generated MR title and description.
+type MRContent struct {
+	Title       string
+	Description string
+}
+
+// GenerateMRContent generates an intelligent MR title and description using Claude.
+// It collects the commit log and diff stat between baseBranch and HEAD, then
+// asks Claude to produce a concise title and a structured description.
+// Falls back to branch-name-based defaults if Claude is unavailable.
+func GenerateMRContent(repoPath, baseBranch string) (*MRContent, error) {
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+
+	// Collect commit log
+	logCmd := exec.Command("git", "-C", repoPath, "log",
+		"--oneline", "--no-decorate",
+		fmt.Sprintf("%s..HEAD", baseBranch))
+	logOut, err := logCmd.Output()
+	if err != nil || strings.TrimSpace(string(logOut)) == "" {
+		// Nothing to describe
+		return fallbackMRContent(repoPath, baseBranch), nil
+	}
+	commits := strings.TrimSpace(string(logOut))
+
+	// Collect diff stat (file-level summary, not full diff)
+	statCmd := exec.Command("git", "-C", repoPath, "diff", "--stat",
+		fmt.Sprintf("%s..HEAD", baseBranch))
+	statOut, _ := statCmd.Output()
+	stat := strings.TrimSpace(string(statOut))
+
+	prompt := fmt.Sprintf(`You are writing a merge request for a software project.
+
+Commits being merged (newest first):
+%s
+
+Diff summary:
+%s
+
+Generate a merge request title and description. Respond with ONLY valid JSON in this exact format:
+{"title":"<short imperative title, max 72 chars>","description":"<markdown description with ## Summary and ## Changes sections>"}
+
+Rules:
+- Title must be a short imperative sentence (e.g. "Add retry logic for flaky tests")
+- Description must use markdown with a ## Summary section (2-4 bullet points) and a ## Changes section listing key files/modules touched
+- No filler text, no "This PR", no "This MR"
+- Do not include any text outside the JSON`,
+		commits, stat)
+
+	content := callClaudeForMR(repoPath, prompt)
+	if content != nil {
+		return content, nil
+	}
+	return fallbackMRContent(repoPath, baseBranch), nil
+}
+
+// callClaudeForMR invokes claude --print and parses the JSON response.
+func callClaudeForMR(repoPath, prompt string) *MRContent {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "claude", "--model", "haiku", "--print",
+		"--dangerously-skip-permissions", "-p", prompt)
+	cmd.Dir = repoPath
+
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return nil
+	}
+
+	raw := strings.TrimSpace(out.String())
+	// Extract JSON object in case Claude wraps it in markdown fences
+	if i := strings.Index(raw, "{"); i >= 0 {
+		if j := strings.LastIndex(raw, "}"); j > i {
+			raw = raw[i : j+1]
+		}
+	}
+
+	var result struct {
+		Title       string `json:"title"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil || result.Title == "" {
+		return nil
+	}
+	return &MRContent{Title: result.Title, Description: result.Description}
+}
+
+// fallbackMRContent generates a basic title/description from the branch name.
+func fallbackMRContent(repoPath, baseBranch string) *MRContent {
+	branchCmd := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+	branchOut, _ := branchCmd.Output()
+	branch := strings.TrimSpace(string(branchOut))
+	if branch == "" || branch == "HEAD" {
+		branch = "feature"
+	}
+	// Turn branch name into a readable title (replace - and _ with spaces)
+	title := strings.NewReplacer("-", " ", "_", " ", "/", ": ").Replace(branch)
+	return &MRContent{
+		Title:       title,
+		Description: fmt.Sprintf("## Summary\n\nMerges `%s` into `%s`.", branch, baseBranch),
+	}
 }
 
 // GenerateMRTitle generates a title for a merge request from commits
@@ -267,12 +420,17 @@ func encodeProjectPath(path string) string {
 }
 
 func makeGitLabRequest(method, url, token string, body map[string]interface{}) ([]byte, error) {
-	jsonBody, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
+	var req *http.Request
+	var err error
+	if body != nil {
+		jsonBody, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		req, err = http.NewRequest(method, url, strings.NewReader(string(jsonBody)))
+	} else {
+		req, err = http.NewRequest(method, url, nil)
 	}
-
-	req, err := http.NewRequest(method, url, strings.NewReader(string(jsonBody)))
 	if err != nil {
 		return nil, err
 	}
@@ -301,12 +459,17 @@ func makeGitLabRequest(method, url, token string, body map[string]interface{}) (
 }
 
 func makeGitHubRequest(method, url, token string, body map[string]interface{}) ([]byte, error) {
-	jsonBody, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
+	var req *http.Request
+	var err error
+	if body != nil {
+		jsonBody, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		req, err = http.NewRequest(method, url, strings.NewReader(string(jsonBody)))
+	} else {
+		req, err = http.NewRequest(method, url, nil)
 	}
-
-	req, err := http.NewRequest(method, url, strings.NewReader(string(jsonBody)))
 	if err != nil {
 		return nil, err
 	}

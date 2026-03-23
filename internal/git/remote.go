@@ -32,11 +32,20 @@ func DetectRemoteProvider(repoPath string) RemoteProvider {
 	return ProviderUnknown
 }
 
-// CreateMergeRequestCLI creates a merge request using the appropriate CLI tool (gh or glab)
-func CreateMergeRequestCLI(repoPath string, provider RemoteProvider) (string, error) {
+// CreateMergeRequestCLI creates a merge request using the appropriate CLI tool (gh or glab).
+// It generates an intelligent title and description via Claude before calling the CLI.
+func CreateMergeRequestCLI(repoPath string, provider RemoteProvider, baseBranch string) (string, error) {
+	content, err := GenerateMRContent(repoPath, baseBranch)
+	if err != nil || content == nil {
+		content = &MRContent{Title: "Merge feature branch", Description: ""}
+	}
+
 	switch provider {
 	case ProviderGitHub:
-		cmd := exec.Command("gh", "pr", "create", "--fill")
+		cmd := exec.Command("gh", "pr", "create",
+			"--title", content.Title,
+			"--body", content.Description,
+			"--assignee", "@me")
 		cmd.Dir = repoPath
 		output, err := cmd.CombinedOutput()
 		if err != nil {
@@ -44,7 +53,10 @@ func CreateMergeRequestCLI(repoPath string, provider RemoteProvider) (string, er
 		}
 		return strings.TrimSpace(string(output)), nil
 	case ProviderGitLab:
-		cmd := exec.Command("glab", "mr", "create", "--fill", "--yes")
+		cmd := exec.Command("glab", "mr", "create", "--yes",
+			"--title", content.Title,
+			"--description", content.Description,
+			"--assignee", "@me")
 		cmd.Dir = repoPath
 		output, err := cmd.CombinedOutput()
 		if err != nil {

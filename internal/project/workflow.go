@@ -353,7 +353,11 @@ func (fw *FeatureWorkflow) CreateAllMRs() error {
 			provider = git.DetectRemoteProvider(wr.OriginalPath)
 		}
 
-		url, err := git.CreateMergeRequestCLI(wr.WorktreePath, provider)
+		base := wr.DefaultBranch
+		if base == "" {
+			base = "main"
+		}
+		url, err := git.CreateMergeRequestCLI(wr.WorktreePath, provider, base)
 
 		fw.mu.Lock()
 		if err != nil {

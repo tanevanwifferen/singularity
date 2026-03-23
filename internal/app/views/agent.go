@@ -16,15 +16,16 @@ import (
 
 // AgentInfo holds agent summary info for display
 type AgentInfo struct {
-	ID        string
-	State     engine.AgentState
-	Task      string
-	WorkDir   string
-	CreatedAt time.Time
-	StartedAt *time.Time
-	EndedAt   *time.Time
-	ExitCode  int
-	Error     string
+	ID          string
+	State       engine.AgentState
+	Task        string
+	WorkDir     string
+	CreatedAt   time.Time
+	StartedAt   *time.Time
+	EndedAt     *time.Time
+	ExitCode    int
+	Error       string
+	MergeResult string
 }
 
 // agentFocus tracks which pane has focus
@@ -166,15 +167,16 @@ func (v *AgentView) loadAgents() {
 	for _, a := range agentList {
 		snap := a.Snapshot()
 		info := AgentInfo{
-			ID:        snap.ID,
-			State:     snap.State,
-			Task:      snap.Task,
-			WorkDir:   snap.WorkDir,
-			CreatedAt: snap.CreatedAt,
-			StartedAt: snap.StartedAt,
-			EndedAt:   snap.EndedAt,
-			ExitCode:  snap.ExitCode,
-			Error:     snap.Error,
+			ID:          snap.ID,
+			State:       snap.State,
+			Task:        snap.Task,
+			WorkDir:     snap.WorkDir,
+			CreatedAt:   snap.CreatedAt,
+			StartedAt:   snap.StartedAt,
+			EndedAt:     snap.EndedAt,
+			ExitCode:    snap.ExitCode,
+			Error:       snap.Error,
+			MergeResult: snap.MergeResult,
 		}
 		v.agents = append(v.agents, info)
 	}
@@ -562,6 +564,7 @@ func (v *AgentView) handleNewAgentInput(msg tea.KeyMsg) tea.Cmd {
 				id, err := eng.StartAgent(repoPath, task, engine.AgentOptions{
 					ContextFiles: ctxFiles,
 					SmartRoute:   true,
+					UseWorktree:  true,
 				})
 				return AgentCreatedMsg{ID: id, Err: err}
 			}
@@ -696,6 +699,22 @@ func (v *AgentView) renderAgentItem(agent AgentInfo, index int, selected bool) s
 		stateLabel = "done"
 	}
 	line.WriteString(fmt.Sprintf(" %s", statusStyle.Render(stateLabel)))
+
+	// Show merge result for worktree-isolated agents
+	if agent.MergeResult != "" {
+		var mergeIcon string
+		switch agent.MergeResult {
+		case "merged":
+			mergeIcon = th.DashboardAccentStyle.Render(" ⤵merged")
+		case "conflict":
+			mergeIcon = th.DashboardErrorStyle.Render(" ⤵conflict")
+		case "no-changes":
+			mergeIcon = th.MutedTextStyle.Render(" ⤵no-changes")
+		default:
+			mergeIcon = th.DashboardErrorStyle.Render(" ⤵" + agent.MergeResult)
+		}
+		line.WriteString(mergeIcon)
+	}
 
 	return line.String()
 }

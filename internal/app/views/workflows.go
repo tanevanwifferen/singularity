@@ -198,7 +198,10 @@ func (v *WorkflowsView) spawnAgentForWorkflow(task string) {
 		return
 	}
 
-	id, err := v.engine.StartAgent(wf.WorkflowDir(), task, engine.AgentOptions{
+	// Build commit instructions listing each repo worktree
+	fullTask := task + "\n\n" + v.buildCommitInstructions(wf)
+
+	id, err := v.engine.StartAgent(wf.WorkflowDir(), fullTask, engine.AgentOptions{
 		ContextFiles: ctxFiles,
 		SmartRoute:   true,
 	})
@@ -208,6 +211,42 @@ func (v *WorkflowsView) spawnAgentForWorkflow(task string) {
 		wf.SetWorkflowAgentID(id)
 		v.workflowStatusMsg = fmt.Sprintf(" Agent spawned for '%s'\n   Next: press 'p' to push when ready", wf.BranchName)
 	}
+}
+
+// buildCommitInstructions generates instructions telling the agent to commit
+// changes in each repo worktree separately when its work is complete.
+func (v *WorkflowsView) buildCommitInstructions(wf *project.FeatureWorkflow) string {
+	var repos []string
+	for name, wr := range wf.Repos {
+		if wr.WorktreeCreated {
+			repos = append(repos, name)
+		}
+	}
+	if len(repos) == 0 {
+		return ""
+	}
+
+	sort.Strings(repos)
+
+	var b strings.Builder
+	b.WriteString("<commit-instructions>\n")
+	b.WriteString("IMPORTANT: When you have completed your work, you MUST commit your changes.\n")
+	b.WriteString(fmt.Sprintf("You are working on branch '%s'.\n", wf.BranchName))
+	if len(repos) > 1 {
+		b.WriteString("This workflow spans multiple repositories. Each repo is a separate git repository\n")
+		b.WriteString("and MUST be committed independently. Do NOT try to commit from the parent directory.\n\n")
+		b.WriteString("Repos to commit (each is a subdirectory of your working directory):\n")
+		for _, name := range repos {
+			b.WriteString(fmt.Sprintf("  - %s/\n", name))
+		}
+		b.WriteString("\nFor each repo that has changes, cd into it and run:\n")
+		b.WriteString("  git add -A && git commit -m \"<descriptive message>\"\n")
+	} else {
+		b.WriteString(fmt.Sprintf("Commit your changes in the %s/ subdirectory:\n", repos[0]))
+		b.WriteString(fmt.Sprintf("  cd %s && git add -A && git commit -m \"<descriptive message>\"\n", repos[0]))
+	}
+	b.WriteString("</commit-instructions>")
+	return b.String()
 }
 
 // Update handles update events.
@@ -477,6 +516,7 @@ func (v *WorkflowsView) handlePushConfirm(msg tea.KeyMsg) tea.Cmd {
 	case "y":
 		wf := v.currentWorkflow()
 		v.showPushConfirm = false
+		v.pushableRepos = nil
 		if wf == nil {
 			return nil
 		}
@@ -486,6 +526,7 @@ func (v *WorkflowsView) handlePushConfirm(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "n", "esc":
 		v.showPushConfirm = false
+		v.pushableRepos = nil
 	}
 	return nil
 }

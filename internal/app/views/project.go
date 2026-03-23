@@ -387,7 +387,16 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "y", "enter":
 				provider := git.DetectRemoteProvider(v.mrConfirmPath)
-				result, err := git.CreateMergeRequestCLI(v.mrConfirmPath, provider)
+				baseBranch := "main"
+				if v.proj != nil {
+					for _, r := range v.proj.Repos {
+						if r.Path == v.mrConfirmPath && r.DefaultBranch != "" {
+							baseBranch = r.DefaultBranch
+							break
+						}
+					}
+				}
+				result, err := git.CreateMergeRequestCLI(v.mrConfirmPath, provider, baseBranch)
 				if err != nil {
 					v.mrResult = fmt.Sprintf("MR creation failed: %v", err)
 				} else {
