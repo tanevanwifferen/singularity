@@ -629,11 +629,11 @@ func (v *CommitView) View() string {
 	}
 
 	// Render staging area view (original content)
-	return v.renderStagingView(s, th)
+	return v.renderStagingView(&s, th)
 }
 
 // renderStagingView renders the staging area view
-func (v *CommitView) renderStagingView(s strings.Builder, th theme.Theme) string {
+func (v *CommitView) renderStagingView(s *strings.Builder, th theme.Theme) string {
 	// Calculate summary stats
 	stagedCount := len(v.stagedFiles)
 	unstagedCount := len(v.unstagedFiles)
