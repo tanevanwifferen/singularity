@@ -85,10 +85,9 @@ func (r *Router) Register(name string, view View, keys ...string) {
 		r.viewOrder = append(r.viewOrder, name)
 	}
 	r.views[name] = view
-	// Assign shortcut key if provided (displayed as the letter, routed as alt+letter)
+	// Assign shortcut key if provided (e.g. "f1", "f2", etc.)
 	if len(keys) > 0 && keys[0] != "" {
 		r.viewKeys[name] = keys[0]
-		r.keyToView["alt+"+keys[0]] = name
 		r.keyToView[keys[0]] = name
 	}
 	// Apply current dimensions to newly registered views
@@ -209,7 +208,7 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Let views claim specific keys before router handles them.
 		// If a view implements KeyCapturer and claims this key, delegate directly.
 		// If a view does NOT implement KeyCapturer, assume it uses all plain
-		// single-letter keys (safe default) — only alt+letter bypasses this.
+		// single-letter keys (safe default) — only F-keys bypass this.
 		if kc, ok := r.active.(KeyCapturer); ok {
 			if kc.CapturesKey(key) {
 				_, cmd := r.active.Update(msg)
@@ -252,7 +251,7 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		default:
-			// View switching via alt+letter or plain letter (when view allows it)
+			// View switching via F-key (when view allows it)
 			if viewName, ok := r.keyToView[key]; ok {
 				if err := r.SwitchTo(viewName); err != nil {
 					return r, nil

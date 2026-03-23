@@ -33,6 +33,7 @@ type agentFocus int
 const (
 	focusList   agentFocus = iota
 	focusOutput
+	focusInput
 )
 
 // AgentView displays the agent console with a split-pane layout.
@@ -62,6 +63,10 @@ type AgentView struct {
 	// Kill confirmation state
 	showKillConfirm bool
 	killAgentID     string
+
+	// Message input state (send to running agent stdin)
+	showMessageInput bool
+	messageInput     string
 
 	// Refresh ticker
 	refreshInterval time.Duration
@@ -224,6 +229,10 @@ func (v *AgentView) rebuildOutputViewport() {
 		case "result":
 			lines = append(lines, lipgloss.NewStyle().Foreground(th.Info).Render(
 				fmt.Sprintf("  %s", entry.Content)))
+
+		case "user_input":
+			lines = append(lines, lipgloss.NewStyle().Foreground(th.Accent).Bold(true).Render(
+				fmt.Sprintf("  > %s", entry.Content)))
 		}
 	}
 
@@ -269,6 +278,11 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, v.handleKillConfirm(msg)
 		}
 
+		// Handle message input to running agent
+		if v.showMessageInput {
+			return v, v.handleMessageInput(msg)
+		}
+
 		// Handle new agent input
 		if v.showNewAgent {
 			return v, v.handleNewAgentInput(msg)
@@ -308,6 +322,14 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "ctrl+u":
 				v.outputAutoScroll = false
 				v.outputViewport.HalfViewUp()
+				return v, nil
+			case "i":
+				if v.selectedAgent != nil &&
+					(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting) {
+					v.showMessageInput = true
+					v.messageInput = ""
+					v.focus = focusInput
+				}
 				return v, nil
 			}
 			return v, nil
@@ -451,6 +473,36 @@ func (v *AgentView) handleNewAgentInput(msg tea.KeyMsg) tea.Cmd {
 			}
 		} else if msg.String() == "backspace" && len(v.newAgentTask) > 0 {
 			v.newAgentTask = v.newAgentTask[:len(v.newAgentTask)-1]
+		}
+	}
+	return nil
+}
+
+// handleMessageInput handles key events during message input to a running agent.
+func (v *AgentView) handleMessageInput(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "enter":
+		if v.messageInput != "" && v.engine != nil && v.selectedAgent != nil {
+			err := v.engine.SendInput(v.selectedAgent.ID, v.messageInput)
+			if err != nil {
+				v.err = fmt.Errorf("send input: %w", err)
+			}
+		}
+		v.showMessageInput = false
+		v.messageInput = ""
+		v.focus = focusOutput
+	case "esc":
+		v.showMessageInput = false
+		v.messageInput = ""
+		v.focus = focusOutput
+	default:
+		if len(msg.Runes) == 1 {
+			r := msg.Runes[0]
+			if r >= 32 && r <= 126 {
+				v.messageInput += string(r)
+			}
+		} else if msg.String() == "backspace" && len(v.messageInput) > 0 {
+			v.messageInput = v.messageInput[:len(v.messageInput)-1]
 		}
 	}
 	return nil
@@ -606,9 +658,23 @@ func (v *AgentView) View() string {
 			s.WriteString("\n")
 		}
 
+		// Message input field
+		if v.showMessageInput {
+			inputLine := lipgloss.NewStyle().Foreground(th.Accent).Render("> " + v.messageInput + "█")
+			s.WriteString(inputLine)
+			s.WriteString("\n")
+		}
+
 		// Output pane hint
-		if v.focus == focusOutput {
-			s.WriteString(th.Help.Render(" j/k:scroll  g/G:top/bottom  ctrl+d/u:page  tab:list  esc:close"))
+		if v.showMessageInput {
+			s.WriteString(th.Help.Render(" enter:send  esc:cancel"))
+		} else if v.focus == focusOutput {
+			hint := " j/k:scroll  g/G:top/bottom  ctrl+d/u:page  tab:list  esc:close"
+			if v.selectedAgent != nil &&
+				(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting) {
+				hint += "  i:send message"
+			}
+			s.WriteString(th.Help.Render(hint))
 		} else {
 			s.WriteString(th.Help.Render(" tab:focus output  esc/d:close"))
 		}
@@ -688,7 +754,7 @@ func (v *AgentView) Refresh() error {
 
 // CapturesInput returns true when the view is in an input mode.
 func (v *AgentView) CapturesInput() bool {
-	return v.showNewAgent || v.showKillConfirm || v.focus == focusOutput
+	return v.showNewAgent || v.showKillConfirm || v.showMessageInput || v.focus == focusOutput
 }
 
 // CapturesKey returns true for keys the agent view needs when the output pane is visible.
@@ -710,6 +776,7 @@ func (v *AgentView) KeyBindings() []components.KeyBinding {
 		{Key: "d/Esc", Description: "Close output pane"},
 		{Key: "c", Description: "Clear stopped agents"},
 		{Key: "Tab", Description: "Switch focus between list and output"},
+		{Key: "i", Description: "Send message to running agent"},
 		{Key: "/", Description: "Search agents"},
 		{Key: "j/k", Description: "Navigate"},
 	}

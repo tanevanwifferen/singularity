@@ -40,7 +40,7 @@ var DefaultKeybinds = map[Action][]string{
 	ActionToggleTheme:   {"T"},
 	ActionShowHelp:      {"?"},
 	ActionGoBack:        {"esc"},
-	ActionSwitchView:    {"alt+o", "alt+b", "alt+c", "alt+s", "alt+d", "alt+x", "alt+r", "alt+w", "alt+l", "alt+p", "alt+m", "alt+a"},
+	ActionSwitchView:    {"f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12"},
 	ActionNavigateUp:    {"up", "k"},
 	ActionNavigateDown:  {"down", "j"},
 	ActionNavigateLeft:  {"left", "h"},

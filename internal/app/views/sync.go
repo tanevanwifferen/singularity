@@ -398,6 +398,10 @@ func (v *SyncView) View() string {
 	// Output log
 	v.renderLog(&s, th)
 
+	// Keybindings help
+	s.WriteString("\n")
+	v.renderKeybindings(&s, th)
+
 	return s.String()
 }
 
@@ -536,6 +540,23 @@ func (v *SyncView) renderLog(s *strings.Builder, th theme.Theme) {
 	if len(v.outputLog) > maxLines {
 		s.WriteString(th.Help.Render(fmt.Sprintf(" [%d-%d of %d] j/k to scroll ", start+1, end, len(v.outputLog))))
 		s.WriteString("\n")
+	}
+}
+
+func (v *SyncView) renderKeybindings(s *strings.Builder, th theme.Theme) {
+	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(th.Accent)
+	descStyle := lipgloss.NewStyle().Foreground(th.SecondaryText)
+	sepStyle := lipgloss.NewStyle().Foreground(th.Border)
+
+	s.WriteString(th.StatsStyle.Render(" Keybindings "))
+	s.WriteString("\n")
+	s.WriteString(sepStyle.Render(" ──────────────────────────────────────────────── "))
+	s.WriteString("\n")
+
+	for _, kb := range v.KeyBindings() {
+		s.WriteString(fmt.Sprintf(" %s  %s\n",
+			keyStyle.Width(6).Render(kb.Key),
+			descStyle.Render(kb.Description)))
 	}
 }
 

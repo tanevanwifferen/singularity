@@ -358,7 +358,8 @@ func TestBuildArgs(t *testing.T) {
 	hasTool1 := false
 	hasTool2 := false
 	hasTask := false
-	hasStreamJSON := false
+	hasOutputStreamJSON := false
+	hasInputStreamJSON := false
 
 	for i, arg := range args {
 		switch {
@@ -371,7 +372,9 @@ func TestBuildArgs(t *testing.T) {
 		case arg == "--allowedTools" && i+1 < len(args) && args[i+1] == "Write":
 			hasTool2 = true
 		case arg == "--output-format" && i+1 < len(args) && args[i+1] == "stream-json":
-			hasStreamJSON = true
+			hasOutputStreamJSON = true
+		case arg == "--input-format" && i+1 < len(args) && args[i+1] == "stream-json":
+			hasInputStreamJSON = true
 		case arg == "do something":
 			hasTask = true
 		}
@@ -386,8 +389,11 @@ func TestBuildArgs(t *testing.T) {
 	if !hasTool1 || !hasTool2 {
 		t.Error("expected --allowedTools for Read and Write")
 	}
-	if !hasStreamJSON {
+	if !hasOutputStreamJSON {
 		t.Error("expected --output-format stream-json in args")
+	}
+	if !hasInputStreamJSON {
+		t.Error("expected --input-format stream-json in args")
 	}
 	if !hasTask {
 		t.Error("expected task in args")
@@ -404,6 +410,33 @@ func TestGenerateID(t *testing.T) {
 			t.Fatalf("duplicate ID: %s", id)
 		}
 		ids[id] = true
+	}
+}
+
+func TestSendInputNotFound(t *testing.T) {
+	e := New(5)
+	err := e.SendInput("nonexistent", "hello")
+	if err == nil {
+		t.Fatal("expected error for nonexistent agent")
+	}
+}
+
+func TestSendInputNotRunning(t *testing.T) {
+	e := New(5)
+
+	a := newAgent("test-1", os.TempDir(), "task", AgentOptions{})
+	a.State = AgentComplete
+
+	e.mu.Lock()
+	e.agents["test-1"] = a
+	e.mu.Unlock()
+
+	err := e.SendInput("test-1", "hello")
+	if err == nil {
+		t.Fatal("expected error for non-running agent")
+	}
+	if !strings.Contains(err.Error(), "not running") {
+		t.Errorf("expected 'not running' error, got: %v", err)
 	}
 }
 

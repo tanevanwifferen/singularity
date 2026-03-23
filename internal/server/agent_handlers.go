@@ -140,6 +140,36 @@ func (s *Server) handleAgentKill(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true})
 }
 
+// handleAgentInput handles POST /api/agent/input
+func (s *Server) handleAgentInput(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	var req api.AgentInputRequest
+	if err := s.parseJSON(r, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.SessionID == "" {
+		s.writeError(w, http.StatusBadRequest, "session_id required")
+		return
+	}
+	if req.Message == "" {
+		s.writeError(w, http.StatusBadRequest, "message required")
+		return
+	}
+
+	if err := s.engine.SendInput(req.SessionID, req.Message); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true})
+}
+
 // handleAgentList handles GET /api/agent/list
 func (s *Server) handleAgentList(w http.ResponseWriter, r *http.Request) {
 	agents := s.engine.ListAgents()

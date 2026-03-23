@@ -122,6 +122,15 @@ func (e *Engine) KillAgent(sessionID string) error {
 	return agent.kill()
 }
 
+// SendInput sends a follow-up message to a running agent's stdin
+func (e *Engine) SendInput(sessionID string, message string) error {
+	agent := e.getAgent(sessionID)
+	if agent == nil {
+		return fmt.Errorf("agent not found: %s", sessionID)
+	}
+	return agent.sendInput(message)
+}
+
 // RemoveAgent kills (if running) and removes an agent from the engine
 func (e *Engine) RemoveAgent(sessionID string) error {
 	e.mu.Lock()

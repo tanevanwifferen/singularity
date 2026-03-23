@@ -163,51 +163,50 @@ func (m *Model) loadRepo() {
 // initRouter initializes the view router with available views.
 func (m *Model) initRouter() {
 	// Create the overview view as the first view (landing page)
-	// Views use Alt+letter shortcuts for switching (shown in tab bar)
+	// Views use F1-F12 shortcuts for switching (shown in tab bar)
 	overview := views.NewOverviewView(m.repoPath)
 	router := NewRouter(overview, "Overview")
-	router.viewKeys["Overview"] = "o"
-	router.keyToView["alt+o"] = "Overview"
-	router.keyToView["o"] = "Overview"
+	router.viewKeys["Overview"] = "f1"
+	router.keyToView["f1"] = "Overview"
 
 	dashboard, err := NewBranchDashboard(m.repoPath)
 	if err == nil {
-		router.Register("Branches", dashboard, "b")
+		router.Register("Branches", dashboard, "f2")
 	}
 
 	commitView := views.NewCommitView(m.repoPath)
-	router.Register("commit", commitView, "c")
+	router.Register("commit", commitView, "f3")
 
 	syncView := views.NewSyncView(m.repoPath)
-	router.Register("Sync", syncView, "s")
+	router.Register("Sync", syncView, "f4")
 
 	branchCompareView := views.NewBranchComparisonView(m.repoPath)
-	router.Register("BranchCompare", branchCompareView, "d")
+	router.Register("BranchCompare", branchCompareView, "f5")
 
 	stashView := views.NewStashView(m.repoPath)
-	router.Register("Stashes", stashView, "x")
+	router.Register("Stashes", stashView, "f6")
 
 	rebaseView := views.NewRebaseView(m.repoPath)
-	router.Register("Rebase", rebaseView, "r")
+	router.Register("Rebase", rebaseView, "f7")
 
 	worktreeView := views.NewWorktreeView(m.repoPath)
-	router.Register("Worktrees", worktreeView, "w")
+	router.Register("Worktrees", worktreeView, "f8")
 
 	logView := views.NewLogView(m.repoPath)
-	router.Register("Log", logView, "l")
+	router.Register("Log", logView, "f9")
 
 	pipelineView := views.NewPipelineView(m.repoPath)
-	router.Register("Pipeline", pipelineView, "p")
+	router.Register("Pipeline", pipelineView, "f10")
 
 	prView := views.NewPRView(m.repoPath)
-	router.Register("CreatePR", prView, "m")
+	router.Register("CreatePR", prView, "f11")
 
 	// Register agent console view
 	if m.engine == nil {
 		m.engine = engine.New(10)
 	}
 	agentView := views.NewAgentView(m.repoPath, m.engine)
-	router.Register("Agents", agentView, "a")
+	router.Register("Agents", agentView, "f12")
 
 	m.router = router
 

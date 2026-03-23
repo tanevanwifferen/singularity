@@ -86,6 +86,12 @@ type AgentQueryRequest struct {
 	Offset    int    `json:"offset,omitempty"`
 }
 
+// AgentInputRequest is the request for sending input to a running agent
+type AgentInputRequest struct {
+	SessionID string `json:"session_id"`
+	Message   string `json:"message"`
+}
+
 // WSEvent types for agent engine
 const (
 	WSEventAgentStarted  = "agent_started"

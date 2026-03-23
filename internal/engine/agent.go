@@ -61,6 +61,8 @@ type Agent struct {
 
 	// Process management
 	cmd    *exec.Cmd
+	stdin   io.WriteCloser
+	stdinMu sync.Mutex
 	stdout io.ReadCloser
 	stderr io.ReadCloser
 	done   chan struct{}
@@ -121,10 +123,13 @@ func (a *Agent) start() error {
 	a.cmd.Dir = a.WorkDir
 	a.cmd.Env = a.buildEnv()
 
-	// No stdin needed - task is passed as CLI argument
-	a.cmd.Stdin = nil
-
 	var err error
+	a.stdin, err = a.cmd.StdinPipe()
+	if err != nil {
+		a.setState(AgentError)
+		a.Error = fmt.Sprintf("stdin pipe: %v", err)
+		return err
+	}
 	a.stdout, err = a.cmd.StdoutPipe()
 	if err != nil {
 		a.setState(AgentError)
@@ -165,6 +170,7 @@ func (a *Agent) buildArgs() []string {
 		"--print",
 		"--verbose",
 		"--output-format", "stream-json",
+		"--input-format", "stream-json",
 		"--permission-mode", "bypassPermissions",
 	}
 
@@ -373,6 +379,41 @@ func (a *Agent) waitForExit() {
 	close(a.done)
 }
 
+// sendInput sends a follow-up message to the agent's stdin via stream-json protocol
+func (a *Agent) sendInput(message string) error {
+	a.mu.Lock()
+	if a.State != AgentRunning {
+		a.mu.Unlock()
+		return fmt.Errorf("agent %s is in state %s, not running", a.ID, a.State)
+	}
+	a.mu.Unlock()
+
+	a.stdinMu.Lock()
+	defer a.stdinMu.Unlock()
+
+	if a.stdin == nil {
+		return fmt.Errorf("agent %s stdin not available", a.ID)
+	}
+
+	msg := map[string]interface{}{
+		"type":    "user",
+		"content": message,
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal input: %w", err)
+	}
+	data = append(data, '\n')
+
+	_, err = a.stdin.Write(data)
+	if err != nil {
+		return fmt.Errorf("write to stdin: %w", err)
+	}
+
+	a.appendOutput("user_input", message)
+	return nil
+}
+
 // kill terminates the agent subprocess
 func (a *Agent) kill() error {
 	a.mu.Lock()
@@ -381,6 +422,14 @@ func (a *Agent) kill() error {
 	if a.cmd == nil || a.cmd.Process == nil {
 		return nil
 	}
+
+	// Close stdin before killing
+	a.stdinMu.Lock()
+	if a.stdin != nil {
+		a.stdin.Close()
+		a.stdin = nil
+	}
+	a.stdinMu.Unlock()
 
 	a.State = AgentKilled
 	a.appendOutputLocked("system", "Agent killed")

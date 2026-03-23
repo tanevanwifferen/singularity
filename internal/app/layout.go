@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"git-frontend/internal/theme"
 
@@ -95,12 +96,13 @@ func (l *Layout) RenderTabBar(router *Router) string {
 		if key == "" {
 			key = "-"
 		}
+		displayKey := strings.ToUpper(key)
 		if name == activeName {
 			// Active tab
-			tabBar += l.activeTabStyle.Render(fmt.Sprintf("[%s] %s", key, name))
+			tabBar += l.activeTabStyle.Render(fmt.Sprintf("[%s] %s", displayKey, name))
 		} else {
 			// Inactive tab
-			tabBar += l.inactiveTabStyle.Render(fmt.Sprintf("%s: %s", key, name))
+			tabBar += l.inactiveTabStyle.Render(fmt.Sprintf("%s: %s", displayKey, name))
 		}
 	}
 
