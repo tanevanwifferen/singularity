@@ -117,7 +117,7 @@ func (m *Model) getAgentView() *views.AgentView {
 	if m.router == nil {
 		return nil
 	}
-	view := m.router.ActiveView()
+	view := m.router.GetView("Agents")
 	if av, ok := view.(*views.AgentView); ok {
 		return av
 	}
@@ -208,12 +208,6 @@ func (m *Model) initRouter() {
 	agentView := views.NewAgentView(m.repoPath, m.engine)
 	router.Register("Agents", agentView)
 
-	// Register stub views for testing routing
-	stub1 := NewStubView1(m.repoPath)
-	stub2 := NewStubView2(m.repoPath)
-	router.Register("stub1", stub1)
-	router.Register("stub2", stub2)
-
 	m.router = router
 
 	// Notify router of initial window size
@@ -260,12 +254,6 @@ func (m *Model) initProjectRouter() {
 	// Create the project overview view as the first view (landing page)
 	projectView := views.NewProjectView(m.proj)
 	router := NewRouter(projectView, "Project")
-
-	// Register stub views for testing routing (same as single repo mode)
-	stub1 := NewStubView1("")
-	stub2 := NewStubView2("")
-	router.Register("stub1", stub1)
-	router.Register("stub2", stub2)
 
 	m.router = router
 
@@ -347,10 +335,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			// Refresh repo
 			m.loadRepo()
+			return m, nil
 		case "t":
 			// Toggle theme
 			theme.ToggleTheme()
+			m.layout.rebuildStyles()
 			m.statusMsg = "Theme toggled"
+			return m, nil
 		}
 	case tea.WindowSizeMsg:
 		m.layout.SetSize(msg.Width, msg.Height)

@@ -34,6 +34,7 @@ type SwitchViewMsg struct {
 // Router manages multiple views and handles switching between them.
 type Router struct {
 	views      map[string]View
+	viewOrder  []string // deterministic ordering of view names
 	activeName string
 	active     View
 
@@ -48,6 +49,7 @@ func NewRouter(initial View, name string) *Router {
 	views[name] = initial
 	return &Router{
 		views:      views,
+		viewOrder:  []string{name},
 		activeName: name,
 		active:     initial,
 	}
@@ -55,7 +57,15 @@ func NewRouter(initial View, name string) *Router {
 
 // Register adds a view to the router under the given name.
 func (r *Router) Register(name string, view View) {
+	if _, exists := r.views[name]; !exists {
+		r.viewOrder = append(r.viewOrder, name)
+	}
 	r.views[name] = view
+}
+
+// GetView returns a view by name, or nil if not found.
+func (r *Router) GetView(name string) View {
+	return r.views[name]
 }
 
 // ActiveView returns the currently active view.
@@ -80,13 +90,9 @@ func (r *Router) SwitchTo(name string) error {
 	return nil
 }
 
-// ViewNames returns a list of registered view names.
+// ViewNames returns a list of registered view names in registration order.
 func (r *Router) ViewNames() []string {
-	names := make([]string, 0, len(r.views))
-	for name := range r.views {
-		names = append(names, name)
-	}
-	return names
+	return r.viewOrder
 }
 
 // Init delegates to the active view's Init.
@@ -140,7 +146,7 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, r.active.Init()
 	}
 
-	// Handle number key switching (1-9)
+	// Handle key-based navigation
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch keyMsg.String() {
 		case "?":
@@ -153,6 +159,51 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			idx := int(keyMsg.String()[0] - '1')
 			if idx < len(names) {
 				if err := r.SwitchTo(names[idx]); err != nil {
+					return r, nil
+				}
+				return r, r.active.Init()
+			}
+		case "0":
+			// "0" switches to the 10th view
+			names := r.ViewNames()
+			if len(names) > 9 {
+				if err := r.SwitchTo(names[9]); err != nil {
+					return r, nil
+				}
+				return r, r.active.Init()
+			}
+		case "tab":
+			// Cycle to next view
+			names := r.ViewNames()
+			for i, name := range names {
+				if name == r.activeName {
+					next := (i + 1) % len(names)
+					if err := r.SwitchTo(names[next]); err != nil {
+						return r, nil
+					}
+					return r, r.active.Init()
+				}
+			}
+		case "shift+tab":
+			// Cycle to previous view
+			names := r.ViewNames()
+			for i, name := range names {
+				if name == r.activeName {
+					prev := (i - 1 + len(names)) % len(names)
+					if err := r.SwitchTo(names[prev]); err != nil {
+						return r, nil
+					}
+					return r, r.active.Init()
+				}
+			}
+		}
+	}
+
+	// Handle mouse clicks on tab bar
+	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
+		if mouseMsg.Type == tea.MouseLeft && mouseMsg.Y == 0 {
+			if name := r.tabAtX(mouseMsg.X); name != "" {
+				if err := r.SwitchTo(name); err != nil {
 					return r, nil
 				}
 				return r, r.active.Init()
@@ -212,7 +263,7 @@ func (r *Router) HelpText() string {
 		if i > 0 {
 			help += "  "
 		}
-		key := fmt.Sprintf("%d", i+1)
+		key := tabKeyLabel(i)
 		if name == r.activeName {
 			help += fmt.Sprintf("[%s: %s]", key, name)
 		} else {
@@ -220,6 +271,42 @@ func (r *Router) HelpText() string {
 		}
 	}
 	return help
+}
+
+// tabKeyLabel returns the keyboard shortcut label for tab at the given index.
+func tabKeyLabel(i int) string {
+	if i < 9 {
+		return fmt.Sprintf("%d", i+1)
+	}
+	if i == 9 {
+		return "0"
+	}
+	return "-"
+}
+
+// tabAtX returns the view name at the given x position in the tab bar, or "" if none.
+func (r *Router) tabAtX(x int) string {
+	names := r.ViewNames()
+	pos := 0
+	for i, name := range names {
+		if i > 0 {
+			pos += 3 // separator " │ "
+		}
+		key := tabKeyLabel(i)
+		var tabWidth int
+		if name == r.activeName {
+			// Active: "[K] Name"
+			tabWidth = 3 + len(key) + len(name)
+		} else {
+			// Inactive: "K: Name"
+			tabWidth = 2 + len(key) + len(name)
+		}
+		if x >= pos && x < pos+tabWidth {
+			return name
+		}
+		pos += tabWidth
+	}
+	return ""
 }
 
 // NotifySize informs the router and active view of the window size.

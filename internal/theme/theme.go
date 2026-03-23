@@ -175,101 +175,101 @@ var darkTheme = Theme{
 	ModalConfirmBorder: lipgloss.Color("220"),
 }
 
-// lightTheme is a light theme (structure ready, not fully styled)
+// lightTheme is a light theme optimized for light backgrounds
 var lightTheme = Theme{
 	Type:        LightThemeType,
-	Added:       lipgloss.Color("34"),    // Green
-	Removed:     lipgloss.Color("196"),   // Red
-	Modified:    lipgloss.Color("220"),   // Yellow/orange
-	Info:        lipgloss.Color("33"),    // Blue
-	Warning:     lipgloss.Color("220"),   // Yellow/orange
-	Error:       lipgloss.Color("196"),   // Red
-	PrimaryText:   lipgloss.Color("129"), // Magenta
-	SecondaryText: lipgloss.Color("28"),  // Green
-	MutedText:     lipgloss.Color("245"), // Gray
-	Background: lipgloss.Color("255"),    // White
-	Surface:    lipgloss.Color("252"),      // Light gray
-	Accent:     lipgloss.Color("214"),     // Orange
-	Accent2:    lipgloss.Color("34"),     // Green
-	Border:     lipgloss.Color("250"),     // Light gray
+	Added:       lipgloss.Color("28"),    // Dark green
+	Removed:     lipgloss.Color("160"),   // Dark red
+	Modified:    lipgloss.Color("172"),   // Dark orange (readable on white)
+	Info:        lipgloss.Color("25"),    // Dark blue
+	Warning:     lipgloss.Color("172"),   // Dark orange
+	Error:       lipgloss.Color("160"),   // Dark red
+	PrimaryText:   lipgloss.Color("54"),  // Dark magenta
+	SecondaryText: lipgloss.Color("22"),  // Dark green
+	MutedText:     lipgloss.Color("240"), // Medium gray (visible on white)
+	Background: lipgloss.Color("231"),    // White
+	Surface:    lipgloss.Color("254"),    // Very light gray
+	Accent:     lipgloss.Color("166"),    // Dark orange (readable on light bg)
+	Accent2:    lipgloss.Color("28"),     // Dark green
+	Border:     lipgloss.Color("244"),    // Medium gray (visible on white)
 
 	Title: lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("129")).
-		Background(lipgloss.Color("252")).
+		Foreground(lipgloss.Color("54")).
+		Background(lipgloss.Color("254")).
 		Padding(0, 1),
 
 	Version: lipgloss.NewStyle().
-		Foreground(lipgloss.Color("245")),
+		Foreground(lipgloss.Color("240")),
 
 	Help: lipgloss.NewStyle().
-		Foreground(lipgloss.Color("245")).
+		Foreground(lipgloss.Color("240")).
 		Italic(true),
 
 	InfoStyle: lipgloss.NewStyle().
-		Foreground(lipgloss.Color("33")),
+		Foreground(lipgloss.Color("25")),
 
 	WarningStyle: lipgloss.NewStyle().
-		Foreground(lipgloss.Color("220")),
+		Foreground(lipgloss.Color("172")),
 
 	ErrorStyle: lipgloss.NewStyle().
-		Foreground(lipgloss.Color("196")),
+		Foreground(lipgloss.Color("160")),
 
 	DashboardTitle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("129")).
+			Foreground(lipgloss.Color("54")).
 			Bold(true),
 
 	BranchStyle: lipgloss.NewStyle().
-		Foreground(lipgloss.Color("28")),
+		Foreground(lipgloss.Color("22")),
 
 	SelectedBranchStyle: lipgloss.NewStyle().
-				Foreground(lipgloss.Color("214")).
-				Background(lipgloss.Color("252")).
+				Foreground(lipgloss.Color("166")).
+				Background(lipgloss.Color("254")).
 				Bold(true),
 
 	StatsStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("237")),
+			Foreground(lipgloss.Color("236")),
 
 	CommitStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("239")),
+			Foreground(lipgloss.Color("238")),
 
 	DashboardErrorStyle: lipgloss.NewStyle().
-				Foreground(lipgloss.Color("196")),
+				Foreground(lipgloss.Color("160")),
 
 	DashboardAccentStyle: lipgloss.NewStyle().
-				Foreground(lipgloss.Color("214")),
+				Foreground(lipgloss.Color("166")),
 
 	StashStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("166")),
+			Foreground(lipgloss.Color("130")),
 
 	SelectedStashStyle: lipgloss.NewStyle().
-				Foreground(lipgloss.Color("166")).
-				Background(lipgloss.Color("252")).
+				Foreground(lipgloss.Color("130")).
+				Background(lipgloss.Color("254")).
 				Bold(true),
 
 	MutedTextStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("245")),
+			Foreground(lipgloss.Color("240")),
 
 	HeaderStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("129")).
+			Foreground(lipgloss.Color("54")).
 			Bold(true).
 			Padding(0, 1),
 
 	BodyStyle: lipgloss.NewStyle().
-		Foreground(lipgloss.Color("237")),
+		Foreground(lipgloss.Color("236")),
 
 	FooterStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("245")).
+			Foreground(lipgloss.Color("240")).
 			Italic(true),
 
 	BorderStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("250")),
+			Foreground(lipgloss.Color("244")),
 
-	ModalBorderColor:   lipgloss.Color("250"),
-	ModalInfoBorder:    lipgloss.Color("33"),
-	ModalErrorBorder:   lipgloss.Color("196"),
-	ModalSuccessBorder: lipgloss.Color("34"),
-	ModalConfirmBorder: lipgloss.Color("214"),
+	ModalBorderColor:   lipgloss.Color("244"),
+	ModalInfoBorder:    lipgloss.Color("25"),
+	ModalErrorBorder:   lipgloss.Color("160"),
+	ModalSuccessBorder: lipgloss.Color("28"),
+	ModalConfirmBorder: lipgloss.Color("166"),
 }
 
 // CurrentTheme holds the currently active theme

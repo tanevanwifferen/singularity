@@ -30,34 +30,40 @@ type Layout struct {
 
 // NewLayout creates a new layout manager.
 func NewLayout() *Layout {
-	th := theme.GetTheme()
-	return &Layout{
+	l := &Layout{
 		width:  80,
 		height: 24,
-		tabBarStyle: lipgloss.NewStyle().
-			Foreground(th.MutedText).
-			Background(th.Surface),
-		statusBarStyle: lipgloss.NewStyle().
-			Foreground(th.MutedText).
-			Background(th.Surface),
-		activeTabStyle: lipgloss.NewStyle().
-			Foreground(th.Accent).
-			Background(th.Surface).
-			Bold(true),
-		inactiveTabStyle: lipgloss.NewStyle().
-			Foreground(th.MutedText).
-			Background(th.Surface),
-		dividerStyle: lipgloss.NewStyle().
-			Foreground(th.Border),
-		primaryTextStyle: lipgloss.NewStyle().
-			Foreground(th.PrimaryText),
-		mutedTextStyle: lipgloss.NewStyle().
-			Foreground(th.MutedText),
-		accent2TextStyle: lipgloss.NewStyle().
-			Foreground(th.Accent2),
-		modifiedTextStyle: lipgloss.NewStyle().
-			Foreground(th.Modified),
 	}
+	l.rebuildStyles()
+	return l
+}
+
+// rebuildStyles rebuilds all styles from the current theme.
+func (l *Layout) rebuildStyles() {
+	th := theme.GetTheme()
+	l.tabBarStyle = lipgloss.NewStyle().
+		Foreground(th.MutedText).
+		Background(th.Surface)
+	l.statusBarStyle = lipgloss.NewStyle().
+		Foreground(th.MutedText).
+		Background(th.Surface)
+	l.activeTabStyle = lipgloss.NewStyle().
+		Foreground(th.Accent).
+		Background(th.Surface).
+		Bold(true)
+	l.inactiveTabStyle = lipgloss.NewStyle().
+		Foreground(th.MutedText).
+		Background(th.Surface)
+	l.dividerStyle = lipgloss.NewStyle().
+		Foreground(th.Border)
+	l.primaryTextStyle = lipgloss.NewStyle().
+		Foreground(th.PrimaryText)
+	l.mutedTextStyle = lipgloss.NewStyle().
+		Foreground(th.MutedText)
+	l.accent2TextStyle = lipgloss.NewStyle().
+		Foreground(th.Accent2)
+	l.modifiedTextStyle = lipgloss.NewStyle().
+		Foreground(th.Modified)
 }
 
 // SetSize updates the layout dimensions.
@@ -89,7 +95,7 @@ func (l *Layout) RenderTabBar(router *Router) string {
 			tabBar += l.dividerStyle.Render(" │ ")
 		}
 
-		key := fmt.Sprintf("%d", i+1)
+		key := tabKeyLabel(i)
 		if name == activeName {
 			// Active tab
 			tabBar += l.activeTabStyle.Render(fmt.Sprintf("[%s] %s", key, name))
@@ -161,6 +167,7 @@ func (l *Layout) AvailableViewDimensions() (width, height int) {
 // Render renders the complete layout with the active view content.
 func (l *Layout) Render(router *Router, repoInfo *git.RepoInfo, activeViewContent string) string {
 	th := theme.GetTheme()
+	l.rebuildStyles()
 
 	var output string
 
