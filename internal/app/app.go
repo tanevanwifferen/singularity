@@ -323,25 +323,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Check if the active view is capturing input (e.g., text input modal)
+	viewCapturesInput := m.router.ActiveViewCapturesInput()
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "ctrl+c", "q":
+		case "ctrl+c":
 			m.quitting = true
 			if m.wsClient != nil {
 				m.wsClient.Disconnect()
 			}
 			return m, tea.Quit
+		case "q":
+			if !viewCapturesInput {
+				m.quitting = true
+				if m.wsClient != nil {
+					m.wsClient.Disconnect()
+				}
+				return m, tea.Quit
+			}
 		case "r":
-			// Refresh repo
-			m.loadRepo()
-			return m, nil
+			if !viewCapturesInput {
+				// Refresh repo
+				m.loadRepo()
+				return m, nil
+			}
 		case "t":
-			// Toggle theme
-			theme.ToggleTheme()
-			m.layout.rebuildStyles()
-			m.statusMsg = "Theme toggled"
-			return m, nil
+			if !viewCapturesInput {
+				// Toggle theme
+				theme.ToggleTheme()
+				m.layout.rebuildStyles()
+				m.statusMsg = "Theme toggled"
+				return m, nil
+			}
 		}
 	case tea.WindowSizeMsg:
 		m.layout.SetSize(msg.Width, msg.Height)

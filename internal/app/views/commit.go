@@ -620,12 +620,12 @@ func (v *CommitView) View() string {
 
 	// Handle message editing mode
 	if v.editMode == MessageEditMode {
-		return v.renderMessageEditor(s, th)
+		return v.renderMessageEditor(&s, th)
 	}
 
 	// Handle confirmation mode
 	if v.editMode == ConfirmCommitMode {
-		return v.renderConfirmDialog(s, th)
+		return v.renderConfirmDialog(&s, th)
 	}
 
 	// Render staging area view (original content)
@@ -780,7 +780,7 @@ func (v *CommitView) renderStagingView(s *strings.Builder, th theme.Theme) strin
 }
 
 // renderMessageEditor renders the message editor view
-func (v *CommitView) renderMessageEditor(s strings.Builder, th theme.Theme) string {
+func (v *CommitView) renderMessageEditor(s *strings.Builder, th theme.Theme) string {
 	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
 	s.WriteString("\n")
 	s.WriteString(th.DashboardAccentStyle.Render(" Write Commit Message "))
@@ -856,7 +856,7 @@ func (v *CommitView) renderMessageEditor(s strings.Builder, th theme.Theme) stri
 }
 
 // renderConfirmDialog renders the commit confirmation dialog
-func (v *CommitView) renderConfirmDialog(s strings.Builder, th theme.Theme) string {
+func (v *CommitView) renderConfirmDialog(s *strings.Builder, th theme.Theme) string {
 	s.WriteString(th.StatsStyle.Render(" ═══════════════════════════════════════════════════════ "))
 	s.WriteString("\n\n")
 

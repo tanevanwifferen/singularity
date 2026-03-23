@@ -552,6 +552,13 @@ func (v *AgentView) Refresh() error {
 }
 
 // KeyBindings returns the keybindings for this view.
+// CapturesInput returns true when the view is in an input mode
+// (new agent task input or kill confirmation) where global keybindings
+// should not intercept keystrokes.
+func (v *AgentView) CapturesInput() bool {
+	return v.showNewAgent || v.showKillConfirm
+}
+
 func (v *AgentView) KeyBindings() []components.KeyBinding {
 	return []components.KeyBinding{
 		{Key: "r", Description: "Refresh agent list"},

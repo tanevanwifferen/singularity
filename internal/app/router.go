@@ -26,6 +26,13 @@ type View interface {
 	ShortHelp() string
 }
 
+// InputCapturer is an optional interface views can implement to signal
+// that they are in an input mode (e.g., text input, confirmation dialog)
+// and global/navigation keybindings should not intercept keystrokes.
+type InputCapturer interface {
+	CapturesInput() bool
+}
+
 // SwitchViewMsg is a message to switch to a different view.
 type SwitchViewMsg struct {
 	ViewName string
@@ -71,6 +78,15 @@ func (r *Router) GetView(name string) View {
 // ActiveView returns the currently active view.
 func (r *Router) ActiveView() View {
 	return r.active
+}
+
+// ActiveViewCapturesInput returns true if the active view is in an input mode
+// that should prevent global and navigation keybindings from intercepting keys.
+func (r *Router) ActiveViewCapturesInput() bool {
+	if ic, ok := r.active.(InputCapturer); ok {
+		return ic.CapturesInput()
+	}
+	return false
 }
 
 // ActiveName returns the name of the currently active view.
@@ -146,8 +162,8 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, r.active.Init()
 	}
 
-	// Handle key-based navigation
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+	// Handle key-based navigation (skip when active view is capturing input)
+	if keyMsg, ok := msg.(tea.KeyMsg); ok && !r.ActiveViewCapturesInput() {
 		switch keyMsg.String() {
 		case "?":
 			// Show help overlay with combined global and view-specific bindings
