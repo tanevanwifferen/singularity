@@ -372,3 +372,65 @@ func (l *List[T]) CursorDown() {
 		l.ensureCursorVisible()
 	}
 }
+
+// HandleMouse processes mouse events for the list.
+// Returns true if the mouse event was handled.
+func (l *List[T]) HandleMouse(msg tea.MouseMsg) bool {
+	visibleHeight := l.Height - l.statusBarHeight
+	if visibleHeight < 1 {
+		visibleHeight = 1
+	}
+
+	switch msg.Type {
+	case tea.MouseLeft:
+		// Check if click is within the list area (not in status bar)
+		if msg.Y >= 0 && msg.Y < visibleHeight {
+			// Calculate which item was clicked
+			clickedIdx := l.Offset + int(msg.Y)
+			if clickedIdx >= 0 && clickedIdx < len(l.Items) {
+				l.Cursor = clickedIdx
+				l.ensureCursorVisible()
+				return true
+			}
+		}
+	case tea.MouseWheelUp, tea.MouseWheelDown, tea.MouseWheelLeft, tea.MouseWheelRight:
+		// Handle scroll wheel
+		// Note: msg.Type for wheel events uses the deprecated constants
+		// but Button can also be checked via IsWheel()
+		switch msg.Type {
+		case tea.MouseWheelUp:
+			l.HandleScroll(-3)
+		case tea.MouseWheelDown:
+			l.HandleScroll(3)
+		case tea.MouseWheelLeft:
+			l.HandleScroll(-3)
+		case tea.MouseWheelRight:
+			l.HandleScroll(3)
+		}
+		return true
+	}
+	return false
+}
+
+// HandleScroll handles scroll wheel events.
+// delta > 0 means scroll down, delta < 0 means scroll up.
+func (l *List[T]) HandleScroll(delta int) {
+	if len(l.Items) == 0 {
+		return
+	}
+
+	// Move cursor in scroll direction
+	if delta > 0 {
+		// Scroll down
+		if l.Cursor < len(l.Items)-1 {
+			l.Cursor++
+			l.ensureCursorVisible()
+		}
+	} else if delta < 0 {
+		// Scroll up
+		if l.Cursor > 0 {
+			l.Cursor--
+			l.ensureCursorVisible()
+		}
+	}
+}

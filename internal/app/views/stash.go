@@ -185,6 +185,14 @@ func (v *StashView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.filter != nil {
 			v.filter.SetHeight(msg.Height)
 		}
+
+	case tea.MouseMsg:
+		// Handle mouse events for the filter/list
+		if v.filter != nil {
+			if v.filter.HandleMouse(msg) {
+				return v, nil
+			}
+		}
 	}
 
 	return v, nil

@@ -195,6 +195,19 @@ func (v *WorktreeView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.branchFilter != nil {
 			v.branchFilter.SetHeight(msg.Height)
 		}
+
+	case tea.MouseMsg:
+		// Handle mouse events for the filter/list
+		if v.filter != nil {
+			if v.filter.HandleMouse(msg) {
+				return v, nil
+			}
+		}
+		if v.branchFilter != nil {
+			if v.branchFilter.HandleMouse(msg) {
+				return v, nil
+			}
+		}
 	}
 
 	return v, nil

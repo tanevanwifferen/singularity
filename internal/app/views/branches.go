@@ -202,6 +202,17 @@ func (v *BranchesView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.filter != nil {
 			v.filter.SetHeight(msg.Height)
 		}
+
+	case tea.MouseMsg:
+		// Handle mouse events for the filter/list
+		if v.filter != nil {
+			// Adjust Y coordinate to account for header lines in the view
+			// The filter/list starts after the header (about 8 lines)
+			// We pass the raw mouse event - the filter will handle relative positioning
+			if v.filter.HandleMouse(msg) {
+				return v, nil
+			}
+		}
 	}
 
 	return v, nil

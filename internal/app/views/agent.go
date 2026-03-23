@@ -255,6 +255,14 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.filter.SetHeight(msg.Height)
 		}
 
+	case tea.MouseMsg:
+		// Handle mouse events for the filter/list
+		if v.filter != nil {
+			if v.filter.HandleMouse(msg) {
+				return v, nil
+			}
+		}
+
 	case StreamTickMsg:
 		// Periodic refresh for streaming output
 		if v.selectedAgent != nil {

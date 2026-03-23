@@ -425,3 +425,20 @@ func (f *Filter[T]) CursorDown() {
 		f.list.CursorDown()
 	}
 }
+
+// HandleMouse processes mouse events for the filter component.
+// Returns true if the mouse event was handled.
+func (f *Filter[T]) HandleMouse(msg tea.MouseMsg) bool {
+	if f.list != nil {
+		return f.list.HandleMouse(msg)
+	}
+	return false
+}
+
+// HandleScroll handles scroll wheel events for the filter component.
+// delta > 0 means scroll down, delta < 0 means scroll up.
+func (f *Filter[T]) HandleScroll(delta int) {
+	if f.list != nil {
+		f.list.HandleScroll(delta)
+	}
+}

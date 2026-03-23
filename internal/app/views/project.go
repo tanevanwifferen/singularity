@@ -259,6 +259,14 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case RefreshDoneMsg:
 		v.loading = false
+
+	case tea.MouseMsg:
+		// Handle mouse events for the filter/list
+		if v.filter != nil {
+			if v.filter.HandleMouse(msg) {
+				return v, nil
+			}
+		}
 	}
 	return v, nil
 }
