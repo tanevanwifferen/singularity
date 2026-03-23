@@ -164,10 +164,14 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return r, r.active.Init()
 			}
 		case "0":
-			// "0" switches to the 10th view
+			// "0" switches to the 11th view (Agents), or 10th if only 10 views
 			names := r.ViewNames()
-			if len(names) > 9 {
-				if err := r.SwitchTo(names[9]); err != nil {
+			idx := 10 // Agents at index 10 (11th view)
+			if len(names) <= idx {
+				idx = 9 // fallback to 10th view (CreatePR)
+			}
+			if len(names) > idx {
+				if err := r.SwitchTo(names[idx]); err != nil {
 					return r, nil
 				}
 				return r, r.active.Init()
