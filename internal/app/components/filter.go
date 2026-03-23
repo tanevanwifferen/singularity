@@ -272,6 +272,10 @@ func (f *Filter[T]) Update(msg tea.Msg) *Filter[T] {
 				f.filterText = f.filterText[:f.filterCursor]
 				f.applyFilter()
 				return f
+			case "ctrl+w":
+				f.filterText, f.filterCursor = DeleteWord(f.filterText, f.filterCursor)
+				f.applyFilter()
+				return f
 			case "ctrl+a":
 				f.filterCursor = 0
 				return f

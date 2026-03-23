@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"os/exec"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -310,8 +311,10 @@ func TestRunAsyncGit_Cancellation(t *testing.T) {
 func TestRunAsyncRepoLoad(t *testing.T) {
 	m := NewAsyncManager()
 
-	// This requires a real git repo, so we'll use the test repo
-	cmd := RunAsyncRepoLoad("/home/node/code/git-frontend", m)
+	// Create a temporary git repo for testing
+	tmpDir := t.TempDir()
+	exec.Command("git", "init", tmpDir).Run()
+	cmd := RunAsyncRepoLoad(tmpDir, m)
 
 	// Execute the command
 	msg := cmd()

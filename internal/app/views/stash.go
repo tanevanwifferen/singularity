@@ -259,6 +259,8 @@ func (v *StashView) handleNewStashInput(msg tea.KeyMsg) tea.Cmd {
 	case "tab":
 		// Toggle untracked flag
 		v.newStashUntracked = !v.newStashUntracked
+	case "ctrl+w":
+		v.newStashMessage = components.DeleteWordEnd(v.newStashMessage)
 	default:
 		// Handle text input for stash message
 		if len(msg.Runes) == 1 {

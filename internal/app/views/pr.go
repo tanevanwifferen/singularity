@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"git-frontend/internal/app/components"
 	"git-frontend/internal/git"
 	"git-frontend/internal/theme"
 
@@ -333,6 +334,14 @@ func (v *PRView) handleDescriptionInput(msg tea.Msg) tea.Cmd {
 				v.descLines = append(v.descLines, "")
 				v.descCursorRow++
 				v.descCursorCol = 0
+			}
+
+		case "ctrl+w":
+			if v.descCursorCol > 0 {
+				line := v.descLines[v.descCursorRow]
+				newLine, newCol := components.DeleteWord(line, v.descCursorCol)
+				v.descLines[v.descCursorRow] = newLine
+				v.descCursorCol = newCol
 			}
 
 		case "backspace":

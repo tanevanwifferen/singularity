@@ -466,7 +466,7 @@ func TestSendInputNotRunning(t *testing.T) {
 	e := New(5)
 
 	a := newAgent("test-1", os.TempDir(), "task", AgentOptions{})
-	a.State = AgentComplete
+	a.State = AgentError
 
 	e.mu.Lock()
 	e.agents["test-1"] = a
@@ -476,8 +476,8 @@ func TestSendInputNotRunning(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for non-running agent")
 	}
-	if !strings.Contains(err.Error(), "not running") {
-		t.Errorf("expected 'not running' error, got: %v", err)
+	if !strings.Contains(err.Error(), "cannot send input") {
+		t.Errorf("expected 'cannot send input' error, got: %v", err)
 	}
 }
 

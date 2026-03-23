@@ -542,6 +542,8 @@ func (v *AgentView) handleNewAgentInput(msg tea.KeyMsg) tea.Cmd {
 	case "esc":
 		v.showNewAgent = false
 		v.newAgentTask = ""
+	case "ctrl+w":
+		v.newAgentTask = components.DeleteWordEnd(v.newAgentTask)
 	default:
 		if len(msg.Runes) == 1 {
 			r := msg.Runes[0]
@@ -572,6 +574,8 @@ func (v *AgentView) handleMessageInput(msg tea.KeyMsg) tea.Cmd {
 		v.showMessageInput = false
 		v.messageInput = ""
 		v.focus = focusOutput
+	case "ctrl+w":
+		v.messageInput = components.DeleteWordEnd(v.messageInput)
 	default:
 		if len(msg.Runes) == 1 {
 			r := msg.Runes[0]
@@ -748,7 +752,7 @@ func (v *AgentView) View() string {
 		} else if v.focus == focusOutput {
 			hint := " j/k:scroll  g/G:top/bottom  ctrl+d/u:page  tab:list  esc:close"
 			if v.selectedAgent != nil &&
-				(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting) {
+				(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting || v.selectedAgent.State == engine.AgentComplete) {
 				hint += "  i:send message"
 			}
 			s.WriteString(th.Help.Render(hint))

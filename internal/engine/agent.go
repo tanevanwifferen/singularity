@@ -348,18 +348,33 @@ func (a *Agent) processAssistantEvent(event map[string]interface{}) {
 	}
 }
 
-// processResultEvent handles the final result event
+// processResultEvent handles the final result event.
+// With --input-format stream-json the process stays alive waiting for follow-up
+// messages, so we transition the agent state here rather than waiting for the
+// process to exit.
 func (a *Agent) processResultEvent(event map[string]interface{}) {
 	subtype, _ := event["subtype"].(string)
 	isError, _ := event["is_error"].(bool)
 	result, _ := event["result"].(string)
 	costUSD, _ := event["total_cost_usd"].(float64)
 
+	a.mu.Lock()
 	if costUSD > 0 {
-		a.mu.Lock()
 		a.TotalCostUSD = costUSD
-		a.mu.Unlock()
 	}
+	// Transition state on result event since the process may not exit
+	// (stream-json input mode keeps it alive for follow-ups)
+	if a.State == AgentRunning || a.State == AgentStarting {
+		now := time.Now()
+		a.EndedAt = &now
+		if isError {
+			a.State = AgentError
+			a.Error = result
+		} else {
+			a.State = AgentComplete
+		}
+	}
+	a.mu.Unlock()
 
 	if isError {
 		a.appendOutput("error", fmt.Sprintf("Error: %s", result))
@@ -394,15 +409,18 @@ func (a *Agent) waitForExit() {
 	err := a.cmd.Wait()
 
 	a.mu.Lock()
-	now := time.Now()
-	a.EndedAt = &now
+	// Only update EndedAt if not already set by processResultEvent
+	if a.EndedAt == nil {
+		now := time.Now()
+		a.EndedAt = &now
+	}
 
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			a.ExitCode = exitErr.ExitCode()
 		}
-		// Only set error state if not already killed
-		if a.State != AgentKilled {
+		// Only set error state if not already completed or killed
+		if a.State == AgentRunning || a.State == AgentStarting {
 			a.State = AgentError
 			a.Error = err.Error()
 		}
@@ -416,12 +434,18 @@ func (a *Agent) waitForExit() {
 	close(a.done)
 }
 
-// sendInput sends a follow-up message to the agent's stdin via stream-json protocol
+// sendInput sends a follow-up message to the agent's stdin via stream-json protocol.
+// Accepts messages to running or completed agents (process stays alive in stream-json mode).
 func (a *Agent) sendInput(message string) error {
 	a.mu.Lock()
-	if a.State != AgentRunning {
+	if a.State != AgentRunning && a.State != AgentComplete {
 		a.mu.Unlock()
-		return fmt.Errorf("agent %s is in state %s, not running", a.ID, a.State)
+		return fmt.Errorf("agent %s is in state %s, cannot send input", a.ID, a.State)
+	}
+	// Resume agent back to running when sending a follow-up
+	if a.State == AgentComplete {
+		a.State = AgentRunning
+		a.EndedAt = nil
 	}
 	a.mu.Unlock()
 

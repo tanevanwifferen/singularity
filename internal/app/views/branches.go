@@ -246,6 +246,8 @@ func (v *BranchesView) handleNewBranchInput(msg tea.KeyMsg) tea.Cmd {
 	case "esc":
 		v.showNewBranch = false
 		v.newBranchName = ""
+	case "ctrl+w":
+		v.newBranchName = components.DeleteWordEnd(v.newBranchName)
 	default:
 		// Handle text input for branch name
 		if len(msg.Runes) == 1 {

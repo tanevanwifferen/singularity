@@ -481,6 +481,10 @@ func (v *CommitView) handleMessageEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return v, nil
 
+	case "ctrl+w":
+		v.commitMessage, v.messageCursor = components.DeleteWord(v.commitMessage, v.messageCursor)
+		return v, nil
+
 	case "left":
 		if v.messageCursor > 0 {
 			v.messageCursor--

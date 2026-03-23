@@ -172,36 +172,41 @@ func ClearStash(repoPath string) error {
 
 // GetWorktrees returns all worktrees
 func GetWorktrees(repoPath string) ([]Worktree, error) {
-	cmd := exec.Command("git", "-C", repoPath, "worktree", "list", "--format=%(worktreepath)|%(refname:short)|%(objectname)|%(locked)")
+	cmd := exec.Command("git", "-C", repoPath, "worktree", "list", "--porcelain")
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get worktrees: %w", err)
 	}
 
 	var worktrees []Worktree
+	var current Worktree
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
+			// Empty line separates worktree entries
+			if current.Path != "" {
+				worktrees = append(worktrees, current)
+			}
+			current = Worktree{}
 			continue
 		}
 
-		parts := strings.SplitN(line, "|", 4)
-		if len(parts) < 3 {
-			continue
+		if strings.HasPrefix(line, "worktree ") {
+			current.Path = strings.TrimPrefix(line, "worktree ")
+		} else if strings.HasPrefix(line, "HEAD ") {
+			current.HEAD = strings.TrimPrefix(line, "HEAD ")
+		} else if strings.HasPrefix(line, "branch ") {
+			ref := strings.TrimPrefix(line, "branch ")
+			// Convert refs/heads/foo to foo
+			current.Branch = strings.TrimPrefix(ref, "refs/heads/")
+		} else if line == "locked" {
+			current.Locked = true
 		}
-
-		wt := Worktree{
-			Path:   parts[0],
-			Branch: parts[1],
-			HEAD:   parts[2],
-		}
-
-		if len(parts) >= 4 && parts[3] == "true" {
-			wt.Locked = true
-		}
-
-		worktrees = append(worktrees, wt)
+	}
+	// Append last entry if output doesn't end with blank line
+	if current.Path != "" {
+		worktrees = append(worktrees, current)
 	}
 
 	return worktrees, nil

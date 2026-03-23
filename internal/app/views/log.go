@@ -339,7 +339,13 @@ func (v *LogView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							return RefreshDoneMsg{}
 						}
 					}
-				} else if msg.String() == "backspace" && len(v.authorFilter) > 0 {
+				} else if msg.String() == "ctrl+w" && len(v.authorFilter) > 0 {
+				v.authorFilter = components.DeleteWordEnd(v.authorFilter)
+				return v, func() tea.Msg {
+					v.loadCommits(true)
+					return RefreshDoneMsg{}
+				}
+			} else if msg.String() == "backspace" && len(v.authorFilter) > 0 {
 					v.authorFilter = v.authorFilter[:len(v.authorFilter)-1]
 					return v, func() tea.Msg {
 						v.loadCommits(true)
