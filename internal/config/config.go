@@ -227,6 +227,17 @@ func (c *Config) UpdateGit(defaultBranch string, autoFetch bool, fetchInterval i
 	}
 }
 
+// UpdateJira updates Jira settings
+func (c *Config) UpdateJira(baseURL, email, apiToken, defaultProject string) {
+	c.Jira.BaseURL = baseURL
+	c.Jira.Email = email
+	if apiToken != "" {
+		c.Jira.APIToken = apiToken
+	}
+	c.Jira.DefaultProject = defaultProject
+	c.Jira.Enabled = baseURL != ""
+}
+
 // UpdateAI updates AI settings
 func (c *Config) UpdateAI(provider, model, commitStyle string) {
 	if provider != "" {

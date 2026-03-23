@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"git-frontend/internal/app/components"
+	"git-frontend/internal/config"
 	"git-frontend/internal/engine"
 	"git-frontend/internal/git"
+	"git-frontend/internal/jira"
 	"git-frontend/internal/project"
 	"git-frontend/internal/theme"
 
@@ -70,6 +72,10 @@ type WorkflowsView struct {
 	// Auto-refresh tick for live agent status
 	workflowTicking   bool
 	workflowAgentSnap *engine.AgentSnapshot
+
+	// Jira ticket picker
+	jiraPicker     *JiraPickerState
+	jiraConfirmIssue *jira.Issue // issue pending workflow-start confirmation
 }
 
 // NewWorkflowsView creates a new workflows view.
@@ -102,6 +108,14 @@ func (v *WorkflowsView) HasActiveWorkflow() bool {
 // SetEngine sets the agent engine.
 func (v *WorkflowsView) SetEngine(eng *engine.Engine) {
 	v.engine = eng
+}
+
+// SetJiraConfig wires Jira configuration so the Jira ticket picker is available.
+func (v *WorkflowsView) SetJiraConfig(cfg config.JiraConfig) {
+	v.jiraPicker = NewJiraPickerState(cfg)
+	if v.jiraPicker != nil {
+		v.jiraPicker.SetSize(v.width, v.height)
+	}
 }
 
 // SetProject updates the project reference.
@@ -258,6 +272,16 @@ func (v *WorkflowsView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.pushResults = ""
 		v.mrResults = ""
 
+		// Handle Jira picker
+		if v.jiraPicker.IsOpen() {
+			return v, v.handleJiraPickerKey(msg)
+		}
+
+		// Handle Jira confirm-start-workflow modal
+		if v.jiraConfirmIssue != nil {
+			return v, v.handleJiraWorkflowConfirm(msg)
+		}
+
 		// Handle workflow start modal
 		if v.showWorkflowStart {
 			return v, v.handleWorkflowStartInput(msg)
@@ -303,6 +327,12 @@ func (v *WorkflowsView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "w":
 			v.showWorkflowStart = true
 			v.workflowBranchName = ""
+
+		case "J":
+			// Open Jira ticket picker to create a workflow from a ticket
+			if v.jiraPicker.IsAvailable() {
+				return v, v.jiraPicker.Open()
+			}
 		case "D":
 			wf := v.currentWorkflow()
 			if wf != nil {
@@ -405,11 +435,19 @@ func (v *WorkflowsView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.workflowTicking = false
 		return v, nil
 
+	case jiraPickerLoadedMsg:
+		if cmd := v.jiraPicker.HandleMsg(msg); cmd != nil {
+			return v, cmd
+		}
+
 	case tea.WindowSizeMsg:
 		v.width = msg.Width
 		v.height = msg.Height
 		if v.filter != nil {
 			v.filter.SetHeight(msg.Height - 10)
+		}
+		if v.jiraPicker != nil {
+			v.jiraPicker.SetSize(msg.Width, msg.Height)
 		}
 
 	case tea.MouseMsg:
@@ -419,6 +457,113 @@ func (v *WorkflowsView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return v, nil
+}
+
+// --- Jira picker handlers ---
+
+// handleJiraPickerKey delegates key events to the Jira picker.
+func (v *WorkflowsView) handleJiraPickerKey(msg tea.KeyMsg) tea.Cmd {
+	cmd, done, confirmed, issue := v.jiraPicker.HandleKey(msg)
+	if done && confirmed && issue != nil {
+		v.jiraConfirmIssue = issue
+	}
+	return cmd
+}
+
+// handleJiraWorkflowConfirm handles the y/n confirmation before creating a workflow from a Jira ticket.
+func (v *WorkflowsView) handleJiraWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "y", "enter":
+		issue := v.jiraConfirmIssue
+		v.jiraConfirmIssue = nil
+		return v.startWorkflowFromJira(issue)
+	case "n", "esc":
+		v.jiraConfirmIssue = nil
+	}
+	return nil
+}
+
+// startWorkflowFromJira creates a FeatureWorkflow from a Jira issue and spawns an agent.
+func (v *WorkflowsView) startWorkflowFromJira(issue *jira.Issue) tea.Cmd {
+	if issue == nil || v.proj == nil {
+		return nil
+	}
+	branchName := issueToBranchName(issue)
+	baseDir := v.workflowBaseDir
+	agentPrompt := buildJiraAgentPrompt(issue)
+
+	wf := project.NewFeatureWorkflow(v.proj, branchName, baseDir)
+	v.workflows = append(v.workflows, wf)
+	v.selectedWorkflow = len(v.workflows) - 1
+	v.rebuildFilter()
+
+	eng := v.engine
+	var ctxFiles []string
+	if v.proj != nil {
+		ctxFiles = v.proj.ContextFiles
+	}
+
+	return func() tea.Msg {
+		if err := wf.CreateAllWorktrees(); err != nil {
+			v.workflowStatusMsg = fmt.Sprintf("Worktree creation failed: %v", err)
+			return RefreshDoneMsg{}
+		}
+
+		if eng == nil {
+			v.workflowStatusMsg = "Agent engine not available"
+			return RefreshDoneMsg{}
+		}
+
+		// Build full task with commit instructions
+		fullTask := agentPrompt + "\n\n" + buildWorkflowCommitInstructions(wf)
+
+		id, err := eng.StartAgent(wf.WorkflowDir(), fullTask, engine.AgentOptions{
+			ContextFiles: ctxFiles,
+			SmartRoute:   true,
+		})
+		if err != nil {
+			v.workflowStatusMsg = fmt.Sprintf("Agent spawn failed: %v", err)
+		} else {
+			wf.SetWorkflowAgentID(id)
+			v.workflowStatusMsg = fmt.Sprintf("Agent started for %s (%s)", issue.Key, branchName)
+		}
+		return RefreshDoneMsg{}
+	}
+}
+
+// buildWorkflowCommitInstructions generates commit instructions for a workflow.
+func buildWorkflowCommitInstructions(wf *project.FeatureWorkflow) string {
+	var repos []string
+	for name, wr := range wf.Repos {
+		if wr.WorktreeCreated {
+			repos = append(repos, name)
+		}
+	}
+	if len(repos) == 0 {
+		return ""
+	}
+
+	sort.Strings(repos)
+
+	var b strings.Builder
+	b.WriteString("<commit-instructions>\n")
+	b.WriteString("IMPORTANT: When you have completed your work, you MUST commit your changes.\n")
+	b.WriteString(fmt.Sprintf("You are working on branch '%s'.\n", wf.BranchName))
+	if len(repos) > 1 {
+		b.WriteString("This workflow spans multiple repositories. Each repo is a separate git repository\n")
+		b.WriteString("and MUST be committed independently. Do NOT try to commit from the parent directory.\n\n")
+		b.WriteString("Repos to commit (each is a subdirectory of your working directory):\n")
+		for _, name := range repos {
+			b.WriteString(fmt.Sprintf("  - %s/\n", name))
+		}
+		b.WriteString("\nFor each repo that has changes, cd into it and run:\n")
+		b.WriteString("  git add -A && git commit -m \"<descriptive message>\"\n")
+	} else {
+		b.WriteString(fmt.Sprintf("Commit your changes in the %s/ subdirectory:\n", repos[0]))
+		b.WriteString(fmt.Sprintf("  cd %s && git add -A && git commit -m \"<descriptive message>\"\n", repos[0]))
+	}
+	b.WriteString("</commit-instructions>")
+	return b.String()
 }
 
 // --- Modal input handlers ---
@@ -822,7 +967,34 @@ func (v *WorkflowsView) View() string {
 	if v.proj != nil {
 		s.WriteString(th.MutedTextStyle.Render(fmt.Sprintf("  %s", v.proj.Name)))
 	}
+	if v.jiraPicker.IsAvailable() {
+		s.WriteString(th.MutedTextStyle.Render("  J: Jira ticket"))
+	}
 	s.WriteString("\n\n")
+
+	// Jira picker overlay
+	if v.jiraPicker.IsOpen() {
+		s.WriteString(v.jiraPicker.View())
+		return s.String()
+	}
+
+	// Jira workflow confirm modal
+	if v.jiraConfirmIssue != nil {
+		issue := v.jiraConfirmIssue
+		branch := issueToBranchName(issue)
+		lines := []string{
+			"",
+			fmt.Sprintf("  Ticket: %s — %s", th.DashboardAccentStyle.Render(issue.Key), issue.Summary),
+			fmt.Sprintf("  Branch: %s", th.MutedTextStyle.Render(branch)),
+			"",
+			"  Create worktrees for all repos + spawn agent?",
+			"",
+			"  y: Confirm  n: Cancel",
+		}
+		s.WriteString(renderModal("Start Workflow from Jira", lines, modalWidth(v.width)))
+		s.WriteString("\n")
+		return s.String()
+	}
 
 	// Workflow start modal
 	if v.showWorkflowStart {
@@ -1054,10 +1226,14 @@ func (v *WorkflowsView) renderFooterHelp() string {
 		return th.Help.Render("Enter: Confirm  Esc: Cancel")
 	}
 
-	if len(v.workflows) > 0 {
-		return th.Help.Render(" w New  a Agent  p Push  M MRs  D Cleanup  I Import  ↑↓ Select  r Refresh")
+	jiraHint := ""
+	if v.jiraPicker.IsAvailable() {
+		jiraHint = "  J Jira"
 	}
-	return th.Help.Render(" w New Workflow  I Import  r Refresh")
+	if len(v.workflows) > 0 {
+		return th.Help.Render(" w New  J Jira  a Agent  p Push  M MRs  D Cleanup  I Import  ↑↓ Select  r Refresh" + jiraHint)
+	}
+	return th.Help.Render(" w New Workflow  I Import  r Refresh" + jiraHint)
 }
 
 // ShortHelp returns a contextual short help string.
@@ -1071,20 +1247,30 @@ func (v *WorkflowsView) ShortHelp() string {
 		if wf != nil {
 			wfLabel = wf.BranchName
 		}
-		return fmt.Sprintf("Workflow: %s  w New  a Agent  p Push  M MRs  D Cleanup  I Import", wfLabel)
+		jiraHint := ""
+		if v.jiraPicker.IsAvailable() {
+			jiraHint = "  J Jira ticket"
+		}
+		return fmt.Sprintf("Workflow: %s  w New  J Jira  a Agent  p Push  M MRs  D Cleanup  I Import%s", wfLabel, jiraHint)
 	}
-	return "w New Workflow  I Import  r Refresh"
+	jiraHint := ""
+	if v.jiraPicker.IsAvailable() {
+		jiraHint = "  J Jira ticket"
+	}
+	return "w New Workflow  I Import  r Refresh" + jiraHint
 }
 
 // CapturesInput returns true when the view is in an input mode.
 func (v *WorkflowsView) CapturesInput() bool {
-	return v.showWorkflowStart || v.showWorkflowCleanup || v.showAgentPrompt || v.showPushConfirm || v.showBatchMRConfirm || v.showMRSummary
+	return v.showWorkflowStart || v.showWorkflowCleanup || v.showAgentPrompt ||
+		v.showPushConfirm || v.showBatchMRConfirm || v.showMRSummary ||
+		v.jiraPicker.IsOpen() || v.jiraConfirmIssue != nil
 }
 
 // CapturesKey returns true for keys this view handles directly.
 func (v *WorkflowsView) CapturesKey(key string) bool {
 	switch key {
-	case "r", "w", "a", "p", "D", "I", "M", "j", "k", "up", "down", "/":
+	case "r", "w", "a", "p", "D", "I", "M", "J", "j", "k", "up", "down", "/":
 		return true
 	}
 	return false

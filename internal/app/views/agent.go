@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"git-frontend/internal/app/components"
+	"git-frontend/internal/config"
 	"git-frontend/internal/engine"
+	"git-frontend/internal/jira"
 	"git-frontend/internal/theme"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -73,6 +75,10 @@ type AgentView struct {
 	// Refresh ticker
 	refreshInterval time.Duration
 	lastRefresh     time.Time
+
+	// Jira ticket picker
+	jiraPicker       *JiraPickerState
+	jiraConfirmIssue *jira.Issue // issue pending agent-start confirmation
 }
 
 // NewAgentView creates a new agent console view.
@@ -131,6 +137,14 @@ func (v *AgentView) outputHeight() int {
 // SetEngine sets the agent engine (allows late binding)
 func (v *AgentView) SetEngine(eng *engine.Engine) {
 	v.engine = eng
+}
+
+// SetJiraConfig wires Jira configuration so the Jira ticket picker is available.
+func (v *AgentView) SetJiraConfig(cfg config.JiraConfig) {
+	v.jiraPicker = NewJiraPickerState(cfg)
+	if v.jiraPicker != nil {
+		v.jiraPicker.SetSize(v.width, v.height)
+	}
 }
 
 // Init initializes the agent view.
@@ -354,6 +368,11 @@ func (v *AgentView) recalcLayout() {
 // Update handles update events.
 func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case jiraPickerLoadedMsg:
+		if cmd := v.jiraPicker.HandleMsg(msg); cmd != nil {
+			return v, cmd
+		}
+
 	case tea.KeyMsg:
 		// Handle kill confirmation first
 		if v.showKillConfirm {
@@ -368,6 +387,16 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle new agent input
 		if v.showNewAgent {
 			return v, v.handleNewAgentInput(msg)
+		}
+
+		// Handle Jira picker
+		if v.jiraPicker.IsOpen() {
+			return v, v.handleJiraPickerKey(msg)
+		}
+
+		// Handle Jira confirm-start-agent modal
+		if v.jiraConfirmIssue != nil {
+			return v, v.handleJiraAgentConfirm(msg)
 		}
 
 		key := msg.String()
@@ -429,6 +458,13 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "n":
 			v.showNewAgent = true
 			v.newAgentTask = ""
+			return v, nil
+
+		case "J":
+			// Open Jira ticket picker to start an agent from a ticket
+			if v.jiraPicker.IsAvailable() {
+				return v, v.jiraPicker.Open()
+			}
 			return v, nil
 
 		case "K":
@@ -516,6 +552,9 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.width = msg.Width
 		v.height = msg.Height
 		v.recalcLayout()
+		if v.jiraPicker != nil {
+			v.jiraPicker.SetSize(msg.Width, msg.Height)
+		}
 
 	case tea.MouseMsg:
 		if v.filter != nil {
@@ -744,14 +783,44 @@ func (v *AgentView) View() string {
 	}
 
 	// Help hint
-	if !v.showNewAgent && !v.showKillConfirm {
+	if !v.showNewAgent && !v.showKillConfirm && !v.jiraPicker.IsOpen() && v.jiraConfirmIssue == nil {
 		s.WriteString("  ")
-		s.WriteString(th.Help.Render("n:new  K:kill  enter:view  d:close  c:clear  r:refresh"))
+		jiraHint := ""
+		if v.jiraPicker.IsAvailable() {
+			jiraHint = "  J:jira"
+		}
+		s.WriteString(th.Help.Render("n:new  J:jira  K:kill  enter:view  d:close  c:clear  r:refresh" + jiraHint))
 	}
 	s.WriteString("\n")
 
 	// Divider
 	divider := strings.Repeat("─", v.width)
+
+	// Jira picker overlay
+	if v.jiraPicker.IsOpen() {
+		s.WriteString("\n")
+		s.WriteString(v.jiraPicker.View())
+		return s.String()
+	}
+
+	// Jira confirm modal
+	if v.jiraConfirmIssue != nil {
+		issue := v.jiraConfirmIssue
+		branch := issueToBranchName(issue)
+		s.WriteString("\n")
+		s.WriteString(renderModal("Start Agent from Jira Ticket", []string{
+			"",
+			fmt.Sprintf("  Ticket:  %s — %s", issue.Key, issue.Summary),
+			fmt.Sprintf("  Branch:  %s", branch),
+			fmt.Sprintf("  Type:    %s  Priority: %s", issue.Type, issue.Priority),
+			"",
+			"  Start agent in isolated worktree?",
+			"  (auto-commits + merges back on completion)",
+			"",
+			"  y/Enter: Start   n/Esc: Cancel",
+		}, modalWidth(v.width)))
+		return s.String()
+	}
 
 	// Agent list pane
 	s.WriteString(v.filter.View())
@@ -912,7 +981,8 @@ func (v *AgentView) Refresh() error {
 
 // CapturesInput returns true when the view is in an input mode.
 func (v *AgentView) CapturesInput() bool {
-	return v.showNewAgent || v.showKillConfirm || v.showMessageInput || v.focus == focusOutput
+	return v.showNewAgent || v.showKillConfirm || v.showMessageInput || v.focus == focusOutput ||
+		v.jiraPicker.IsOpen() || v.jiraConfirmIssue != nil
 }
 
 // CapturesKey returns true for keys the agent view needs when the output pane is visible.
@@ -937,6 +1007,48 @@ func (v *AgentView) KeyBindings() []components.KeyBinding {
 		{Key: "i", Description: "Send message to running agent"},
 		{Key: "/", Description: "Search agents"},
 		{Key: "j/k", Description: "Navigate"},
+	}
+}
+
+// handleJiraPickerKey delegates key events to the Jira picker.
+func (v *AgentView) handleJiraPickerKey(msg tea.KeyMsg) tea.Cmd {
+	cmd, done, confirmed, issue := v.jiraPicker.HandleKey(msg)
+	if done && confirmed && issue != nil {
+		v.jiraConfirmIssue = issue
+	}
+	return cmd
+}
+
+// handleJiraAgentConfirm handles the y/n before starting an agent from a Jira ticket.
+func (v *AgentView) handleJiraAgentConfirm(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "y", "enter":
+		issue := v.jiraConfirmIssue
+		v.jiraConfirmIssue = nil
+		return v.startAgentFromJira(issue)
+	case "n", "esc":
+		v.jiraConfirmIssue = nil
+	}
+	return nil
+}
+
+// startAgentFromJira starts a new agent for the given Jira ticket using a worktree.
+func (v *AgentView) startAgentFromJira(issue *jira.Issue) tea.Cmd {
+	if issue == nil || v.engine == nil {
+		return nil
+	}
+	eng := v.engine
+	repoPath := v.repoPath
+	ctxFiles := v.contextFiles
+	agentPrompt := buildJiraAgentPrompt(issue)
+
+	return func() tea.Msg {
+		id, err := eng.StartAgent(repoPath, agentPrompt, engine.AgentOptions{
+			ContextFiles: ctxFiles,
+			SmartRoute:   true,
+			UseWorktree:  true,
+		})
+		return AgentCreatedMsg{ID: id, Err: err}
 	}
 }
 

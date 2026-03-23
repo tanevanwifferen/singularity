@@ -219,6 +219,15 @@ func (m *Model) initRouter() {
 	}
 	agentView := views.NewAgentView(m.repoPath, m.engine, contextFiles)
 	router.Register("Agents", agentView, "f5")
+	if m.cfg != nil {
+		agentView.SetJiraConfig(m.cfg.Jira)
+	}
+
+	// Config / settings view
+	if m.cfg != nil {
+		configView := views.NewConfigView(m.cfg)
+		router.Register("Config", configView, "f6")
+	}
 
 	// Git operations submenu (accessible via "g" key)
 	syncView := views.NewSyncView(m.repoPath)
@@ -263,6 +272,14 @@ func (m *Model) initRouter() {
 	router.RegisterSubmenu("g", "Git", gitItems)
 
 	m.router = router
+
+	// Wire Jira config to views that support the Jira picker
+	// (must happen after router is set so getAgentView() works)
+	if m.cfg != nil && m.cfg.Jira.BaseURL != "" {
+		if av := m.getAgentView(); av != nil {
+			av.SetJiraConfig(m.cfg.Jira)
+		}
+	}
 
 	// Notify router of initial window size
 	if m.layout != nil {
@@ -349,6 +366,15 @@ func (m *Model) initProjectRouter() {
 	}
 	agentView := views.NewAgentView(defaultRepoPath, m.engine, contextFiles)
 	router.Register("Agents", agentView, "f6")
+	if m.cfg != nil {
+		agentView.SetJiraConfig(m.cfg.Jira)
+	}
+
+	// Config / settings view
+	if m.cfg != nil {
+		configView := views.NewConfigView(m.cfg)
+		router.Register("Config", configView, "f7")
+	}
 
 	// Git operations submenu (accessible via "g" key)
 	syncView := views.NewSyncView(defaultRepoPath)
@@ -393,6 +419,16 @@ func (m *Model) initProjectRouter() {
 	router.RegisterSubmenu("g", "Git", projGitItems)
 
 	m.router = router
+
+	// Wire Jira config to views that support the Jira picker
+	if m.cfg != nil && m.cfg.Jira.BaseURL != "" {
+		if av := m.getAgentView(); av != nil {
+			av.SetJiraConfig(m.cfg.Jira)
+		}
+		if wv := m.getWorkflowsView(); wv != nil {
+			wv.SetJiraConfig(m.cfg.Jira)
+		}
+	}
 
 	// Notify router of initial window size
 	if m.layout != nil {
