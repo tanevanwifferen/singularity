@@ -166,6 +166,9 @@ func (m *AsyncManager) CancelOperation(id string) {
 			}
 		}
 		op.mu.Unlock()
+		// Remove from tracking after cancellation
+		close(op.Done)
+		delete(m.operations, id)
 	}
 }
 
@@ -174,7 +177,7 @@ func (m *AsyncManager) CancelAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for _, op := range m.operations {
+	for id, op := range m.operations {
 		op.mu.Lock()
 		if !op.cancelled {
 			op.cancelled = true
@@ -183,6 +186,9 @@ func (m *AsyncManager) CancelAll() {
 			}
 		}
 		op.mu.Unlock()
+		// Remove from tracking after cancellation
+		close(op.Done)
+		delete(m.operations, id)
 	}
 }
 
