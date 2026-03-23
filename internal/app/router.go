@@ -45,6 +45,10 @@ type Router struct {
 	activeName string
 	active     View
 
+	// Cached available dimensions for views
+	viewWidth  int
+	viewHeight int
+
 	// Help overlay state
 	showHelp   bool
 	helpOverlay components.HelpOverlay
@@ -68,6 +72,12 @@ func (r *Router) Register(name string, view View) {
 		r.viewOrder = append(r.viewOrder, name)
 	}
 	r.views[name] = view
+	// Apply current dimensions to newly registered views
+	if r.viewWidth > 0 && r.viewHeight > 0 {
+		if sized, ok := view.(SizableView); ok {
+			sized.SetSize(r.viewWidth, r.viewHeight)
+		}
+	}
 }
 
 // GetView returns a view by name, or nil if not found.
@@ -103,6 +113,12 @@ func (r *Router) SwitchTo(name string) error {
 	}
 	r.activeName = name
 	r.active = view
+	// Ensure the view has current dimensions
+	if r.viewWidth > 0 && r.viewHeight > 0 {
+		if sized, ok := view.(SizableView); ok {
+			sized.SetSize(r.viewWidth, r.viewHeight)
+		}
+	}
 	return nil
 }
 
@@ -329,11 +345,17 @@ func (r *Router) tabAtX(x int) string {
 	return ""
 }
 
-// NotifySize informs the router and active view of the window size.
+// NotifySize informs the router and all views of the available view dimensions.
+// width and height should be the available dimensions for views (after chrome).
 func (r *Router) NotifySize(width, height int) {
-	// Forward to active view if it supports sizing
-	if sized, ok := r.active.(SizableView); ok {
-		sized.SetSize(width, height)
+	r.viewWidth = width
+	r.viewHeight = height
+
+	// Forward to ALL views so they stay in sync when switched to
+	for _, view := range r.views {
+		if sized, ok := view.(SizableView); ok {
+			sized.SetSize(width, height)
+		}
 	}
 	// Also update help overlay size if visible
 	if r.showHelp {

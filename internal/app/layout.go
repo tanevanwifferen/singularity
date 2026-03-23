@@ -42,21 +42,16 @@ func NewLayout() *Layout {
 func (l *Layout) rebuildStyles() {
 	th := theme.GetTheme()
 	l.tabBarStyle = lipgloss.NewStyle().
-		Foreground(th.MutedText).
-		Background(th.Surface)
+		Foreground(th.MutedText)
 	l.statusBarStyle = lipgloss.NewStyle().
-		Foreground(th.MutedText).
-		Background(th.Surface)
+		Foreground(th.MutedText)
 	l.activeTabStyle = lipgloss.NewStyle().
 		Foreground(th.Accent).
-		Background(th.Surface).
 		Bold(true)
 	l.inactiveTabStyle = lipgloss.NewStyle().
-		Foreground(th.MutedText).
-		Background(th.Surface)
+		Foreground(th.MutedText)
 	l.dividerStyle = lipgloss.NewStyle().
-		Foreground(th.Border).
-		Background(th.Surface)
+		Foreground(th.Border)
 	l.primaryTextStyle = lipgloss.NewStyle().
 		Foreground(th.PrimaryText)
 	l.mutedTextStyle = lipgloss.NewStyle().

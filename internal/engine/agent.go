@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/creack/pty"
 )
 
 // AgentState represents the lifecycle state of an agent
@@ -44,31 +46,35 @@ func (s AgentState) String() string {
 
 // Agent wraps a Claude Code subprocess with stdin/stdout management
 type Agent struct {
-	ID         string     `json:"id"`
-	WorkDir    string     `json:"work_dir"`
-	Task       string     `json:"task"`
-	State      AgentState `json:"state"`
-	CreatedAt  time.Time  `json:"created_at"`
-	StartedAt  *time.Time `json:"started_at,omitempty"`
-	EndedAt    *time.Time `json:"ended_at,omitempty"`
-	Error      string     `json:"error,omitempty"`
-	ExitCode   int        `json:"exit_code"`
+	ID        string     `json:"id"`
+	WorkDir   string     `json:"work_dir"`
+	Task      string     `json:"task"`
+	State     AgentState `json:"state"`
+	CreatedAt time.Time  `json:"created_at"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
+	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	Error     string     `json:"error,omitempty"`
+	ExitCode  int        `json:"exit_code"`
 
 	// Output buffer
-	output     []OutputEntry
-	outputMu   sync.Mutex
+	output   []OutputEntry
+	outputMu sync.Mutex
 
 	// Process management
-	cmd        *exec.Cmd
-	stdout     io.ReadCloser
-	stderr     io.ReadCloser
-	done       chan struct{}
-	mu         sync.Mutex
+	cmd    *exec.Cmd
+	stdout io.ReadCloser
+	stderr io.ReadCloser
+	done   chan struct{}
+	mu     sync.Mutex
+
+	// PTY mode fields
+	interactive bool     // true = PTY mode, false = pipe/print mode
+	ptmx        *os.File // PTY master fd (only in interactive mode)
 
 	// Configuration
-	model      string
+	model        string
 	allowedTools []string
-	maxTurns   int
+	maxTurns     int
 }
 
 // OutputEntry represents a single output chunk from the agent
@@ -88,6 +94,7 @@ func newAgent(id, workDir, task string, opts AgentOptions) *Agent {
 		CreatedAt:    time.Now(),
 		output:       make([]OutputEntry, 0),
 		done:         make(chan struct{}),
+		interactive:  opts.Interactive,
 		model:        opts.Model,
 		allowedTools: opts.AllowedTools,
 		maxTurns:     opts.MaxTurns,
@@ -111,11 +118,45 @@ func (a *Agent) start() error {
 	a.cmd.Dir = a.WorkDir
 	a.cmd.Env = a.buildEnv()
 
+	if a.interactive {
+		return a.startPTY()
+	}
+	return a.startPipe()
+}
+
+// startPTY launches the agent in a PTY for interactive use.
+// Caller must hold a.mu.
+func (a *Agent) startPTY() error {
+	var err error
+	a.ptmx, err = pty.StartWithSize(a.cmd, &pty.Winsize{
+		Rows: 24,
+		Cols: 120,
+	})
+	if err != nil {
+		a.setState(AgentError)
+		a.Error = fmt.Sprintf("pty start: %v", err)
+		return err
+	}
+
+	now := time.Now()
+	a.StartedAt = &now
+	a.State = AgentRunning
+
+	a.appendOutput("system", fmt.Sprintf("Agent %s started (interactive PTY) with task: %s", a.ID, a.Task))
+
+	// Stream PTY output in background for the detached preview
+	go a.streamPTYOutput()
+	go a.waitForExit()
+
+	return nil
+}
+
+// startPipe launches the agent with pipes (non-interactive print mode).
+// Caller must hold a.mu.
+func (a *Agent) startPipe() error {
 	// No stdin needed - task is passed as CLI argument
-	// Close stdin immediately to avoid "no stdin data received" warning
 	a.cmd.Stdin = nil
 
-	// Set up pipes
 	var err error
 	a.stdout, err = a.cmd.StdoutPipe()
 	if err != nil {
@@ -153,6 +194,14 @@ func (a *Agent) start() error {
 
 // buildArgs constructs the claude CLI arguments
 func (a *Agent) buildArgs() []string {
+	if a.interactive {
+		return a.buildInteractiveArgs()
+	}
+	return a.buildPrintArgs()
+}
+
+// buildPrintArgs constructs args for non-interactive print mode.
+func (a *Agent) buildPrintArgs() []string {
 	args := []string{
 		"--print",
 		"--verbose",
@@ -178,6 +227,31 @@ func (a *Agent) buildArgs() []string {
 	return args
 }
 
+// buildInteractiveArgs constructs args for interactive PTY mode.
+// Claude runs in its normal interactive TUI - no --print, no --dangerously-skip-permissions.
+func (a *Agent) buildInteractiveArgs() []string {
+	args := []string{
+		"--verbose",
+	}
+
+	if a.model != "" {
+		args = append(args, "--model", a.model)
+	}
+
+	if a.maxTurns > 0 {
+		args = append(args, "--max-turns", fmt.Sprintf("%d", a.maxTurns))
+	}
+
+	for _, tool := range a.allowedTools {
+		args = append(args, "--allowedTools", tool)
+	}
+
+	// The task/prompt is passed via -p (prompt) for interactive mode
+	args = append(args, "-p", a.Task)
+
+	return args
+}
+
 // buildEnv constructs the environment for the subprocess
 func (a *Agent) buildEnv() []string {
 	env := os.Environ()
@@ -185,6 +259,27 @@ func (a *Agent) buildEnv() []string {
 		"CLAUDE_NO_ANALYTICS=true",
 	)
 	return env
+}
+
+// streamPTYOutput reads from the PTY master and appends to the output buffer.
+// This runs in the background so we always capture output even when detached.
+func (a *Agent) streamPTYOutput() {
+	buf := make([]byte, 4096)
+	for {
+		n, err := a.ptmx.Read(buf)
+		if n > 0 {
+			// Store raw output lines for the detached preview
+			content := string(buf[:n])
+			for _, line := range strings.Split(content, "\n") {
+				if line != "" {
+					a.appendOutput("stdout", line)
+				}
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 // streamOutput reads from a pipe and appends to the output buffer
@@ -223,6 +318,11 @@ func (a *Agent) waitForExit() {
 	}
 	a.mu.Unlock()
 
+	// Close PTY master if in interactive mode
+	if a.ptmx != nil {
+		a.ptmx.Close()
+	}
+
 	close(a.done)
 }
 
@@ -235,8 +335,40 @@ func (a *Agent) sendMessage(msg string) error {
 		return fmt.Errorf("agent %s is not running (state: %s)", a.ID, a.State)
 	}
 
-	// Agents run in --print mode (non-interactive), stdin is not available
-	return fmt.Errorf("agent %s does not support stdin in print mode", a.ID)
+	if !a.interactive || a.ptmx == nil {
+		return fmt.Errorf("agent %s does not support stdin in print mode", a.ID)
+	}
+
+	_, err := a.ptmx.Write([]byte(msg))
+	return err
+}
+
+// PTY returns the PTY master file descriptor for attaching.
+// Returns nil if the agent is not in interactive mode.
+func (a *Agent) PTY() *os.File {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.ptmx
+}
+
+// IsInteractive returns true if the agent runs in PTY/interactive mode.
+func (a *Agent) IsInteractive() bool {
+	return a.interactive
+}
+
+// ResizePTY resizes the agent's PTY to the given dimensions.
+func (a *Agent) resizePTY(rows, cols int) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.ptmx == nil {
+		return fmt.Errorf("agent %s has no PTY", a.ID)
+	}
+
+	return pty.Setsize(a.ptmx, &pty.Winsize{
+		Rows: uint16(rows),
+		Cols: uint16(cols),
+	})
 }
 
 // kill terminates the agent subprocess

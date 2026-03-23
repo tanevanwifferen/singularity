@@ -10,10 +10,11 @@ import (
 
 // AgentOptions configures an agent's behavior
 type AgentOptions struct {
-	Model        string   // Claude model to use (empty = default)
-	AllowedTools []string // Restrict available tools
-	MaxTurns     int      // Max conversation turns (0 = unlimited)
+	Model        string        // Claude model to use (empty = default)
+	AllowedTools []string      // Restrict available tools
+	MaxTurns     int           // Max conversation turns (0 = unlimited)
 	Timeout      time.Duration // Kill agent after this duration (0 = no timeout)
+	Interactive  bool          // Run in PTY mode (attach/detach, interactive approval)
 }
 
 // Engine manages a pool of Claude Code agent subprocesses
@@ -202,6 +203,38 @@ func (e *Engine) WaitFor(sessionID string, timeout time.Duration) (AgentState, e
 	case <-time.After(timeout):
 		return AgentRunning, fmt.Errorf("timeout waiting for agent %s", sessionID)
 	}
+}
+
+// ResizeAgent resizes an interactive agent's PTY
+func (e *Engine) ResizeAgent(sessionID string, rows, cols int) error {
+	agent := e.getAgent(sessionID)
+	if agent == nil {
+		return fmt.Errorf("agent not found: %s", sessionID)
+	}
+	return agent.resizePTY(rows, cols)
+}
+
+// GetPTYProxy returns a PTYProxy for attaching to an interactive agent.
+// Returns nil if the agent is not interactive or not running.
+func (e *Engine) GetPTYProxy(sessionID string) *PTYProxy {
+	agent := e.getAgent(sessionID)
+	if agent == nil || !agent.IsInteractive() || !agent.IsActive() {
+		return nil
+	}
+	ptmx := agent.PTY()
+	if ptmx == nil {
+		return nil
+	}
+	return NewPTYProxy(ptmx, agent.Done())
+}
+
+// IsInteractive returns whether an agent is in interactive PTY mode
+func (e *Engine) IsInteractive(sessionID string) bool {
+	agent := e.getAgent(sessionID)
+	if agent == nil {
+		return false
+	}
+	return agent.IsInteractive()
 }
 
 // Shutdown kills all active agents and cleans up
