@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -9,8 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/creack/pty"
 )
 
 // AgentState represents the lifecycle state of an agent
@@ -44,7 +43,7 @@ func (s AgentState) String() string {
 	}
 }
 
-// Agent wraps a Claude Code subprocess with stdin/stdout management
+// Agent wraps a Claude Code subprocess with structured output streaming
 type Agent struct {
 	ID        string     `json:"id"`
 	WorkDir   string     `json:"work_dir"`
@@ -67,23 +66,26 @@ type Agent struct {
 	done   chan struct{}
 	mu     sync.Mutex
 
-	// PTY mode fields
-	interactive bool     // true = PTY mode, false = pipe/print mode
-	ptmx        *os.File // PTY master fd (only in interactive mode)
-	attached    bool     // true when user is attached to PTY (pauses background capture)
-	attachMu    sync.Mutex
-
 	// Configuration
 	model        string
 	allowedTools []string
 	maxTurns     int
+
+	// Cost tracking (from result event)
+	TotalCostUSD float64 `json:"total_cost_usd,omitempty"`
 }
 
-// OutputEntry represents a single output chunk from the agent
+// OutputEntry represents a single output chunk from the agent.
+// Source is one of: "text", "tool_use", "tool_result", "system", "error", "result"
 type OutputEntry struct {
 	Timestamp time.Time `json:"timestamp"`
-	Source    string    `json:"source"` // "stdout", "stderr", "system"
-	Content  string    `json:"content"`
+	Source    string    `json:"source"`
+	Content   string    `json:"content"`
+
+	// Structured fields for tool events
+	ToolName  string `json:"tool_name,omitempty"`
+	ToolID    string `json:"tool_id,omitempty"`
+	IsError   bool   `json:"is_error,omitempty"`
 }
 
 // newAgent creates a new agent instance
@@ -96,7 +98,6 @@ func newAgent(id, workDir, task string, opts AgentOptions) *Agent {
 		CreatedAt:    time.Now(),
 		output:       make([]OutputEntry, 0),
 		done:         make(chan struct{}),
-		interactive:  opts.Interactive,
 		model:        opts.Model,
 		allowedTools: opts.AllowedTools,
 		maxTurns:     opts.MaxTurns,
@@ -120,42 +121,6 @@ func (a *Agent) start() error {
 	a.cmd.Dir = a.WorkDir
 	a.cmd.Env = a.buildEnv()
 
-	if a.interactive {
-		return a.startPTY()
-	}
-	return a.startPipe()
-}
-
-// startPTY launches the agent in a PTY for interactive use.
-// Caller must hold a.mu.
-func (a *Agent) startPTY() error {
-	var err error
-	a.ptmx, err = pty.StartWithSize(a.cmd, &pty.Winsize{
-		Rows: 24,
-		Cols: 120,
-	})
-	if err != nil {
-		a.setState(AgentError)
-		a.Error = fmt.Sprintf("pty start: %v", err)
-		return err
-	}
-
-	now := time.Now()
-	a.StartedAt = &now
-	a.State = AgentRunning
-
-	a.appendOutput("system", fmt.Sprintf("Agent %s started (interactive PTY) with task: %s", a.ID, a.Task))
-
-	// Stream PTY output in background for the detached preview
-	go a.streamPTYOutput()
-	go a.waitForExit()
-
-	return nil
-}
-
-// startPipe launches the agent with pipes (non-interactive print mode).
-// Caller must hold a.mu.
-func (a *Agent) startPipe() error {
 	// No stdin needed - task is passed as CLI argument
 	a.cmd.Stdin = nil
 
@@ -186,28 +151,20 @@ func (a *Agent) startPipe() error {
 
 	a.appendOutput("system", fmt.Sprintf("Agent %s started with task: %s", a.ID, a.Task))
 
-	// Stream output in background
-	go a.streamOutput(a.stdout, "stdout")
-	go a.streamOutput(a.stderr, "stderr")
+	// Stream structured JSON output
+	go a.streamJSON(a.stdout)
+	go a.streamStderr(a.stderr)
 	go a.waitForExit()
 
 	return nil
 }
 
-// buildArgs constructs the claude CLI arguments
+// buildArgs constructs the claude CLI arguments for stream-json mode
 func (a *Agent) buildArgs() []string {
-	if a.interactive {
-		return a.buildInteractiveArgs()
-	}
-	return a.buildPrintArgs()
-}
-
-// buildPrintArgs constructs args for non-interactive print mode.
-func (a *Agent) buildPrintArgs() []string {
 	args := []string{
 		"--print",
 		"--verbose",
-		"--output-format", "text",
+		"--output-format", "stream-json",
 		"--permission-mode", "bypassPermissions",
 	}
 
@@ -229,31 +186,6 @@ func (a *Agent) buildPrintArgs() []string {
 	return args
 }
 
-// buildInteractiveArgs constructs args for interactive PTY mode.
-// Claude runs in its normal interactive TUI with the prompt as a positional arg.
-func (a *Agent) buildInteractiveArgs() []string {
-	args := []string{
-		"--verbose",
-	}
-
-	if a.model != "" {
-		args = append(args, "--model", a.model)
-	}
-
-	if a.maxTurns > 0 {
-		args = append(args, "--max-turns", fmt.Sprintf("%d", a.maxTurns))
-	}
-
-	for _, tool := range a.allowedTools {
-		args = append(args, "--allowedTools", tool)
-	}
-
-	// Pass the task as a positional prompt argument (NOT -p which is --print mode)
-	args = append(args, a.Task)
-
-	return args
-}
-
 // buildEnv constructs the environment for the subprocess
 func (a *Agent) buildEnv() []string {
 	env := os.Environ()
@@ -263,42 +195,154 @@ func (a *Agent) buildEnv() []string {
 	return env
 }
 
-// streamPTYOutput reads from the PTY master and appends to the output buffer.
-// Pauses automatically when a user is attached (to avoid competing reads on the fd).
-func (a *Agent) streamPTYOutput() {
-	buf := make([]byte, 4096)
-	for {
-		// When user is attached, the PTYProxy reads the fd directly.
-		// We must not compete — sleep and check again.
-		if a.IsAttached() {
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
-
-		n, err := a.ptmx.Read(buf)
-		if n > 0 {
-			content := string(buf[:n])
-			for _, line := range strings.Split(content, "\n") {
-				if line != "" {
-					a.appendOutput("stdout", line)
-				}
-			}
-		}
-		if err != nil {
-			return
-		}
-	}
-}
-
-// streamOutput reads from a pipe and appends to the output buffer
-func (a *Agent) streamOutput(r io.ReadCloser, source string) {
+// streamJSON parses newline-delimited JSON events from Claude's stream-json output
+func (a *Agent) streamJSON(r io.ReadCloser) {
 	scanner := bufio.NewScanner(r)
-	// Increase buffer size for long lines
 	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		a.appendOutput(source, line)
+		if line == "" {
+			continue
+		}
+
+		var event map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			a.appendOutput("error", fmt.Sprintf("JSON parse error: %v", err))
+			continue
+		}
+
+		a.processEvent(event)
+	}
+}
+
+// processEvent handles a single stream-json event
+func (a *Agent) processEvent(event map[string]interface{}) {
+	eventType, _ := event["type"].(string)
+
+	switch eventType {
+	case "assistant":
+		a.processAssistantEvent(event)
+
+	case "system":
+		subtype, _ := event["subtype"].(string)
+		switch subtype {
+		case "init":
+			model, _ := event["model"].(string)
+			if model != "" {
+				a.appendOutput("system", fmt.Sprintf("Model: %s", model))
+			}
+		// Skip hook_started, hook_response — noisy
+		}
+
+	case "result":
+		a.processResultEvent(event)
+
+	case "rate_limit_event":
+		// Skip — not useful for display
+	}
+}
+
+// processAssistantEvent handles assistant message events containing text and tool_use
+func (a *Agent) processAssistantEvent(event map[string]interface{}) {
+	msg, ok := event["message"].(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	content, ok := msg["content"].([]interface{})
+	if !ok {
+		return
+	}
+
+	for _, block := range content {
+		blockMap, ok := block.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		blockType, _ := blockMap["type"].(string)
+		switch blockType {
+		case "text":
+			text, _ := blockMap["text"].(string)
+			if text != "" {
+				a.appendOutput("text", text)
+			}
+
+		case "tool_use":
+			name, _ := blockMap["name"].(string)
+			id, _ := blockMap["id"].(string)
+			input, _ := blockMap["input"].(map[string]interface{})
+
+			summary := formatToolUseSummary(name, input)
+			entry := OutputEntry{
+				Timestamp: time.Now(),
+				Source:    "tool_use",
+				Content:   summary,
+				ToolName:  name,
+				ToolID:    id,
+			}
+			a.outputMu.Lock()
+			a.output = append(a.output, entry)
+			a.outputMu.Unlock()
+
+		case "tool_result":
+			content, _ := blockMap["content"].(string)
+			toolID, _ := blockMap["tool_use_id"].(string)
+			isError, _ := blockMap["is_error"].(bool)
+
+			entry := OutputEntry{
+				Timestamp: time.Now(),
+				Source:    "tool_result",
+				Content:   truncate(content, 500),
+				ToolID:    toolID,
+				IsError:   isError,
+			}
+			a.outputMu.Lock()
+			a.output = append(a.output, entry)
+			a.outputMu.Unlock()
+		}
+	}
+}
+
+// processResultEvent handles the final result event
+func (a *Agent) processResultEvent(event map[string]interface{}) {
+	subtype, _ := event["subtype"].(string)
+	isError, _ := event["is_error"].(bool)
+	result, _ := event["result"].(string)
+	costUSD, _ := event["total_cost_usd"].(float64)
+
+	if costUSD > 0 {
+		a.mu.Lock()
+		a.TotalCostUSD = costUSD
+		a.mu.Unlock()
+	}
+
+	if isError {
+		a.appendOutput("error", fmt.Sprintf("Error: %s", result))
+	} else {
+		status := "completed"
+		if subtype != "" {
+			status = subtype
+		}
+		costStr := ""
+		if costUSD > 0 {
+			costStr = fmt.Sprintf(" ($%.4f)", costUSD)
+		}
+		a.appendOutput("result", fmt.Sprintf("Agent %s%s", status, costStr))
+	}
+}
+
+// streamStderr reads stderr and appends as error entries
+func (a *Agent) streamStderr(r io.ReadCloser) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line != "" {
+			a.appendOutput("error", line)
+		}
 	}
 }
 
@@ -326,81 +370,7 @@ func (a *Agent) waitForExit() {
 	}
 	a.mu.Unlock()
 
-	// Close PTY master if in interactive mode
-	if a.ptmx != nil {
-		a.ptmx.Close()
-	}
-
 	close(a.done)
-}
-
-// sendMessage writes a message to the agent's stdin
-func (a *Agent) sendMessage(msg string) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if a.State != AgentRunning {
-		return fmt.Errorf("agent %s is not running (state: %s)", a.ID, a.State)
-	}
-
-	if !a.interactive || a.ptmx == nil {
-		return fmt.Errorf("agent %s does not support stdin in print mode", a.ID)
-	}
-
-	_, err := a.ptmx.Write([]byte(msg))
-	return err
-}
-
-// PTY returns the PTY master file descriptor for attaching.
-// Returns nil if the agent is not in interactive mode.
-func (a *Agent) PTY() *os.File {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.ptmx
-}
-
-// Attach marks the agent as attached, pausing background output capture.
-// The caller (PTYProxy) will handle I/O directly.
-func (a *Agent) Attach() {
-	a.attachMu.Lock()
-	a.attached = true
-	a.attachMu.Unlock()
-	a.appendOutput("system", "User attached to PTY")
-}
-
-// Detach marks the agent as detached, resuming background output capture.
-func (a *Agent) Detach() {
-	a.attachMu.Lock()
-	a.attached = false
-	a.attachMu.Unlock()
-	a.appendOutput("system", "User detached from PTY")
-}
-
-// IsAttached returns whether a user is currently attached to this agent's PTY.
-func (a *Agent) IsAttached() bool {
-	a.attachMu.Lock()
-	defer a.attachMu.Unlock()
-	return a.attached
-}
-
-// IsInteractive returns true if the agent runs in PTY/interactive mode.
-func (a *Agent) IsInteractive() bool {
-	return a.interactive
-}
-
-// ResizePTY resizes the agent's PTY to the given dimensions.
-func (a *Agent) resizePTY(rows, cols int) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if a.ptmx == nil {
-		return fmt.Errorf("agent %s has no PTY", a.ID)
-	}
-
-	return pty.Setsize(a.ptmx, &pty.Winsize{
-		Rows: uint16(rows),
-		Cols: uint16(cols),
-	})
 }
 
 // kill terminates the agent subprocess
@@ -435,14 +405,14 @@ func (a *Agent) getOutput(offset int) []OutputEntry {
 	return result
 }
 
-// getFullOutput returns all stdout content as a single string
+// getFullOutput returns all text content as a single string
 func (a *Agent) getFullOutput() string {
 	a.outputMu.Lock()
 	defer a.outputMu.Unlock()
 
 	var parts []string
 	for _, entry := range a.output {
-		if entry.Source == "stdout" {
+		if entry.Source == "text" || entry.Source == "tool_use" || entry.Source == "tool_result" {
 			parts = append(parts, entry.Content)
 		}
 	}
@@ -486,4 +456,47 @@ func (a *Agent) IsActive() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.State == AgentRunning || a.State == AgentStarting
+}
+
+// formatToolUseSummary creates a concise summary of a tool use
+func formatToolUseSummary(name string, input map[string]interface{}) string {
+	switch name {
+	case "Read":
+		path, _ := input["file_path"].(string)
+		return fmt.Sprintf("Read %s", path)
+	case "Edit":
+		path, _ := input["file_path"].(string)
+		return fmt.Sprintf("Edit %s", path)
+	case "Write":
+		path, _ := input["file_path"].(string)
+		return fmt.Sprintf("Write %s", path)
+	case "Bash":
+		cmd, _ := input["command"].(string)
+		return fmt.Sprintf("Bash: %s", truncate(cmd, 120))
+	case "Grep":
+		pattern, _ := input["pattern"].(string)
+		return fmt.Sprintf("Grep: %s", truncate(pattern, 80))
+	case "Glob":
+		pattern, _ := input["pattern"].(string)
+		return fmt.Sprintf("Glob: %s", pattern)
+	case "WebSearch":
+		query, _ := input["query"].(string)
+		return fmt.Sprintf("WebSearch: %s", truncate(query, 80))
+	case "WebFetch":
+		url, _ := input["url"].(string)
+		return fmt.Sprintf("WebFetch: %s", truncate(url, 80))
+	default:
+		return fmt.Sprintf("%s", name)
+	}
+}
+
+// truncate shortens a string to maxLen, adding "..." if truncated
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-3] + "..."
 }

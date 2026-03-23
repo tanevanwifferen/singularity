@@ -14,7 +14,6 @@ type AgentOptions struct {
 	AllowedTools []string      // Restrict available tools
 	MaxTurns     int           // Max conversation turns (0 = unlimited)
 	Timeout      time.Duration // Kill agent after this duration (0 = no timeout)
-	Interactive  bool          // Run in PTY mode (attach/detach, interactive approval)
 }
 
 // Engine manages a pool of Claude Code agent subprocesses
@@ -85,15 +84,6 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 	return id, nil
 }
 
-// SendMessage sends a message to a running agent's stdin
-func (e *Engine) SendMessage(sessionID string, message string) error {
-	agent := e.getAgent(sessionID)
-	if agent == nil {
-		return fmt.Errorf("agent not found: %s", sessionID)
-	}
-	return agent.sendMessage(message)
-}
-
 // GetStatus returns the current state of an agent
 func (e *Engine) GetStatus(sessionID string) (AgentState, error) {
 	agent := e.getAgent(sessionID)
@@ -105,7 +95,7 @@ func (e *Engine) GetStatus(sessionID string) (AgentState, error) {
 	return agent.State, nil
 }
 
-// GetOutput returns the agent's stdout content as a string
+// GetOutput returns the agent's output content as a string
 func (e *Engine) GetOutput(sessionID string) (string, error) {
 	agent := e.getAgent(sessionID)
 	if agent == nil {
@@ -203,40 +193,6 @@ func (e *Engine) WaitFor(sessionID string, timeout time.Duration) (AgentState, e
 	case <-time.After(timeout):
 		return AgentRunning, fmt.Errorf("timeout waiting for agent %s", sessionID)
 	}
-}
-
-// ResizeAgent resizes an interactive agent's PTY
-func (e *Engine) ResizeAgent(sessionID string, rows, cols int) error {
-	agent := e.getAgent(sessionID)
-	if agent == nil {
-		return fmt.Errorf("agent not found: %s", sessionID)
-	}
-	return agent.resizePTY(rows, cols)
-}
-
-// GetPTYProxy returns a PTYProxy for attaching to an interactive agent.
-// Returns nil if the agent is not interactive or not running.
-// Marks the agent as attached (pausing background capture).
-func (e *Engine) GetPTYProxy(sessionID string) *PTYProxy {
-	agent := e.getAgent(sessionID)
-	if agent == nil || !agent.IsInteractive() || !agent.IsActive() {
-		return nil
-	}
-	ptmx := agent.PTY()
-	if ptmx == nil {
-		return nil
-	}
-	agent.Attach()
-	return NewPTYProxy(ptmx, agent.Done(), func() { agent.Detach() })
-}
-
-// IsInteractive returns whether an agent is in interactive PTY mode
-func (e *Engine) IsInteractive(sessionID string) bool {
-	agent := e.getAgent(sessionID)
-	if agent == nil {
-		return false
-	}
-	return agent.IsInteractive()
 }
 
 // Shutdown kills all active agents and cleans up

@@ -279,10 +279,10 @@ func TestAgentStateString(t *testing.T) {
 func TestAgentOutput(t *testing.T) {
 	a := newAgent("test", os.TempDir(), "task", AgentOptions{})
 
-	a.appendOutput("stdout", "line 1")
-	a.appendOutput("stdout", "line 2")
-	a.appendOutput("stderr", "warning")
-	a.appendOutput("stdout", "line 3")
+	a.appendOutput("text", "line 1")
+	a.appendOutput("text", "line 2")
+	a.appendOutput("error", "warning")
+	a.appendOutput("text", "line 3")
 
 	// Get all output
 	entries := a.getOutput(0)
@@ -302,7 +302,7 @@ func TestAgentOutput(t *testing.T) {
 		t.Errorf("expected nil for offset past end, got %v", entries)
 	}
 
-	// Full output (stdout only)
+	// Full output (text entries only)
 	full := a.getFullOutput()
 	if full != "line 1\nline 2\nline 3" {
 		t.Errorf("unexpected full output: %q", full)
@@ -343,13 +343,6 @@ func TestAgentIsActive(t *testing.T) {
 	}
 }
 
-func TestSendMessageNotRunning(t *testing.T) {
-	a := newAgent("test", os.TempDir(), "task", AgentOptions{})
-	err := a.sendMessage("hello")
-	if err == nil {
-		t.Fatal("expected error for non-running agent")
-	}
-}
 
 func TestBuildArgs(t *testing.T) {
 	a := newAgent("test", os.TempDir(), "do something", AgentOptions{
@@ -365,6 +358,7 @@ func TestBuildArgs(t *testing.T) {
 	hasTool1 := false
 	hasTool2 := false
 	hasTask := false
+	hasStreamJSON := false
 
 	for i, arg := range args {
 		switch {
@@ -376,6 +370,8 @@ func TestBuildArgs(t *testing.T) {
 			hasTool1 = true
 		case arg == "--allowedTools" && i+1 < len(args) && args[i+1] == "Write":
 			hasTool2 = true
+		case arg == "--output-format" && i+1 < len(args) && args[i+1] == "stream-json":
+			hasStreamJSON = true
 		case arg == "do something":
 			hasTask = true
 		}
@@ -389,6 +385,9 @@ func TestBuildArgs(t *testing.T) {
 	}
 	if !hasTool1 || !hasTool2 {
 		t.Error("expected --allowedTools for Read and Write")
+	}
+	if !hasStreamJSON {
+		t.Error("expected --output-format stream-json in args")
 	}
 	if !hasTask {
 		t.Error("expected task in args")

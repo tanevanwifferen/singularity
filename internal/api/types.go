@@ -80,12 +80,6 @@ type AgentStartRequest struct {
 	TimeoutSecs  int      `json:"timeout_secs,omitempty"`
 }
 
-// AgentMessageRequest is the request for sending a message to an agent
-type AgentMessageRequest struct {
-	SessionID string `json:"session_id"`
-	Message   string `json:"message"`
-}
-
 // AgentQueryRequest is the request for querying an agent
 type AgentQueryRequest struct {
 	SessionID string `json:"session_id"`

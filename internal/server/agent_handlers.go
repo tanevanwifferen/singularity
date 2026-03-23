@@ -60,35 +60,6 @@ func (s *Server) handleAgentStart(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleAgentMessage handles POST /api/agent/message
-func (s *Server) handleAgentMessage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		s.writeError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-
-	var req api.AgentMessageRequest
-	if err := s.parseJSON(r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	if req.SessionID == "" {
-		s.writeError(w, http.StatusBadRequest, "session_id required")
-		return
-	}
-	if req.Message == "" {
-		s.writeError(w, http.StatusBadRequest, "message required")
-		return
-	}
-
-	if err := s.engine.SendMessage(req.SessionID, req.Message); err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true})
-}
 
 // handleAgentStatus handles GET /api/agent/status?session_id=...
 func (s *Server) handleAgentStatus(w http.ResponseWriter, r *http.Request) {

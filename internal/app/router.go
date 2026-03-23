@@ -33,6 +33,14 @@ type InputCapturer interface {
 	CapturesInput() bool
 }
 
+// KeyCapturer is an optional interface views can implement to claim
+// specific keys that would otherwise be handled by the router.
+// This is more granular than CapturesInput — it lets a view claim
+// individual keys (e.g. "tab") without blocking all global navigation.
+type KeyCapturer interface {
+	CapturesKey(key string) bool
+}
+
 
 // SwitchViewMsg is a message to switch to a different view.
 type SwitchViewMsg struct {
@@ -81,6 +89,7 @@ func (r *Router) Register(name string, view View, keys ...string) {
 	if len(keys) > 0 && keys[0] != "" {
 		r.viewKeys[name] = keys[0]
 		r.keyToView["alt+"+keys[0]] = name
+		r.keyToView[keys[0]] = name
 	}
 	// Apply current dimensions to newly registered views
 	if r.viewWidth > 0 && r.viewHeight > 0 {
@@ -196,6 +205,22 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle key-based navigation (skip when active view is capturing input)
 	if keyMsg, ok := msg.(tea.KeyMsg); ok && !r.ActiveViewCapturesInput() {
 		key := keyMsg.String()
+
+		// Let views claim specific keys before router handles them.
+		// If a view implements KeyCapturer and claims this key, delegate directly.
+		// If a view does NOT implement KeyCapturer, assume it uses all plain
+		// single-letter keys (safe default) — only alt+letter bypasses this.
+		if kc, ok := r.active.(KeyCapturer); ok {
+			if kc.CapturesKey(key) {
+				_, cmd := r.active.Update(msg)
+				return r, cmd
+			}
+		} else if len(key) == 1 && key >= "a" && key <= "z" {
+			// View doesn't declare its keys — don't intercept plain letters
+			_, cmd := r.active.Update(msg)
+			return r, cmd
+		}
+
 		switch key {
 		case "?":
 			// Show help overlay with combined global and view-specific bindings
@@ -227,7 +252,7 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		default:
-			// Alt+letter view switching (e.g. alt+o for Overview)
+			// View switching via alt+letter or plain letter (when view allows it)
 			if viewName, ok := r.keyToView[key]; ok {
 				if err := r.SwitchTo(viewName); err != nil {
 					return r, nil

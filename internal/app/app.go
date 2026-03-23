@@ -168,6 +168,7 @@ func (m *Model) initRouter() {
 	router := NewRouter(overview, "Overview")
 	router.viewKeys["Overview"] = "o"
 	router.keyToView["alt+o"] = "Overview"
+	router.keyToView["o"] = "Overview"
 
 	dashboard, err := NewBranchDashboard(m.repoPath)
 	if err == nil {

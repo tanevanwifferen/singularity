@@ -137,7 +137,6 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 	// Agent engine routes
 	mux.HandleFunc("/api/agent/start", withCORS(s.handleAgentStart))
-	mux.HandleFunc("/api/agent/message", withCORS(s.handleAgentMessage))
 	mux.HandleFunc("/api/agent/status", withCORS(s.handleAgentStatus))
 	mux.HandleFunc("/api/agent/output", withCORS(s.handleAgentOutput))
 	mux.HandleFunc("/api/agent/kill", withCORS(s.handleAgentKill))
