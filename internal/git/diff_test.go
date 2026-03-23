@@ -408,3 +408,209 @@ func TestStageAndUnstageHunk(t *testing.T) {
 		t.Errorf("expected empty staged diff after unstaging, got: %s", stagedDiff2)
 	}
 }
+
+func TestBuildPartialPatch_SelectedAdditions(t *testing.T) {
+	hunk := DiffHunk{
+		Header:   "@@ -1,3 +1,5 @@",
+		OldStart: 1,
+		OldCount: 3,
+		NewStart: 1,
+		NewCount: 5,
+		Lines: []DiffLine{
+			{Content: " line1", LineType: " "},
+			{Content: "+added1", LineType: "+"},
+			{Content: "+added2", LineType: "+"},
+			{Content: " line2", LineType: " "},
+			{Content: " line3", LineType: " "},
+		},
+	}
+
+	// Select only the first addition (index 1).
+	patch := buildPartialPatch("test.txt", hunk, []int{1}, false)
+
+	// The patch should include the selected "+" line and drop the unselected one.
+	// Old count = 3 context lines, New count = 3 context + 1 added = 4.
+	if !containsLine(patch, "@@ -1,3 +1,4 @@") {
+		t.Errorf("expected adjusted header, got patch:\n%s", patch)
+	}
+	if !containsLine(patch, "+added1") {
+		t.Error("expected selected addition line in patch")
+	}
+	if containsLine(patch, "+added2") {
+		t.Error("unselected addition should not appear in patch")
+	}
+}
+
+func TestBuildPartialPatch_SelectedDeletions(t *testing.T) {
+	hunk := DiffHunk{
+		Header:   "@@ -1,5 +1,3 @@",
+		OldStart: 1,
+		OldCount: 5,
+		NewStart: 1,
+		NewCount: 3,
+		Lines: []DiffLine{
+			{Content: " line1", LineType: " "},
+			{Content: "-del1", LineType: "-"},
+			{Content: "-del2", LineType: "-"},
+			{Content: " line2", LineType: " "},
+			{Content: " line3", LineType: " "},
+		},
+	}
+
+	// Select only the first deletion (index 1).
+	patch := buildPartialPatch("test.txt", hunk, []int{1}, false)
+
+	// Unselected deletion (index 2) becomes context.
+	// Old count = 3 context + 1 selected deletion + 1 converted context = 5
+	// New count = 3 context + 1 converted context = 4
+	if !containsLine(patch, "@@ -1,5 +1,4 @@") {
+		t.Errorf("expected adjusted header with unselected deletion as context, got patch:\n%s", patch)
+	}
+	if !containsLine(patch, "-del1") {
+		t.Error("expected selected deletion line in patch")
+	}
+	if containsLine(patch, "-del2") {
+		t.Error("unselected deletion should be converted to context, not appear as deletion")
+	}
+	// The unselected deletion should appear as context.
+	if !containsLine(patch, " del2") {
+		t.Error("expected unselected deletion to become context line")
+	}
+}
+
+func TestBuildPartialPatch_MixedSelection(t *testing.T) {
+	hunk := DiffHunk{
+		Header:   "@@ -1,4 +1,4 @@",
+		OldStart: 1,
+		OldCount: 4,
+		NewStart: 1,
+		NewCount: 4,
+		Lines: []DiffLine{
+			{Content: " line1", LineType: " "},
+			{Content: "-old", LineType: "-"},
+			{Content: "+new", LineType: "+"},
+			{Content: " line2", LineType: " "},
+			{Content: "-old2", LineType: "-"},
+			{Content: "+new2", LineType: "+"},
+			{Content: " line3", LineType: " "},
+		},
+	}
+
+	// Select only the first change pair (indices 1, 2).
+	patch := buildPartialPatch("test.txt", hunk, []int{1, 2}, false)
+
+	if !containsLine(patch, "-old") {
+		t.Error("expected selected deletion in patch")
+	}
+	if !containsLine(patch, "+new") {
+		t.Error("expected selected addition in patch")
+	}
+	// Unselected "-old2" should become context " old2".
+	if containsLine(patch, "-old2") {
+		t.Error("unselected deletion should not appear as deletion")
+	}
+	if !containsLine(patch, " old2") {
+		t.Error("unselected deletion should be context")
+	}
+	// Unselected "+new2" should be dropped entirely.
+	if containsLine(patch, "+new2") || containsLine(patch, " new2") {
+		t.Error("unselected addition should be dropped entirely")
+	}
+}
+
+func TestStageAndUnstageLines(t *testing.T) {
+	tmpDir := setupTestRepo(t)
+	defer os.RemoveAll(tmpDir)
+
+	// Create a file and commit it.
+	createFileTree(t, tmpDir, "test.txt", "line1\nline2\nline3\nline4\nline5\n")
+	runGitTree(t, tmpDir, "add", ".")
+	runGitTree(t, tmpDir, "commit", "-m", "Initial")
+
+	// Modify: add two lines in the same hunk region.
+	createFileTree(t, tmpDir, "test.txt", "line1\nline2\nnewA\nnewB\nline3\nline4\nline5\n")
+
+	// Get the unstaged diff.
+	rawDiff, err := GetUnstagedFileDiff(tmpDir, "test.txt")
+	if err != nil {
+		t.Fatalf("GetUnstagedFileDiff failed: %v", err)
+	}
+
+	hunks := ParseHunks(rawDiff)
+	if len(hunks) == 0 {
+		t.Fatal("expected at least one hunk")
+	}
+
+	// Find the "+" lines.
+	var addIndices []int
+	for i, line := range hunks[0].Lines {
+		if line.LineType == "+" {
+			addIndices = append(addIndices, i)
+		}
+	}
+	if len(addIndices) < 2 {
+		t.Fatalf("expected at least 2 addition lines, got %d", len(addIndices))
+	}
+
+	// Stage only the first addition line.
+	if err := StageLines(tmpDir, "test.txt", hunks[0], []int{addIndices[0]}); err != nil {
+		t.Fatalf("StageLines failed: %v", err)
+	}
+
+	// Verify that something is staged.
+	stagedDiff, err := GetStagedFileDiff(tmpDir, "test.txt")
+	if err != nil {
+		t.Fatalf("GetStagedFileDiff failed: %v", err)
+	}
+	if stagedDiff == "" {
+		t.Error("expected staged diff to be non-empty")
+	}
+
+	// The staged diff should contain "newA" but there should still be unstaged changes.
+	unstagedDiff, err := GetUnstagedFileDiff(tmpDir, "test.txt")
+	if err != nil {
+		t.Fatalf("GetUnstagedFileDiff after partial stage failed: %v", err)
+	}
+	if unstagedDiff == "" {
+		t.Error("expected unstaged diff to still exist for the unselected line")
+	}
+
+	// Now unstage the line we staged.
+	stagedHunks := ParseHunks(stagedDiff)
+	if len(stagedHunks) == 0 {
+		t.Fatal("expected staged hunks")
+	}
+
+	// Find addition lines in the staged hunk.
+	var stagedAddIndices []int
+	for i, line := range stagedHunks[0].Lines {
+		if line.LineType == "+" {
+			stagedAddIndices = append(stagedAddIndices, i)
+		}
+	}
+	if len(stagedAddIndices) == 0 {
+		t.Fatal("expected addition lines in staged hunk")
+	}
+
+	if err := UnstageLines(tmpDir, "test.txt", stagedHunks[0], stagedAddIndices); err != nil {
+		t.Fatalf("UnstageLines failed: %v", err)
+	}
+
+	// Verify nothing is staged now.
+	stagedDiff2, err := GetStagedFileDiff(tmpDir, "test.txt")
+	if err != nil {
+		t.Fatalf("GetStagedFileDiff after unstage failed: %v", err)
+	}
+	if stagedDiff2 != "" {
+		t.Errorf("expected empty staged diff after unstaging lines, got: %s", stagedDiff2)
+	}
+}
+
+func containsLine(patch, target string) bool {
+	for _, line := range splitLines(patch) {
+		if line == target {
+			return true
+		}
+	}
+	return false
+}

@@ -32,6 +32,7 @@ const (
 	MessageEditMode                // Editing commit message
 	ConfirmCommitMode             // Confirmation dialog
 	HunkDiffMode                  // Viewing file diff with hunk navigation
+	LineDiffMode                  // Line-level selection within a hunk
 )
 
 // CommitView displays the staging area and allows creating commits.
@@ -68,6 +69,12 @@ type CommitView struct {
 	hunkScrollOff   int            // Scroll offset within diff display
 	hunkIsStaged    bool           // Whether we are viewing staged hunks (true) or unstaged (false)
 	hunkFilePath    string         // Path of the file whose hunks are displayed
+
+	// Line-selection mode state (within a single hunk)
+	lineCursor      int            // Current cursor position in hunk.Lines
+	lineSelected    map[int]bool   // Set of toggled line indices (into hunk.Lines)
+	lineVisual      bool           // Visual/range selection active
+	lineVisualStart int            // Anchor index for visual selection
 }
 
 // NewCommitView creates a new commit view.
@@ -323,6 +330,11 @@ func (v *CommitView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle confirmation mode
 		if v.editMode == ConfirmCommitMode {
 			return v.handleConfirmMode(msg)
+		}
+
+		// Handle line-selection mode
+		if v.editMode == LineDiffMode {
+			return v.handleLineDiffMode(msg)
 		}
 
 		// Handle hunk diff preview mode
@@ -704,9 +716,153 @@ func (v *CommitView) handleHunkDiffMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		v.loadFiles()
 		v.refreshHunkDiff()
 		return v, nil
+
+	case "l":
+		// Enter line-selection mode for the current hunk
+		if v.hunkIndex < len(v.hunkList) {
+			v.enterLineMode()
+		}
+		return v, nil
 	}
 
 	return v, nil
+}
+
+// enterLineMode transitions from HunkDiffMode to LineDiffMode for the current hunk.
+func (v *CommitView) enterLineMode() {
+	hunk := v.hunkList[v.hunkIndex]
+	v.lineSelected = make(map[int]bool)
+	v.lineVisual = false
+	v.lineVisualStart = 0
+
+	// Position cursor on the first selectable (+ or -) line.
+	v.lineCursor = 0
+	for i, line := range hunk.Lines {
+		if line.LineType == "+" || line.LineType == "-" {
+			v.lineCursor = i
+			break
+		}
+	}
+	v.editMode = LineDiffMode
+}
+
+// handleLineDiffMode handles key events in line-selection mode.
+func (v *CommitView) handleLineDiffMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	hunk := v.hunkList[v.hunkIndex]
+
+	switch msg.String() {
+	case "esc":
+		// Return to hunk diff mode.
+		v.editMode = HunkDiffMode
+		v.lineSelected = nil
+		v.lineVisual = false
+		return v, nil
+
+	case "up", "k":
+		// Move cursor up to previous selectable line.
+		for i := v.lineCursor - 1; i >= 0; i-- {
+			if hunk.Lines[i].LineType == "+" || hunk.Lines[i].LineType == "-" {
+				v.lineCursor = i
+				break
+			}
+		}
+		if v.lineVisual {
+			v.applyVisualSelection(hunk)
+		}
+		return v, nil
+
+	case "down", "j":
+		// Move cursor down to next selectable line.
+		for i := v.lineCursor + 1; i < len(hunk.Lines); i++ {
+			if hunk.Lines[i].LineType == "+" || hunk.Lines[i].LineType == "-" {
+				v.lineCursor = i
+				break
+			}
+		}
+		if v.lineVisual {
+			v.applyVisualSelection(hunk)
+		}
+		return v, nil
+
+	case "v":
+		// Toggle visual selection mode.
+		if v.lineVisual {
+			v.lineVisual = false
+		} else {
+			v.lineVisual = true
+			v.lineVisualStart = v.lineCursor
+			// Select the anchor line.
+			v.applyVisualSelection(hunk)
+		}
+		return v, nil
+
+	case "x":
+		// Toggle the line under the cursor.
+		line := hunk.Lines[v.lineCursor]
+		if line.LineType == "+" || line.LineType == "-" {
+			if v.lineSelected[v.lineCursor] {
+				delete(v.lineSelected, v.lineCursor)
+			} else {
+				v.lineSelected[v.lineCursor] = true
+			}
+		}
+		return v, nil
+
+	case " ":
+		// Apply: stage or unstage the selected lines.
+		indices := v.getSelectedLineIndices(hunk)
+		if len(indices) == 0 {
+			return v, nil
+		}
+
+		if v.hunkIsStaged {
+			if err := git.UnstageLines(v.repoPath, v.hunkFilePath, hunk, indices); err != nil {
+				v.err = err
+				return v, nil
+			}
+		} else {
+			if err := git.StageLines(v.repoPath, v.hunkFilePath, hunk, indices); err != nil {
+				v.err = err
+				return v, nil
+			}
+		}
+
+		// Refresh and return to hunk mode.
+		v.loadFiles()
+		v.refreshHunkDiff()
+		v.editMode = HunkDiffMode
+		v.lineSelected = nil
+		v.lineVisual = false
+		return v, nil
+	}
+
+	return v, nil
+}
+
+// applyVisualSelection selects all selectable lines between the visual anchor and cursor.
+func (v *CommitView) applyVisualSelection(hunk git.DiffHunk) {
+	lo, hi := v.lineVisualStart, v.lineCursor
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	// Clear previous visual selection and reapply.
+	v.lineSelected = make(map[int]bool)
+	for i := lo; i <= hi; i++ {
+		if hunk.Lines[i].LineType == "+" || hunk.Lines[i].LineType == "-" {
+			v.lineSelected[i] = true
+		}
+	}
+}
+
+// getSelectedLineIndices returns the sorted list of selected line indices.
+func (v *CommitView) getSelectedLineIndices(hunk git.DiffHunk) []int {
+	var indices []int
+	for i := 0; i < len(hunk.Lines); i++ {
+		if v.lineSelected[i] {
+			indices = append(indices, i)
+		}
+	}
+	return indices
 }
 
 // refreshHunkDiff reloads the diff for the current file and updates the hunk list.
@@ -785,6 +941,11 @@ func (v *CommitView) View() string {
 	// Handle confirmation mode
 	if v.editMode == ConfirmCommitMode {
 		return v.renderConfirmDialog(&s, th)
+	}
+
+	// Handle line-selection mode
+	if v.editMode == LineDiffMode {
+		return v.renderLineDiffView(&s, th)
 	}
 
 	// Handle hunk diff preview mode
@@ -1175,7 +1336,111 @@ func (v *CommitView) renderHunkDiffView(s *strings.Builder, th theme.Theme) stri
 	s.WriteString("\n")
 	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
 	s.WriteString("\n")
-	s.WriteString(th.Help.Render(" Up/Down: Select hunk   Space: Stage/Unstage hunk   Esc: Back to file list "))
+	s.WriteString(th.Help.Render(" Up/Down: Select hunk   Space: Stage/Unstage hunk   l: Line select   Esc: Back to file list "))
+
+	return s.String()
+}
+
+// renderLineDiffView renders the line-selection view for the current hunk.
+func (v *CommitView) renderLineDiffView(s *strings.Builder, th theme.Theme) string {
+	sectionLabel := "unstaged"
+	if v.hunkIsStaged {
+		sectionLabel = "staged"
+	}
+	s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" Line Select: %s (%s) ", v.hunkFilePath, sectionLabel)))
+	s.WriteString("\n")
+	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
+	s.WriteString("\n")
+
+	hunk := v.hunkList[v.hunkIndex]
+	s.WriteString(fmt.Sprintf(" Hunk %s of %s  |  ",
+		th.DashboardAccentStyle.Render(fmt.Sprintf("%d", v.hunkIndex+1)),
+		th.StatsStyle.Render(fmt.Sprintf("%d", len(v.hunkList)))))
+
+	selectedCount := len(v.lineSelected)
+	s.WriteString(fmt.Sprintf("%s lines selected", th.DashboardAccentStyle.Render(fmt.Sprintf("%d", selectedCount))))
+	if v.lineVisual {
+		s.WriteString(th.DashboardErrorStyle.Render("  [VISUAL]"))
+	}
+	s.WriteString("\n\n")
+
+	// Hunk header
+	s.WriteString(th.InfoStyle.Render("  " + hunk.Header))
+	s.WriteString("\n")
+
+	// Render hunk lines with selection indicators.
+	maxLines := v.height - 12
+	if maxLines < 10 {
+		maxLines = 10
+	}
+
+	for i, line := range hunk.Lines {
+		if i >= maxLines {
+			remaining := len(hunk.Lines) - i
+			if remaining > 0 {
+				s.WriteString(th.Help.Render(fmt.Sprintf("    ... %d more lines", remaining)))
+				s.WriteString("\n")
+			}
+			break
+		}
+
+		isCursor := i == v.lineCursor
+		isSelected := v.lineSelected[i]
+		isSelectable := line.LineType == "+" || line.LineType == "-"
+
+		// Build prefix: cursor indicator + selection marker
+		cursor := " "
+		if isCursor {
+			cursor = ">"
+		}
+		sel := " "
+		if isSelected {
+			sel = "*"
+		} else if isSelectable {
+			sel = "."
+		}
+		prefix := cursor + sel + " "
+
+		content := line.Content
+		// Truncate long lines.
+		displayWidth := v.width - 8
+		if displayWidth < 20 {
+			displayWidth = 20
+		}
+		if len(content) > displayWidth {
+			content = content[:displayWidth-3] + "..."
+		}
+
+		switch line.LineType {
+		case "+":
+			if isSelected || isCursor {
+				s.WriteString(th.DashboardAccentStyle.Render(prefix + content))
+			} else {
+				s.WriteString(th.DashboardAccentStyle.Render("   " + content))
+			}
+		case "-":
+			if isSelected || isCursor {
+				s.WriteString(th.DashboardErrorStyle.Render(prefix + content))
+			} else {
+				s.WriteString(th.DashboardErrorStyle.Render("   " + content))
+			}
+		case " ":
+			s.WriteString(th.Help.Render("   " + content))
+		case "\\":
+			s.WriteString(th.Help.Render("   " + content))
+		}
+		s.WriteString("\n")
+	}
+
+	s.WriteString("\n")
+	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
+	s.WriteString("\n")
+
+	action := "stage"
+	if v.hunkIsStaged {
+		action = "unstage"
+	}
+	s.WriteString(th.Help.Render(fmt.Sprintf(" j/k: Move   x: Toggle line   v: Visual select   Space: %s selected   Esc: Back ", action)))
 
 	return s.String()
 }
@@ -1212,8 +1477,11 @@ func (v *CommitView) ShortHelp() string {
 	if v.editMode == ConfirmCommitMode {
 		return "Y/n: Confirm/Cancel commit"
 	}
+	if v.editMode == LineDiffMode {
+		return "j/k: Move  x: Toggle  v: Visual  Space: Apply  Esc: Back to hunk"
+	}
 	if v.editMode == HunkDiffMode {
-		return "Up/Down: Select hunk  Space: Stage/Unstage hunk  Esc: Back"
+		return "Up/Down: Select hunk  Space: Stage/Unstage hunk  l: Line mode  Esc: Back"
 	}
 	return "Space: Toggle  Enter: Hunk diff  a/u: Stage/Unstage all  Tab: Switch  c: Commit"
 }
@@ -1244,6 +1512,9 @@ func (v *CommitView) KeyBindings() []components.KeyBinding {
 		{Key: "↓/j", Description: "Navigate down"},
 		{Key: "Space", Description: "Stage/unstage selected file"},
 		{Key: "Enter", Description: "View file diff with hunk navigation"},
+		{Key: "l", Description: "Enter line-selection mode (in hunk view)"},
+		{Key: "x", Description: "Toggle line (in line mode)"},
+		{Key: "v", Description: "Visual range select (in line mode)"},
 		{Key: "a", Description: "Stage all files"},
 		{Key: "u", Description: "Unstage all files"},
 		{Key: "c", Description: "Write commit message (when files staged)"},

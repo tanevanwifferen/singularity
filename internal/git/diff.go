@@ -690,3 +690,98 @@ func UnstageHunk(repoPath, filePath string, hunk DiffHunk) error {
 	}
 	return nil
 }
+// buildPartialPatch constructs a patch containing only selected lines from a hunk.
+// For staging: unselected "+" lines are dropped, unselected "-" lines become context.
+// For unstaging (reverse=true): the same logic applies but the patch will be applied
+// with --reverse, so the caller should pass the staged hunk as-is and selectedLineIndices
+// referring to the lines the user wants to unstage.
+//
+// selectedLineIndices contains zero-based indices into hunk.Lines that the user selected.
+// Only "+" and "-" lines are meaningful selections; context lines are always included.
+func buildPartialPatch(filePath string, hunk DiffHunk, selectedLineIndices []int, reverse bool) string {
+	selected := make(map[int]bool, len(selectedLineIndices))
+	for _, idx := range selectedLineIndices {
+		selected[idx] = true
+	}
+
+	// Build the filtered lines and compute new header counts.
+	var patchLines []DiffLine
+	oldCount := 0
+	newCount := 0
+
+	for i, line := range hunk.Lines {
+		switch line.LineType {
+		case " ":
+			// Context lines are always included.
+			patchLines = append(patchLines, line)
+			oldCount++
+			newCount++
+		case "+":
+			if selected[i] {
+				// Keep as addition.
+				patchLines = append(patchLines, line)
+				newCount++
+			} else {
+				// Unselected addition: drop it entirely (it does not exist in old or new).
+				// Do NOT convert to context -- the line is not present on the old side.
+			}
+		case "-":
+			if selected[i] {
+				// Keep as deletion.
+				patchLines = append(patchLines, line)
+				oldCount++
+			} else {
+				// Unselected deletion: convert to context (keep line in both old and new).
+				ctx := DiffLine{
+					Content:  " " + line.Content[1:],
+					LineType: " ",
+				}
+				patchLines = append(patchLines, ctx)
+				oldCount++
+				newCount++
+			}
+		case "\\":
+			// "\ No newline at end of file" -- keep as-is.
+			patchLines = append(patchLines, line)
+		}
+	}
+
+	// Build the header.
+	header := fmt.Sprintf("@@ -%d,%d +%d,%d @@", hunk.OldStart, oldCount, hunk.NewStart, newCount)
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", filePath, filePath))
+	sb.WriteString(fmt.Sprintf("--- a/%s\n", filePath))
+	sb.WriteString(fmt.Sprintf("+++ b/%s\n", filePath))
+	sb.WriteString(header + "\n")
+	for _, line := range patchLines {
+		sb.WriteString(line.Content + "\n")
+	}
+	return sb.String()
+}
+
+// StageLines stages selected lines from a single hunk using git apply --cached.
+// selectedLineIndices are zero-based indices into hunk.Lines referring to "+" or "-" lines.
+func StageLines(repoPath, filePath string, hunk DiffHunk, selectedLineIndices []int) error {
+	patch := buildPartialPatch(filePath, hunk, selectedLineIndices, false)
+	cmd := exec.Command("git", "-C", repoPath, "apply", "--cached", "--unidiff-zero")
+	cmd.Stdin = strings.NewReader(patch)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to stage lines: %w: %s", err, string(output))
+	}
+	return nil
+}
+
+// UnstageLines unstages selected lines from a single staged hunk using git apply --cached --reverse.
+// selectedLineIndices are zero-based indices into hunk.Lines referring to "+" or "-" lines.
+func UnstageLines(repoPath, filePath string, hunk DiffHunk, selectedLineIndices []int) error {
+	patch := buildPartialPatch(filePath, hunk, selectedLineIndices, true)
+	cmd := exec.Command("git", "-C", repoPath, "apply", "--cached", "--reverse", "--unidiff-zero")
+	cmd.Stdin = strings.NewReader(patch)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to unstage lines: %w: %s", err, string(output))
+	}
+	return nil
+}
