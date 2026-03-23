@@ -53,6 +53,7 @@ type WorkflowRepo struct {
 	WorktreeCreated bool   `json:"worktree_created"`
 	Pushed          bool   `json:"pushed"`
 	MRURL           string `json:"mr_url,omitempty"`
+	MRTitle         string `json:"mr_title,omitempty"`
 	Error           string `json:"error,omitempty"`
 }
 
@@ -357,13 +358,16 @@ func (fw *FeatureWorkflow) CreateAllMRs() error {
 		if base == "" {
 			base = "main"
 		}
-		url, err := git.CreateMergeRequestCLI(wr.WorktreePath, provider, base)
+		result, err := git.CreateMergeRequestCLI(wr.WorktreePath, provider, base)
 
 		fw.mu.Lock()
 		if err != nil {
 			wr.Error = fmt.Sprintf("create MR: %v", err)
 		} else {
-			wr.MRURL = url
+			wr.MRURL = result.URL
+			if result.Content != nil {
+				wr.MRTitle = result.Content.Title
+			}
 		}
 		fw.mu.Unlock()
 	}

@@ -400,7 +400,7 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if err != nil {
 					v.mrResult = fmt.Sprintf("MR creation failed: %v", err)
 				} else {
-					v.mrResult = fmt.Sprintf("MR created: %s", result)
+					v.mrResult = fmt.Sprintf("MR created: %s", result.URL)
 				}
 				v.showMRConfirm = false
 			case "n", "esc":

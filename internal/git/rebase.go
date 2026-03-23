@@ -8,6 +8,109 @@ import (
 	"strings"
 )
 
+// RebaseOntoMain fetches origin and starts a rebase of the current branch onto origin/main
+// (or origin/master). Returns the main branch name, any conflict files, the command output,
+// and an error. If there are conflicts, conflictFiles is non-empty and the rebase is left
+// in progress for an agent to continue.
+func RebaseOntoMain(repoPath string) (mainBranch string, conflictFiles []string, output string, err error) {
+	fetchCmd := exec.Command("git", "-C", repoPath, "fetch", "origin")
+	fetchOut, fetchErr := fetchCmd.CombinedOutput()
+	if fetchErr != nil {
+		return "", nil, string(fetchOut), fmt.Errorf("fetch failed: %w\n%s", fetchErr, fetchOut)
+	}
+
+	mainBranch = "main"
+	checkCmd := exec.Command("git", "-C", repoPath, "rev-parse", "--verify", "origin/main")
+	if checkErr := checkCmd.Run(); checkErr != nil {
+		mainBranch = "master"
+	}
+
+	rebaseCmd := exec.Command("git", "-C", repoPath, "rebase", "origin/"+mainBranch)
+	rebaseOut, rebaseErr := rebaseCmd.CombinedOutput()
+	output = string(rebaseOut)
+	if rebaseErr == nil {
+		return mainBranch, nil, output, nil
+	}
+
+	conflictCmd := exec.Command("git", "-C", repoPath, "diff", "--name-only", "--diff-filter=U")
+	conflictOut, conflictCmdErr := conflictCmd.Output()
+	if conflictCmdErr != nil {
+		return mainBranch, nil, output, fmt.Errorf("rebase failed and could not list conflicts: %w", rebaseErr)
+	}
+
+	for _, line := range strings.Split(strings.TrimSpace(string(conflictOut)), "\n") {
+		if line != "" {
+			conflictFiles = append(conflictFiles, line)
+		}
+	}
+
+	return mainBranch, conflictFiles, output, fmt.Errorf("rebase conflicts: %w", rebaseErr)
+}
+
+// GetRebaseContext gathers contextual information to help an AI agent understand the rebase
+// situation. Returns a formatted string with branch commits, what changed on main, the diff
+// of main changes affecting conflict files, and the current conflict file contents.
+func GetRebaseContext(repoPath, mainBranch string, conflictFiles []string) (string, error) {
+	branchCmd := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+	branchOut, err := branchCmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get branch name: %w", err)
+	}
+	branch := strings.TrimSpace(string(branchOut))
+
+	logCmd := exec.Command("git", "-C", repoPath, "log", "--format=%H %s%n%b", "origin/"+mainBranch+"..HEAD")
+	logOut, err := logCmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get branch log: %w", err)
+	}
+
+	mergeBaseCmd := exec.Command("git", "-C", repoPath, "merge-base", "HEAD", "origin/"+mainBranch)
+	mergeBaseOut, err := mergeBaseCmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get merge base: %w", err)
+	}
+	mergeBase := strings.TrimSpace(string(mergeBaseOut))
+
+	mainLogCmd := exec.Command("git", "-C", repoPath, "log", "--oneline", mergeBase+"..origin/"+mainBranch)
+	mainLogOut, err := mainLogCmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get main log: %w", err)
+	}
+
+	diffArgs := []string{"-C", repoPath, "diff", mergeBase + "..origin/" + mainBranch, "--"}
+	diffArgs = append(diffArgs, conflictFiles...)
+	mainDiffCmd := exec.Command("git", diffArgs...)
+	mainDiffOut, err := mainDiffCmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get main diff: %w", err)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("=== Branch: %s ===\n", branch))
+	sb.WriteString("\n--- Commits on this branch (since diverging from main) ---\n")
+	sb.WriteString(string(logOut))
+
+	sb.WriteString("\n--- What changed on main since this branch diverged ---\n")
+	sb.WriteString(string(mainLogOut))
+
+	sb.WriteString("\n--- Diff of main changes affecting conflict files ---\n")
+	sb.WriteString(string(mainDiffOut))
+
+	sb.WriteString("\n--- Conflict file contents (with markers) ---\n")
+	for _, f := range conflictFiles {
+		fullPath := repoPath + "/" + f
+		contents, readErr := os.ReadFile(fullPath)
+		if readErr != nil {
+			sb.WriteString(fmt.Sprintf("\n[Could not read %s: %v]\n", f, readErr))
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("\n### %s ###\n", f))
+		sb.WriteString(string(contents))
+	}
+
+	return sb.String(), nil
+}
+
 // RebaseOperation represents a type of rebase operation
 type RebaseOperation int
 

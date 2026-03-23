@@ -35,6 +35,8 @@ type WorktreeView struct {
 	showNewBranchInput bool
 	showAgentConfirm  bool
 	agentWorktree     *git.Worktree
+	showRebaseConfirm bool
+	rebaseWorktree    *git.Worktree
 
 	// Create worktree input state
 	newWorktreePath  string
@@ -117,6 +119,9 @@ func (v *WorktreeView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		// Handle modal states first
+		if v.showRebaseConfirm {
+			return v, v.handleRebaseConfirm(msg)
+		}
 		if v.showAgentConfirm {
 			return v, v.handleAgentConfirm(msg)
 		}
@@ -185,6 +190,11 @@ func (v *WorktreeView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if item, idx := v.filter.SelectedItem(); idx >= 0 && item.Branch != "" {
 				v.agentWorktree = &item
 				v.showAgentConfirm = true
+			}
+		case "R":
+			if item, idx := v.filter.SelectedItem(); idx >= 0 && item.Branch != "" {
+				v.rebaseWorktree = &item
+				v.showRebaseConfirm = true
 			}
 		case "m":
 			// Open PR/MR creation view with this branch pre-selected
@@ -305,6 +315,60 @@ func (v *WorktreeView) handleAgentConfirm(msg tea.KeyMsg) tea.Cmd {
 	case "n", "esc":
 		v.showAgentConfirm = false
 		v.agentWorktree = nil
+	}
+	return nil
+}
+
+// handleRebaseConfirm handles key events during rebase-to-main confirmation.
+func (v *WorktreeView) handleRebaseConfirm(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "y", "enter":
+		wt := v.rebaseWorktree
+		eng := v.engine
+		v.showRebaseConfirm = false
+		v.rebaseWorktree = nil
+		if wt != nil && eng != nil {
+			path := wt.Path
+			branch := wt.Branch
+			return func() tea.Msg {
+				mainBranch, conflictFiles, _, rebaseErr := git.RebaseOntoMain(path)
+				if rebaseErr == nil {
+					pushCmd := exec.Command("git", "-C", path, "push", "--force-with-lease", "origin", branch)
+					pushCmd.Run()
+					return RefreshDoneMsg{}
+				}
+				if len(conflictFiles) == 0 {
+					return AgentCreatedMsg{Err: rebaseErr}
+				}
+				rebaseCtx, ctxErr := git.GetRebaseContext(path, mainBranch, conflictFiles)
+				if ctxErr != nil {
+					rebaseCtx = fmt.Sprintf("(could not gather rebase context: %v)", ctxErr)
+				}
+				task := fmt.Sprintf(
+					"You are in a git worktree at path '%s' on branch '%s'.\n\n"+
+						"A `git rebase origin/%s` has already been started and there are merge conflicts.\n\n"+
+						"<REBASE CONTEXT>\n%s\n</REBASE CONTEXT>\n\n"+
+						"Your job:\n"+
+						"1. Read the conflict context above carefully to understand:\n"+
+						"   - What this branch is trying to accomplish (from branch commits)\n"+
+						"   - What changed on main that caused conflicts (from main's changes)\n"+
+						"2. For each conflicted file, resolve the conflict markers intelligently:\n"+
+						"   - Preserve the branch's intent while incorporating main's changes\n"+
+						"   - Don't just blindly pick one side — think about what both sides are doing\n"+
+						"3. After resolving each file, run: git add <file>\n"+
+						"4. Once ALL conflicts are resolved, run: git rebase --continue\n"+
+						"5. If more conflicts arise, repeat the process\n"+
+						"6. When the rebase is complete (no more conflicts), run: git push --force-with-lease origin %s\n\n"+
+						"Important: Work in the worktree directory '%s'. Use Read/Edit tools to resolve conflicts by rewriting the conflict regions. Do NOT run git rebase --abort.",
+					path, branch, mainBranch, rebaseCtx, branch, path,
+				)
+				id, err := eng.StartAgent(path, task, engine.AgentOptions{SmartRoute: true})
+				return AgentCreatedMsg{ID: id, Err: err}
+			}
+		}
+	case "n", "esc":
+		v.showRebaseConfirm = false
+		v.rebaseWorktree = nil
 	}
 	return nil
 }
@@ -543,9 +607,23 @@ func (v *WorktreeView) View() string {
 		s.WriteString(v.filter.View())
 	} else {
 		// Show filter hint first line
-		s.WriteString(th.Help.Render(" Press / to search • ↑/k: Select • Enter: Navigate • n: Create • d: Remove • a: Merge (agent) • m: Create MR • p: Prune "))
+		s.WriteString(th.Help.Render(" Press / to search • ↑/k: Select • Enter: Navigate • n: Create • d: Remove • a: Merge (agent) • R: Rebase to main (agent) • m: Create MR • p: Prune "))
 		s.WriteString("\n\n")
 		s.WriteString(v.filter.View())
+	}
+
+	// Rebase to main confirmation modal
+	if v.showRebaseConfirm && v.rebaseWorktree != nil {
+		s.WriteString("\n\n")
+		s.WriteString(th.DashboardAccentStyle.Render(" ┌─────────────────────────────────────────────────┐"))
+		s.WriteString("\n")
+		s.WriteString(th.DashboardAccentStyle.Render(fmt.Sprintf(" │ Rebase '%s' to main using AI agent?  │", fitStr(v.rebaseWorktree.Branch, 24))))
+		s.WriteString("\n")
+		s.WriteString(th.DashboardAccentStyle.Render(" │ Agent will resolve conflicts intelligently.     │"))
+		s.WriteString("\n")
+		s.WriteString(th.DashboardAccentStyle.Render(" │                        (y/n)                   │"))
+		s.WriteString("\n")
+		s.WriteString(th.DashboardAccentStyle.Render(" └─────────────────────────────────────────────────┘"))
 	}
 
 	// Agent merge confirmation modal
@@ -618,14 +696,14 @@ func (v *WorktreeView) View() string {
 	s.WriteString("\n")
 	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
 	s.WriteString("\n")
-	s.WriteString(th.Help.Render(" r: Refresh   /: Search   ↑↓: Navigate   Enter: Navigate   n: Create   d: Remove   a: Merge (agent)   m: Create MR   p: Prune "))
+	s.WriteString(th.Help.Render(" r: Refresh   /: Search   ↑↓: Navigate   Enter: Navigate   n: Create   d: Remove   a: Merge (agent)   R: Rebase to main (agent)   m: Create MR   p: Prune "))
 
 	return s.String()
 }
 
 // ShortHelp returns a short help string.
 func (v *WorktreeView) ShortHelp() string {
-	return "/: Search  ↑↓: Navigate  Enter: Navigate  n: Create  d: Remove  a: Merge (agent)  m: Create MR  p: Prune"
+	return "/: Search  ↑↓: Navigate  Enter: Navigate  n: Create  d: Remove  a: Merge (agent)  R: Rebase to main (agent)  m: Create MR  p: Prune"
 }
 
 // fitStr pads or truncates s to exactly n runes.
@@ -673,6 +751,7 @@ func (v *WorktreeView) KeyBindings() []components.KeyBinding {
 		{Key: "L", Description: "Lock selected worktree"},
 		{Key: "u", Description: "Unlock selected worktree"},
 		{Key: "a", Description: "Start agent to merge branch into main"},
+		{Key: "R", Description: "Rebase branch to main using AI agent"},
 		{Key: "m", Description: "Create MR/PR for this worktree branch"},
 		{Key: "p", Description: "Prune stale worktrees"},
 		{Key: "Esc", Description: "Clear filter / Cancel"},

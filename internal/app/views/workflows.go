@@ -382,7 +382,11 @@ func (v *WorkflowsView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var lines []string
 			for _, wr := range wf.Repos {
 				if wr.MRURL != "" {
-					lines = append(lines, fmt.Sprintf("  %s: %s", wr.RepoName, wr.MRURL))
+					title := wr.MRTitle
+					if title == "" {
+						title = "Merge feature branch"
+					}
+					lines = append(lines, fmt.Sprintf("  %s: %s — %s", wr.RepoName, title, wr.MRURL))
 				}
 			}
 			v.mrResults = fmt.Sprintf(" Created %d MRs\n   Next: press 'D' to cleanup worktrees when merged", len(lines))
@@ -534,14 +538,9 @@ func (v *WorkflowsView) handlePushConfirm(msg tea.KeyMsg) tea.Cmd {
 func (v *WorkflowsView) handleMRSummary(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "y":
-		if len(v.mrSummaryLines) > 0 {
-			wf := v.currentWorkflow()
-			branchName := ""
-			if wf != nil {
-				branchName = wf.BranchName
-			}
-			header := fmt.Sprintf("MRs for %s:", branchName)
-			text := header + "\n" + strings.Join(v.mrSummaryLines, "\n")
+		wf := v.currentWorkflow()
+		if wf != nil {
+			text := v.buildMRSummaryText(wf)
 			if err := git.CopyToClipboard(text); err == nil {
 				v.mrResults = "Copied MR summary to clipboard"
 			} else {
@@ -553,6 +552,26 @@ func (v *WorkflowsView) handleMRSummary(msg tea.KeyMsg) tea.Cmd {
 		v.mrSummaryLines = nil
 	}
 	return nil
+}
+
+// buildMRSummaryText builds a colleague-friendly summary of all MRs in a workflow.
+func (v *WorkflowsView) buildMRSummaryText(wf *project.FeatureWorkflow) string {
+	var b strings.Builder
+
+	b.WriteString(fmt.Sprintf("MRs for `%s`:\n", wf.BranchName))
+
+	for _, wr := range wf.Repos {
+		if wr.MRURL == "" {
+			continue
+		}
+		title := wr.MRTitle
+		if title == "" {
+			title = "Merge feature branch"
+		}
+		b.WriteString(fmt.Sprintf("\n%s — %s\n%s\n", wr.RepoName, title, wr.MRURL))
+	}
+
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func (v *WorkflowsView) handleBatchMRConfirm(msg tea.KeyMsg) tea.Cmd {
@@ -982,8 +1001,15 @@ func (v *WorkflowsView) renderRepoDetail(wf *project.FeatureWorkflow) string {
 	th := theme.GetTheme()
 	var s strings.Builder
 
+	repoNames := make([]string, 0, len(wf.Repos))
+	for name := range wf.Repos {
+		repoNames = append(repoNames, name)
+	}
+	sort.Strings(repoNames)
+
 	s.WriteString("\n")
-	for _, wr := range wf.Repos {
+	for _, name := range repoNames {
+		wr := wf.Repos[name]
 		var parts []string
 
 		// Status icon

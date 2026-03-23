@@ -32,13 +32,21 @@ func DetectRemoteProvider(repoPath string) RemoteProvider {
 	return ProviderUnknown
 }
 
+// MRResult holds the URL and content of a created merge request.
+type MRResult struct {
+	URL     string
+	Content *MRContent
+}
+
 // CreateMergeRequestCLI creates a merge request using the appropriate CLI tool (gh or glab).
 // It generates an intelligent title and description via Claude before calling the CLI.
-func CreateMergeRequestCLI(repoPath string, provider RemoteProvider, baseBranch string) (string, error) {
+func CreateMergeRequestCLI(repoPath string, provider RemoteProvider, baseBranch string) (*MRResult, error) {
 	content, err := GenerateMRContent(repoPath, baseBranch)
 	if err != nil || content == nil {
 		content = &MRContent{Title: "Merge feature branch", Description: ""}
 	}
+
+	result := &MRResult{Content: content}
 
 	switch provider {
 	case ProviderGitHub:
@@ -49,9 +57,10 @@ func CreateMergeRequestCLI(repoPath string, provider RemoteProvider, baseBranch 
 		cmd.Dir = repoPath
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			return "", fmt.Errorf("gh pr create failed: %s", strings.TrimSpace(string(output)))
+			return nil, fmt.Errorf("gh pr create failed: %s", strings.TrimSpace(string(output)))
 		}
-		return strings.TrimSpace(string(output)), nil
+		result.URL = strings.TrimSpace(string(output))
+		return result, nil
 	case ProviderGitLab:
 		cmd := exec.Command("glab", "mr", "create", "--yes",
 			"--title", content.Title,
@@ -60,10 +69,11 @@ func CreateMergeRequestCLI(repoPath string, provider RemoteProvider, baseBranch 
 		cmd.Dir = repoPath
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			return "", fmt.Errorf("glab mr create failed: %s", strings.TrimSpace(string(output)))
+			return nil, fmt.Errorf("glab mr create failed: %s", strings.TrimSpace(string(output)))
 		}
-		return strings.TrimSpace(string(output)), nil
+		result.URL = strings.TrimSpace(string(output))
+		return result, nil
 	default:
-		return "", fmt.Errorf("unknown provider, cannot create MR")
+		return nil, fmt.Errorf("unknown provider, cannot create MR")
 	}
 }
