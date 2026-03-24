@@ -31,5 +31,8 @@ Thumbs.db
 .dolt/
 *.db
 
+# Beads issue tracker
+.beads/
+
 # bv (beads viewer) local config and caches
 .bv/
