@@ -273,6 +273,32 @@ func (v *WorkflowDiffView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				v.diffScrollOffset = maxScroll
 			}
+		case "pgup", "ctrl+u":
+			if v.showDiff && v.diffNavMode {
+				pageSize := v.height - 20
+				if pageSize < 1 {
+					pageSize = 1
+				}
+				v.diffScrollOffset -= pageSize
+				if v.diffScrollOffset < 0 {
+					v.diffScrollOffset = 0
+				}
+			}
+		case "pgdown", "ctrl+d":
+			if v.showDiff && v.diffNavMode {
+				pageSize := v.height - 20
+				if pageSize < 1 {
+					pageSize = 1
+				}
+				maxScroll := len(v.parsedDiffLines) - pageSize
+				if maxScroll < 0 {
+					maxScroll = 0
+				}
+				v.diffScrollOffset += pageSize
+				if v.diffScrollOffset > maxScroll {
+					v.diffScrollOffset = maxScroll
+				}
+			}
 		case "enter":
 			if v.selectedIdx < len(v.items) && !v.items[v.selectedIdx].IsRepoHeader {
 				if v.showDiff {
