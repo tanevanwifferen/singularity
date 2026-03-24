@@ -1,0 +1,35 @@
+stages:
+  - test
+  - release
+  - publish
+
+variables:
+  GOPATH: ${CI_PROJECT_DIR}/.go
+
+test:
+  stage: test
+  image: golang:1.24
+  cache:
+    key: go-modules
+    paths:
+      - .go/pkg/mod/
+  script:
+    - go fmt ./... && git diff --exit-code
+    - go vet ./...
+    - go test -race ./...
+
+release:
+  stage: release
+  image: registry.gitlab.com/go-semantic-release/semantic-release:latest
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - semantic-release
+
+publish:
+  stage: publish
+  image: goreleaser/goreleaser:latest
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/
+  script:
+    - goreleaser release --clean
