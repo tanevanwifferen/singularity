@@ -497,7 +497,7 @@ func (v *WorkflowsView) startWorkflowFromJira(issue *jira.Issue) tea.Cmd {
 	}
 	branchName := issueToBranchName(issue)
 	baseDir := v.workflowBaseDir
-	agentPrompt := buildJiraAgentPrompt(issue)
+	agentPrompt := buildJiraAgentPrompt(issue, "")
 
 	wf := project.NewFeatureWorkflow(v.proj, branchName, baseDir)
 	v.workflows = append(v.workflows, wf)
@@ -544,7 +544,7 @@ func (v *WorkflowsView) startWorkflowFromJiraOnExisting(issue *jira.Issue, wf *p
 	if issue == nil || wf == nil {
 		return nil
 	}
-	agentPrompt := buildJiraAgentPrompt(issue)
+	agentPrompt := buildJiraAgentPrompt(issue, "")
 	eng := v.engine
 	var ctxFiles []string
 	if v.proj != nil {

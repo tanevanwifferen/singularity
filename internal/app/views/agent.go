@@ -1044,7 +1044,7 @@ func (v *AgentView) startAgentFromJira(issue *jira.Issue) tea.Cmd {
 	eng := v.engine
 	repoPath := v.repoPath
 	ctxFiles := v.contextFiles
-	agentPrompt := buildJiraAgentPrompt(issue)
+	agentPrompt := buildJiraAgentPrompt(issue, "")
 
 	return func() tea.Msg {
 		id, err := eng.StartAgent(repoPath, agentPrompt, engine.AgentOptions{
