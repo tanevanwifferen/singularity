@@ -340,6 +340,12 @@ func (m *Model) initProjectRouter() {
 	workflowsView.SetEngine(m.engine)
 	router.Register("Workflows", workflowsView, "f2")
 
+	// Workflow diff view (drill-down from Workflows, not a top-level tab)
+	workflowDiffView := views.NewWorkflowDiffView()
+	router.Register("WorkflowDiff", workflowDiffView)
+	router.submenuViews["WorkflowDiff"] = true // hide from tab bar
+	workflowsView.SetWorkflowDiffView(workflowDiffView)
+
 	// Use the first repo's path as the default for single-repo views.
 	// Fall back to the project directory itself.
 	defaultRepoPath := m.projectPath

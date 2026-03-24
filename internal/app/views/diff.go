@@ -315,7 +315,7 @@ func (v *DiffView) loadFileDiff() {
 			return
 		}
 		v.currentDiff = diff
-		v.parsedDiffLines = v.parseDiff(diff)
+		v.parsedDiffLines = ParseDiffLines(diff)
 	} else {
 		// Workdir mode - check if file is staged or unstaged
 		var diff string
@@ -345,12 +345,13 @@ func (v *DiffView) loadFileDiff() {
 			return
 		}
 		v.currentDiff = diff
-		v.parsedDiffLines = v.parseDiff(diff)
+		v.parsedDiffLines = ParseDiffLines(diff)
 	}
 }
 
-// parseDiff parses raw diff output into structured DiffLine slices with line numbers
-func (v *DiffView) parseDiff(rawDiff string) []DiffLine {
+// ParseDiffLines parses raw diff output into structured DiffLine slices with line numbers.
+// This is a package-level function so it can be reused by other diff views.
+func ParseDiffLines(rawDiff string) []DiffLine {
 	var lines []DiffLine
 	var oldLineNum, newLineNum int
 
