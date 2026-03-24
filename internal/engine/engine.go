@@ -18,6 +18,7 @@ type AgentOptions struct {
 	ContextFiles []string      // Files to read and inject into the prompt on startup
 	SmartRoute   bool          // Use Haiku to classify prompt and pick model (opus for planning, sonnet for implementation)
 	UseWorktree  bool          // Create a git worktree for isolation; merge back on completion
+	Summary      string        // One-line summary for display in agent list (auto-generated if empty)
 }
 
 // Engine manages a pool of Claude Code agent subprocesses
@@ -89,6 +90,9 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 				agent.mu.Lock()
 				agent.model = route.Model
 				agent.RouteResult = route
+				if route.Summary != "" {
+					agent.Summary = route.Summary
+				}
 				agent.mu.Unlock()
 			}
 			if startErr := agent.start(); startErr != nil {
