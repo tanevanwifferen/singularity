@@ -293,6 +293,17 @@ func GetFileDiff(repoPath, branchA, branchB, filePath string) (string, error) {
 	return string(output), nil
 }
 
+// GetMergeBase returns the best common ancestor commit (merge base) of two refs.
+// Returns the commit SHA, or an error if the merge base cannot be determined.
+func GetMergeBase(repoPath, ref1, ref2 string) (string, error) {
+	cmd := exec.Command("git", "-C", repoPath, "merge-base", ref1, ref2)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get merge base of %s and %s: %w", ref1, ref2, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // ResolveRef tries to find an existing git ref for the given name.
 // First tries the exact name, then "origin/<name>".
 // Returns the first ref that resolves, or the original name if none found.

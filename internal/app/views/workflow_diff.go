@@ -127,6 +127,12 @@ func (v *WorkflowDiffView) Init() tea.Cmd {
 				// Resolve to an existing ref (handles origin/main fallback)
 				base = git.ResolveRef(wr.WorktreePath, base)
 
+				// Use merge base so the diff matches what an MR would show
+				// (changes introduced by this branch, not diff between branch tips)
+				if mb, err := git.GetMergeBase(wr.WorktreePath, base, "HEAD"); err == nil {
+					base = mb
+				}
+
 				diff, err := git.GetBranchDiff(wr.WorktreePath, base, "HEAD")
 
 				// Deep check: for each changed file, test whether all its hunks
