@@ -1,9 +1,46 @@
 stages:
+  - bump
   - test
   - release
 
 variables:
   GOPATH: ${CI_PROJECT_DIR}/.go
+
+bump:
+  stage: bump
+  image: alpine/git:latest
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "api"
+  variables:
+    GIT_STRATEGY: clone
+    GIT_DEPTH: 0
+    BUMP_TYPE: "patch"
+  script:
+    - git config user.email "ci@gitlab.com"
+    - git config user.name "GitLab CI"
+    - git remote set-url origin "https://oauth2:${RELEASE_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+    - |
+      LATEST_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+      LATEST_TAG=${LATEST_TAG:-v0.0.0}
+      echo "Current version: $LATEST_TAG"
+      MAJOR=$(echo ${LATEST_TAG#v} | cut -d. -f1)
+      MINOR=$(echo ${LATEST_TAG#v} | cut -d. -f2)
+      PATCH=$(echo ${LATEST_TAG#v} | cut -d. -f3)
+      case "$BUMP_TYPE" in
+        major) MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0 ;;
+        minor) MINOR=$((MINOR+1)); PATCH=0 ;;
+        *)     PATCH=$((PATCH+1)) ;;
+      esac
+      NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+      echo "New version: $NEW_VERSION"
+      sed -i "s/^VERSION=.*/VERSION=${MAJOR}.${MINOR}.${PATCH}/" Makefile
+      git add Makefile
+      git diff --cached --quiet && echo "No changes to commit" && exit 0
+      git commit -m "chore: release ${NEW_VERSION} [skip ci]"
+      git push origin HEAD:${CI_COMMIT_BRANCH}
+      git tag "$NEW_VERSION"
+      git push origin "$NEW_VERSION"
 
 test:
   stage: test
