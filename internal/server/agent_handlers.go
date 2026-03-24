@@ -181,6 +181,7 @@ func (s *Server) handleAgentList(w http.ResponseWriter, r *http.Request) {
 		State     string     `json:"state"`
 		WorkDir   string     `json:"work_dir"`
 		Task      string     `json:"task"`
+		Summary   string     `json:"summary"`
 		CreatedAt time.Time  `json:"created_at"`
 		EndedAt   *time.Time `json:"ended_at,omitempty"`
 	}
@@ -192,6 +193,7 @@ func (s *Server) handleAgentList(w http.ResponseWriter, r *http.Request) {
 			State:     a.State.String(),
 			WorkDir:   a.WorkDir,
 			Task:      a.Task,
+			Summary:   a.Summary,
 			CreatedAt: a.CreatedAt,
 			EndedAt:   a.EndedAt,
 		}

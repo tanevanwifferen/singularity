@@ -51,6 +51,7 @@ type Agent struct {
 	ID        string     `json:"id"`
 	WorkDir   string     `json:"work_dir"`
 	Task      string     `json:"task"`
+	Summary   string     `json:"summary"` // One-line summary for display in agent list
 	State     AgentState `json:"state"`
 	CreatedAt time.Time  `json:"created_at"`
 	StartedAt *time.Time `json:"started_at,omitempty"`
@@ -110,10 +111,15 @@ type OutputEntry struct {
 
 // newAgent creates a new agent instance
 func newAgent(id, workDir, task string, opts AgentOptions) *Agent {
+	summary := opts.Summary
+	if summary == "" {
+		summary = extractSummary(task)
+	}
 	return &Agent{
 		ID:           id,
 		WorkDir:      workDir,
 		Task:         task,
+		Summary:      summary,
 		State:        AgentIdle,
 		CreatedAt:    time.Now(),
 		output:       make([]OutputEntry, 0),
@@ -124,6 +130,22 @@ func newAgent(id, workDir, task string, opts AgentOptions) *Agent {
 		contextFiles: opts.ContextFiles,
 		useWorktree:  opts.UseWorktree,
 	}
+}
+
+// extractSummary derives a one-line summary from the task prompt.
+// Uses the first non-empty line, trimmed to a reasonable length.
+func extractSummary(task string) string {
+	for _, line := range strings.SplitN(task, "\n", 10) {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if len(line) > 80 {
+			return line[:77] + "..."
+		}
+		return line
+	}
+	return task
 }
 
 // start launches the Claude Code subprocess
@@ -682,6 +704,7 @@ func (a *Agent) Snapshot() AgentSnapshot {
 		ID:           a.ID,
 		WorkDir:      a.WorkDir,
 		Task:         a.Task,
+		Summary:      a.Summary,
 		State:        a.State,
 		CreatedAt:    a.CreatedAt,
 		StartedAt:    a.StartedAt,
@@ -699,6 +722,7 @@ type AgentSnapshot struct {
 	ID           string
 	WorkDir      string
 	Task         string
+	Summary      string
 	State        AgentState
 	CreatedAt    time.Time
 	StartedAt    *time.Time

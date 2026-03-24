@@ -21,6 +21,7 @@ type AgentInfo struct {
 	ID          string
 	State       engine.AgentState
 	Task        string
+	Summary     string
 	WorkDir     string
 	CreatedAt   time.Time
 	StartedAt   *time.Time
@@ -184,6 +185,7 @@ func (v *AgentView) loadAgents() {
 			ID:          snap.ID,
 			State:       snap.State,
 			Task:        snap.Task,
+			Summary:     snap.Summary,
 			WorkDir:     snap.WorkDir,
 			CreatedAt:   snap.CreatedAt,
 			StartedAt:   snap.StartedAt,
@@ -709,15 +711,18 @@ func (v *AgentView) renderAgentItem(agent AgentInfo, index int, selected bool) s
 	}
 	line.WriteString(th.BranchStyle.Render(shortID))
 
-	task := agent.Task
+	displayText := agent.Summary
+	if displayText == "" {
+		displayText = agent.Task
+	}
 	maxTask := v.width - 40 // dynamic based on terminal width
 	if maxTask < 15 {
 		maxTask = 15
 	}
-	if len(task) > maxTask {
-		task = task[:maxTask-3] + "..."
+	if len(displayText) > maxTask {
+		displayText = displayText[:maxTask-3] + "..."
 	}
-	line.WriteString(fmt.Sprintf(" %s", th.StatsStyle.Render(task)))
+	line.WriteString(fmt.Sprintf(" %s", th.StatsStyle.Render(displayText)))
 
 	// Time info
 	if agent.State == engine.AgentRunning || agent.State == engine.AgentStarting {

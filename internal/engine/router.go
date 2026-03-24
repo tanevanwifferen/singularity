@@ -23,6 +23,7 @@ type RouteResult struct {
 	Category PromptCategory `json:"category"`
 	Model    string         `json:"model"`
 	Reason   string         `json:"reason"`
+	Summary  string         `json:"summary"` // One-line summary of the task
 }
 
 const classifierPrompt = `Classify the following user prompt into exactly one category.
@@ -32,7 +33,7 @@ Categories:
 - "implementation": The user wants concrete code changes, file edits, bug fixes, feature implementation, refactoring, or any hands-on coding work. Examples: "add a function that does X", "fix the bug in Y", "refactor Z to use W", "write tests for X", "implement feature Y".
 
 Respond with ONLY a JSON object, no other text:
-{"category": "planning" or "implementation", "reason": "one sentence why"}
+{"category": "planning" or "implementation", "reason": "one sentence why", "summary": "short one-line summary of what the task asks for (max 60 chars)"}
 
 User prompt:
 %s`
@@ -76,13 +77,15 @@ func parseClassification(response string) (*RouteResult, error) {
 	var parsed struct {
 		Category string `json:"category"`
 		Reason   string `json:"reason"`
+		Summary  string `json:"summary"`
 	}
 	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
 		return nil, fmt.Errorf("failed to parse classifier response: %w", err)
 	}
 
 	result := &RouteResult{
-		Reason: parsed.Reason,
+		Reason:  parsed.Reason,
+		Summary: parsed.Summary,
 	}
 
 	switch strings.ToLower(parsed.Category) {
