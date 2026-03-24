@@ -711,9 +711,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.projectMode = true
 			m.loadProject()
 		} else {
-			// Simple view switch
+			// Simple view switch — switch and run the new view's Init
 			if m.router != nil {
-				m.router.SwitchTo(msg.ViewName)
+				if err := m.router.SwitchTo(msg.ViewName); err == nil {
+					return m, m.router.ActiveView().Init()
+				}
 			}
 		}
 		return m, nil
