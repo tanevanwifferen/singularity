@@ -180,19 +180,11 @@ func (v *BranchComparisonView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (v *BranchComparisonView) updateCompareFromSelection() {
 	if v.selectedIdx < len(v.branches) {
 		branch := v.branches[v.selectedIdx]
-		// Don't compare current branch with itself
+		// Only update comparison when a non-current branch is selected;
+		// keep the existing compareBranch when cursor is on the current branch.
 		if branch.Name != v.repo.CurrentBranch {
 			v.compareBranch = &branch
 			v.loadComparison()
-		} else if v.compareBranch != nil {
-			// Reset to previous compare branch or find another
-			for i, b := range v.branches {
-				if b.Name != v.repo.CurrentBranch {
-					v.compareBranch = &b
-					v.selectedIdx = i
-					break
-				}
-			}
 		}
 	}
 }
