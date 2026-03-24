@@ -55,6 +55,13 @@ type WorkflowRepo struct {
 	MRURL           string `json:"mr_url,omitempty"`
 	MRTitle         string `json:"mr_title,omitempty"`
 	Error           string `json:"error,omitempty"`
+
+	// Runtime branch status (not persisted)
+	AheadDefault  int  `json:"-"`
+	BehindDefault int  `json:"-"`
+	AheadRemote   int  `json:"-"`
+	BehindRemote  int  `json:"-"`
+	HasRemote     bool `json:"-"`
 }
 
 // FeatureWorkflow orchestrates a cross-repo feature branch lifecycle
@@ -427,6 +434,55 @@ func (fw *FeatureWorkflow) Status() *WorkflowStatus {
 	}
 
 	return s
+}
+
+// RefreshBranchStatuses updates the runtime ahead/behind counts for all repos concurrently.
+// It compares the feature branch against the default branch and the remote tracking branch.
+func (fw *FeatureWorkflow) RefreshBranchStatuses() {
+	fw.mu.RLock()
+	branchName := fw.BranchName
+	repos := make([]*WorkflowRepo, 0, len(fw.Repos))
+	for _, wr := range fw.Repos {
+		repos = append(repos, wr)
+	}
+	fw.mu.RUnlock()
+
+	var wg sync.WaitGroup
+	for _, wr := range repos {
+		wg.Add(1)
+		go func(wr *WorkflowRepo) {
+			defer wg.Done()
+
+			repoPath := wr.OriginalPath
+
+			defaultBranch := wr.DefaultBranch
+			if defaultBranch == "" {
+				defaultBranch = "main"
+			}
+
+			// Ahead/behind vs default branch
+			aheadDef, behindDef, err := git.CompareBranchesSimple(repoPath, defaultBranch, branchName)
+
+			// Ahead/behind vs remote tracking branch (origin/<branch>)
+			remoteBranch := "origin/" + branchName
+			aheadRem, behindRem, remErr := git.CompareBranchesSimple(repoPath, remoteBranch, branchName)
+
+			fw.mu.Lock()
+			if err == nil {
+				wr.AheadDefault = aheadDef
+				wr.BehindDefault = behindDef
+			}
+			if remErr == nil {
+				wr.AheadRemote = aheadRem
+				wr.BehindRemote = behindRem
+				wr.HasRemote = true
+			} else {
+				wr.HasRemote = false
+			}
+			fw.mu.Unlock()
+		}(wr)
+	}
+	wg.Wait()
 }
 
 // GetRepo returns the WorkflowRepo for a given repo name, or nil

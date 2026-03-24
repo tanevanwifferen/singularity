@@ -28,6 +28,9 @@ type pushDoneMsg struct{}
 // mrDoneMsg signals that batch MR creation has completed.
 type mrDoneMsg struct{}
 
+// branchStatusDoneMsg signals that branch status refresh has completed.
+type branchStatusDoneMsg struct{}
+
 // WorkflowTickMsg is sent periodically to refresh workflow agent status.
 type WorkflowTickMsg struct{}
 
@@ -133,10 +136,13 @@ func (v *WorkflowsView) SetWorkflowDiffView(dv *WorkflowDiffView) {
 
 // Init initializes the workflows view.
 func (v *WorkflowsView) Init() tea.Cmd {
-	return func() tea.Msg {
-		v.loadWorkflows()
-		return RefreshDoneMsg{}
-	}
+	return tea.Batch(
+		func() tea.Msg {
+			v.loadWorkflows()
+			return RefreshDoneMsg{}
+		},
+		v.refreshBranchStatusCmd(),
+	)
 }
 
 // loadWorkflows loads persisted workflows from disk and discovers new ones.
@@ -328,10 +334,13 @@ func (v *WorkflowsView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case "r":
-			return v, func() tea.Msg {
-				v.loadWorkflows()
-				return RefreshDoneMsg{}
-			}
+			return v, tea.Batch(
+				func() tea.Msg {
+					v.loadWorkflows()
+					return RefreshDoneMsg{}
+				},
+				v.refreshBranchStatusCmd(),
+			)
 		case "w":
 			v.showWorkflowStart = true
 			v.workflowBranchName = ""
@@ -398,6 +407,10 @@ func (v *WorkflowsView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		v.saveWorkflows()
+		return v, v.refreshBranchStatusCmd()
+
+	case branchStatusDoneMsg:
+		// Branch statuses updated; re-render is automatic.
 
 	case pushCheckDoneMsg:
 		if len(msg.repos) == 0 {
@@ -918,6 +931,18 @@ func (v *WorkflowsView) hasRunningAgents() bool {
 	return false
 }
 
+// refreshBranchStatusCmd returns a command that refreshes branch ahead/behind status for all workflows.
+func (v *WorkflowsView) refreshBranchStatusCmd() tea.Cmd {
+	workflows := make([]*project.FeatureWorkflow, len(v.workflows))
+	copy(workflows, v.workflows)
+	return func() tea.Msg {
+		for _, wf := range workflows {
+			wf.RefreshBranchStatuses()
+		}
+		return branchStatusDoneMsg{}
+	}
+}
+
 func (v *WorkflowsView) refreshWorkflowAgentSnap() {
 	wf := v.currentWorkflow()
 	if wf == nil || v.engine == nil {
@@ -1271,6 +1296,28 @@ func (v *WorkflowsView) renderRepoDetail(wf *project.FeatureWorkflow) string {
 		if wr.MRURL != "" {
 			parts = append(parts, th.DashboardAccentStyle.Render("MR"))
 		}
+
+		// Branch ahead/behind vs default branch
+		if wr.AheadDefault > 0 {
+			parts = append(parts, th.DashboardAccentStyle.Render(fmt.Sprintf("+%d", wr.AheadDefault)))
+		}
+		if wr.BehindDefault > 0 {
+			parts = append(parts, th.DashboardErrorStyle.Render(fmt.Sprintf("-%d", wr.BehindDefault)))
+		}
+		if wr.AheadDefault == 0 && wr.BehindDefault == 0 && (wr.WorktreeCreated || wr.Pushed) {
+			parts = append(parts, th.MutedTextStyle.Render("≡"))
+		}
+
+		// Remote tracking status
+		if wr.HasRemote {
+			if wr.AheadRemote > 0 {
+				parts = append(parts, th.DashboardAccentStyle.Render(fmt.Sprintf("↑%d", wr.AheadRemote)))
+			}
+			if wr.BehindRemote > 0 {
+				parts = append(parts, th.DashboardErrorStyle.Render(fmt.Sprintf("↓%d", wr.BehindRemote)))
+			}
+		}
+
 		if wr.Error != "" {
 			parts = append(parts, th.DashboardErrorStyle.Render(wr.Error))
 		}
