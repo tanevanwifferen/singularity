@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"git-frontend/internal/engine"
+	"singularity/internal/engine"
 )
 
 // RefineTicket launches an agent that explores the codebase and rewrites a Jira ticket

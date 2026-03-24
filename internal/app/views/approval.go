@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"git-frontend/internal/jira"
-	"git-frontend/internal/theme"
+	"singularity/internal/jira"
+	"singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -20,8 +20,8 @@ type ApprovalItem struct {
 
 // ApprovalDoneMsg is sent when the user finishes (confirm or cancel).
 type ApprovalDoneMsg struct {
-	Executed bool          // true if actions were executed
-	Err      error         // execution error, if any
+	Executed bool  // true if actions were executed
+	Err      error // execution error, if any
 	Results  []ActionResult
 }
 
