@@ -1271,6 +1271,9 @@ func (v *WorkflowsView) renderRepoDetail(wf *project.FeatureWorkflow) string {
 			s.WriteString("        ")
 			s.WriteString(th.MutedTextStyle.Render("↳ " + mrLabel))
 			s.WriteString("\n")
+			s.WriteString("        ")
+			s.WriteString(th.MutedTextStyle.Render("  " + wr.MRURL))
+			s.WriteString("\n")
 		}
 	}
 
