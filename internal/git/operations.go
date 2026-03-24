@@ -38,6 +38,31 @@ func ResetToCommit(repoPath, hash, mode string) error {
 	return nil
 }
 
+// ResetRepoToMain fetches the remote and hard-resets the current branch to
+// origin/<defaultBranch>, discarding all local changes and commits.
+func ResetRepoToMain(repoPath, defaultBranch string) error {
+	if defaultBranch == "" {
+		defaultBranch = "main"
+	}
+	// Fetch latest from origin
+	fetchCmd := exec.Command("git", "-C", repoPath, "fetch", "origin")
+	if out, err := fetchCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("fetch failed: %s", strings.TrimSpace(string(out)))
+	}
+	// Hard reset to origin/<defaultBranch>
+	ref := "origin/" + defaultBranch
+	resetCmd := exec.Command("git", "-C", repoPath, "reset", "--hard", ref)
+	if out, err := resetCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("reset failed: %s", strings.TrimSpace(string(out)))
+	}
+	// Clean untracked files and directories
+	cleanCmd := exec.Command("git", "-C", repoPath, "clean", "-fd")
+	if out, err := cleanCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("clean failed: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // AmendCommitMessage amends the HEAD commit with a new message.
 func AmendCommitMessage(repoPath, newMessage string) error {
 	if newMessage == "" {

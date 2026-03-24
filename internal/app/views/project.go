@@ -62,6 +62,10 @@ type ProjectView struct {
 	mrConfirmBranch string // branch name
 	mrResult        string // flash message for MR result
 
+	// Reset-to-main confirmation state
+	showResetAllConfirm bool
+	resetAllResult      string
+
 	// Filter for tree list
 	filter *components.Filter[treeNode]
 }
@@ -329,6 +333,9 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.mrResult != "" {
 			v.mrResult = ""
 		}
+		if v.resetAllResult != "" {
+			v.resetAllResult = ""
+		}
 
 		// Handle new branch creation mode
 		if v.showNewBranch {
@@ -409,6 +416,30 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, nil
 		}
 
+		// Handle reset-all confirmation mode
+		if v.showResetAllConfirm {
+			switch msg.String() {
+			case "y", "enter":
+				var results []string
+				if v.proj != nil {
+					for _, repo := range v.proj.Repos {
+						err := git.ResetRepoToMain(repo.Path, repo.DefaultBranch)
+						if err != nil {
+							results = append(results, fmt.Sprintf("✗ %s: %v", repo.Name, err))
+						} else {
+							results = append(results, fmt.Sprintf("✓ %s: reset to origin/%s", repo.Name, repo.DefaultBranch))
+						}
+					}
+				}
+				v.resetAllResult = strings.Join(results, "\n")
+				v.showResetAllConfirm = false
+				v.loadData()
+			case "n", "esc":
+				v.showResetAllConfirm = false
+			}
+			return v, nil
+		}
+
 		// If filter is active, let it handle keys
 		if v.filter != nil && v.filter.IsActive() {
 			v.filter.Update(msg)
@@ -478,6 +509,9 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					v.mrConfirmBranch = node.Branch.Name
 				}
 			}
+		case "X":
+			// Prompt to reset all repos to their default branch
+			v.showResetAllConfirm = true
 		case "b":
 			v.showBranchCheck = true
 			v.branchCheckName = ""
@@ -613,6 +647,27 @@ func (v *ProjectView) View() string {
 		s.WriteString("\n")
 	}
 
+	// Reset-all confirmation modal
+	if v.showResetAllConfirm {
+		repoCount := 0
+		if v.proj != nil {
+			repoCount = len(v.proj.Repos)
+		}
+		lines := []string{
+			"",
+			th.DashboardErrorStyle.Render("  WARNING: This will discard ALL local changes,"),
+			th.DashboardErrorStyle.Render("  commits, and untracked files in every repo."),
+			"",
+			fmt.Sprintf("  Repos affected: %d", repoCount),
+			"",
+			"  Each repo will be:  fetch + reset --hard + clean -fd",
+			"",
+			"  y: Yes, reset everything  n/Esc: Cancel",
+		}
+		s.WriteString(renderModal("Reset ALL Repos to Main", lines, modalWidth(v.width)))
+		s.WriteString("\n")
+	}
+
 	// Flash messages for branch/MR results
 	if v.newBranchResult != "" {
 		for _, line := range strings.Split(v.newBranchResult, "\n") {
@@ -632,6 +687,17 @@ func (v *ProjectView) View() string {
 			s.WriteString(th.DashboardAccentStyle.Render(v.mrResult))
 		}
 		s.WriteString("\n\n")
+	}
+	if v.resetAllResult != "" {
+		for _, line := range strings.Split(v.resetAllResult, "\n") {
+			if strings.HasPrefix(line, "✓") {
+				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
+			} else {
+				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
+			}
+			s.WriteString("\n")
+		}
+		s.WriteString("\n")
 	}
 
 	// Repos header
@@ -667,7 +733,7 @@ func (v *ProjectView) renderFooterHelp() string {
 		return th.Help.Render("Enter: Confirm  Esc: Cancel")
 	}
 
-	return th.Help.Render(" ↑↓ Navigate  Enter Expand  o Open  c Checkout  n Branch  m MR  b Check  / Filter  r Refresh")
+	return th.Help.Render(" ↑↓ Navigate  Enter Expand  o Open  c Checkout  n Branch  m MR  b Check  / Filter  r Refresh  X Reset All")
 }
 
 // ShortHelp returns a contextual short help string.
@@ -675,18 +741,18 @@ func (v *ProjectView) ShortHelp() string {
 	if v.CapturesInput() {
 		return "Enter: Confirm  Esc: Cancel"
 	}
-	return "↑↓ Navigate  Enter Expand  o Open  c Checkout  n Branch  m MR  b Check  / Filter  r Refresh"
+	return "↑↓ Navigate  Enter Expand  o Open  c Checkout  n Branch  m MR  b Check  / Filter  r Refresh  X Reset All"
 }
 
 // CapturesInput returns true when the view is in an input mode.
 func (v *ProjectView) CapturesInput() bool {
-	return v.showBranchCheck || v.showNewBranch || v.showMRConfirm
+	return v.showBranchCheck || v.showNewBranch || v.showMRConfirm || v.showResetAllConfirm
 }
 
 // CapturesKey returns true for keys this view handles directly.
 func (v *ProjectView) CapturesKey(key string) bool {
 	switch key {
-	case "r", "o", "b", "c", "n", "m", "enter", "/", "j", "k", "up", "down":
+	case "r", "o", "b", "c", "n", "m", "X", "enter", "/", "j", "k", "up", "down":
 		return true
 	}
 	return false
@@ -734,5 +800,6 @@ func (v *ProjectView) KeyBindings() []components.KeyBinding {
 		{Key: "b", Description: "Check if branch exists in all repos"},
 		{Key: "/", Description: "Filter"},
 		{Key: "r", Description: "Refresh all repos"},
+		{Key: "X", Description: "Reset ALL repos to main (destructive)"},
 	}
 }
