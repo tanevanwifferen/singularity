@@ -69,24 +69,19 @@ type WorkflowDiffView struct {
 	items       []diffItem
 	selectedIdx int
 
-	// File diff content (when user presses enter on a file)
+	// File diff content (shown automatically when navigating)
 	showDiff         bool
 	currentDiff      string
 	parsedDiffLines  []DiffLine
 	diffScrollOffset int
-	diffNavMode      bool
 	diffHunkStats    hunkStats
-
-	// Focus: true = item list, false = diff panel
-	focusItemList bool
 }
 
 // NewWorkflowDiffView creates a new workflow diff view.
 func NewWorkflowDiffView() *WorkflowDiffView {
 	return &WorkflowDiffView{
-		width:         120,
-		height:        30,
-		focusItemList: true,
+		width:  120,
+		height: 30,
 	}
 }
 
@@ -101,8 +96,6 @@ func (v *WorkflowDiffView) SetWorkflow(wf *project.FeatureWorkflow) {
 	v.currentDiff = ""
 	v.parsedDiffLines = nil
 	v.diffScrollOffset = 0
-	v.diffNavMode = false
-	v.focusItemList = true
 	v.loading = false
 	v.err = nil
 }
@@ -244,31 +237,15 @@ func (v *WorkflowDiffView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "up", "k":
-			if v.showDiff && v.diffNavMode {
-				if v.diffScrollOffset > 0 {
-					v.diffScrollOffset--
-				}
-			} else {
-				v.moveCursor(-1)
-			}
+			v.moveCursor(-1)
 		case "down", "j":
-			if v.showDiff && v.diffNavMode {
-				maxScroll := len(v.parsedDiffLines) - (v.height - 20)
-				if maxScroll < 0 {
-					maxScroll = 0
-				}
-				if v.diffScrollOffset < maxScroll {
-					v.diffScrollOffset++
-				}
-			} else {
-				v.moveCursor(1)
-			}
+			v.moveCursor(1)
 		case "g":
-			if v.showDiff && v.diffNavMode {
+			if v.showDiff {
 				v.diffScrollOffset = 0
 			}
 		case "G":
-			if v.showDiff && v.diffNavMode {
+			if v.showDiff {
 				maxScroll := len(v.parsedDiffLines) - (v.height - 20)
 				if maxScroll < 0 {
 					maxScroll = 0
@@ -276,7 +253,7 @@ func (v *WorkflowDiffView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				v.diffScrollOffset = maxScroll
 			}
 		case "pgup", "ctrl+u":
-			if v.showDiff && v.diffNavMode {
+			if v.showDiff {
 				pageSize := v.height - 20
 				if pageSize < 1 {
 					pageSize = 1
@@ -287,7 +264,7 @@ func (v *WorkflowDiffView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "pgdown", "ctrl+d":
-			if v.showDiff && v.diffNavMode {
+			if v.showDiff {
 				pageSize := v.height - 20
 				if pageSize < 1 {
 					pageSize = 1
@@ -300,19 +277,6 @@ func (v *WorkflowDiffView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if v.diffScrollOffset > maxScroll {
 					v.diffScrollOffset = maxScroll
 				}
-			}
-		case "enter":
-			if v.selectedIdx < len(v.items) && !v.items[v.selectedIdx].IsRepoHeader {
-				if v.showDiff {
-					v.closeDiff()
-				} else {
-					v.loadSelectedFileDiff()
-				}
-			}
-		case "tab":
-			v.focusItemList = !v.focusItemList
-			if v.showDiff {
-				v.diffNavMode = !v.focusItemList
 			}
 		case "r":
 			return v, v.Init()
@@ -334,12 +298,11 @@ func (v *WorkflowDiffView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return v, nil
 }
 
-// moveCursor moves the selection by delta, skipping repo headers.
+// moveCursor moves the selection by delta and auto-loads the diff for the new file.
 func (v *WorkflowDiffView) moveCursor(delta int) {
 	if len(v.items) == 0 {
 		return
 	}
-	v.closeDiff()
 
 	newIdx := v.selectedIdx + delta
 	// Allow landing on repo headers for visual context
@@ -349,7 +312,18 @@ func (v *WorkflowDiffView) moveCursor(delta int) {
 	if newIdx >= len(v.items) {
 		newIdx = len(v.items) - 1
 	}
+	if newIdx == v.selectedIdx {
+		return
+	}
 	v.selectedIdx = newIdx
+	v.diffScrollOffset = 0
+
+	// Auto-load diff for files; clear it for repo headers
+	if !v.items[v.selectedIdx].IsRepoHeader {
+		v.loadSelectedFileDiff()
+	} else {
+		v.closeDiff()
+	}
 }
 
 // closeDiff resets diff panel state.
@@ -358,9 +332,7 @@ func (v *WorkflowDiffView) closeDiff() {
 	v.currentDiff = ""
 	v.parsedDiffLines = nil
 	v.diffScrollOffset = 0
-	v.diffNavMode = false
 	v.diffHunkStats = hunkStats{}
-	v.focusItemList = true
 }
 
 // loadSelectedFileDiff loads the diff for the currently selected file.
@@ -382,9 +354,7 @@ func (v *WorkflowDiffView) loadSelectedFileDiff() {
 	v.parsedDiffLines = parseDeepDiffLines(rawDiff, hunks)
 	v.diffHunkStats = computeHunkStats(hunks)
 	v.showDiff = true
-	v.diffNavMode = true
 	v.diffScrollOffset = 0
-	v.focusItemList = false
 }
 
 // parseDeepDiffLines parses raw diff output and annotates lines with AlreadyInBase
@@ -465,7 +435,7 @@ func (v *WorkflowDiffView) View() string {
 	s.WriteString("\n")
 
 	// Footer
-	helpText := " j/k: Navigate  Enter: View diff  Tab: Switch panel  Esc: Back  r: Refresh"
+	helpText := " j/k: Navigate files  PgUp/PgDn: Scroll diff  g/G: Top/bottom  Esc: Back  r: Refresh"
 	s.WriteString(th.Help.Render(helpText))
 
 	return s.String()
@@ -476,11 +446,7 @@ func (v *WorkflowDiffView) renderItemList(width int) string {
 	th := theme.GetTheme()
 	var s strings.Builder
 
-	focusIndicator := ""
-	if v.focusItemList {
-		focusIndicator = " [FOCUS]"
-	}
-	s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" Files%s ", focusIndicator)))
+	s.WriteString(th.DashboardTitle.Render(" Files "))
 	s.WriteString("\n")
 
 	dividerLen := width - 2
@@ -594,10 +560,7 @@ func (v *WorkflowDiffView) renderFileEntry(item diffItem, selected bool, width i
 	style := th.BranchStyle
 	if selected {
 		prefix = "   > "
-		style = th.DashboardAccentStyle
-		if v.focusItemList {
-			style = th.SelectedBranchStyle
-		}
+		style = th.SelectedBranchStyle
 	}
 
 	// Status indicator
@@ -661,15 +624,7 @@ func (v *WorkflowDiffView) renderDetailPanel(width int) string {
 	th := theme.GetTheme()
 	var s strings.Builder
 
-	focusIndicator := ""
-	if !v.focusItemList {
-		focusIndicator = " [FOCUS]"
-	}
-	navIndicator := ""
-	if v.showDiff && v.diffNavMode {
-		navIndicator = " [j/k scroll]"
-	}
-	s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" Details%s%s ", focusIndicator, navIndicator)))
+	s.WriteString(th.DashboardTitle.Render(" Details "))
 	s.WriteString("\n")
 
 	dividerLen := width - 2
@@ -783,7 +738,7 @@ func (v *WorkflowDiffView) renderDetailPanel(width int) string {
 		s.WriteString(th.Help.Render(" No diff content available"))
 		s.WriteString("\n")
 	} else if !v.showDiff {
-		s.WriteString(th.Help.Render(" Enter: View diff  Esc: Back to workflows"))
+		s.WriteString(th.Help.Render(" Loading diff..."))
 		s.WriteString("\n")
 	}
 
@@ -882,13 +837,8 @@ func (v *WorkflowDiffView) renderDiffWithGutter(width int) string {
 
 	totalLines := len(v.parsedDiffLines)
 	if totalLines > visibleLines {
-		scrollInfo := fmt.Sprintf(" %d-%d of %d ", startIdx+1, endIdx, totalLines)
-		if v.diffNavMode {
-			s.WriteString(th.Help.Render(scrollInfo))
-			s.WriteString(th.Help.Render(" [j/k scroll, g/G top/bottom]"))
-		} else {
-			s.WriteString(th.Help.Render(scrollInfo))
-		}
+		scrollInfo := fmt.Sprintf(" %d-%d of %d  [PgUp/PgDn scroll, g/G top/bottom]", startIdx+1, endIdx, totalLines)
+		s.WriteString(th.Help.Render(scrollInfo))
 		s.WriteString("\n")
 	}
 
@@ -913,7 +863,7 @@ func (v *WorkflowDiffView) SetSize(width, height int) {
 // CapturesKey returns true for keys this view handles directly.
 func (v *WorkflowDiffView) CapturesKey(key string) bool {
 	switch key {
-	case "j", "k", "up", "down", "enter", "r", "esc", "tab":
+	case "j", "k", "up", "down", "pgup", "pgdown", "ctrl+u", "ctrl+d", "g", "G", "r", "esc":
 		return true
 	}
 	return false
@@ -922,11 +872,11 @@ func (v *WorkflowDiffView) CapturesKey(key string) bool {
 // KeyBindings returns the keybindings for this view.
 func (v *WorkflowDiffView) KeyBindings() []components.KeyBinding {
 	return []components.KeyBinding{
-		{Key: "↑/k", Description: "Navigate up"},
-		{Key: "↓/j", Description: "Navigate down"},
-		{Key: "Enter", Description: "Toggle file diff"},
-		{Key: "Tab", Description: "Switch panel focus"},
-		{Key: "g/G", Description: "Scroll to top/bottom (diff)"},
+		{Key: "↑/k", Description: "Navigate files"},
+		{Key: "↓/j", Description: "Navigate files"},
+		{Key: "PgUp/Ctrl+U", Description: "Scroll diff up"},
+		{Key: "PgDn/Ctrl+D", Description: "Scroll diff down"},
+		{Key: "g/G", Description: "Diff top/bottom"},
 		{Key: "r", Description: "Refresh"},
 		{Key: "Esc", Description: "Back to workflows"},
 	}
