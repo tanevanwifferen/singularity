@@ -37,6 +37,7 @@ type JiraPickerState struct {
 
 	// Detail/preview pane for the selected issue
 	previewIssue *jira.Issue
+	descOffset   int // scroll offset for description in preview pane
 
 	width  int
 	height int
@@ -189,6 +190,14 @@ func (p *JiraPickerState) HandleKey(msg tea.KeyMsg) (cmd tea.Cmd, done bool, con
 		p.syncPreview()
 		return nil, false, false, nil
 
+	case "ctrl+d":
+		p.scrollDesc(1)
+		return nil, false, false, nil
+
+	case "ctrl+u":
+		p.scrollDesc(-1)
+		return nil, false, false, nil
+
 	case "/":
 		p.filter.Update(msg)
 		return nil, false, false, nil
@@ -241,11 +250,41 @@ func (p *JiraPickerState) handleSearchKey(msg tea.KeyMsg) (cmd tea.Cmd, done boo
 // syncPreview updates the preview pane to reflect the currently highlighted issue.
 func (p *JiraPickerState) syncPreview() {
 	if item, idx := p.filter.SelectedItem(); idx >= 0 {
+		if p.previewIssue == nil || p.previewIssue.Key != item.Key {
+			p.descOffset = 0
+		}
 		p.previewIssue = &item
 	} else {
 		p.previewIssue = nil
+		p.descOffset = 0
 	}
 }
+
+// scrollDesc moves the description scroll offset by delta lines.
+func (p *JiraPickerState) scrollDesc(delta int) {
+	if p.previewIssue == nil || p.previewIssue.Description == "" {
+		return
+	}
+	w := modalWidth(p.width) - 2
+	if w < 20 {
+		w = 20
+	}
+	lines := wordWrap(p.previewIssue.Description, w)
+	maxOffset := len(lines) - descMaxLines
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	p.descOffset += delta
+	if p.descOffset > maxOffset {
+		p.descOffset = maxOffset
+	}
+	if p.descOffset < 0 {
+		p.descOffset = 0
+	}
+}
+
+// descMaxLines is the number of description lines shown at once in the preview pane.
+const descMaxLines = 5
 
 // SetSize updates dimensions.
 func (p *JiraPickerState) SetSize(width, height int) {
@@ -313,7 +352,7 @@ func (p *JiraPickerState) View() string {
 		s.WriteString(th.Help.Render(" Enter: run   Esc: cancel   (issue key e.g. PROJ-123 or JQL) "))
 		s.WriteString("\n\n")
 	} else {
-		s.WriteString(th.Help.Render(" s: search (issue key or JQL)   /: filter   r: refresh   ↑/↓: navigate   Enter: select   Esc: cancel "))
+		s.WriteString(th.Help.Render(" s: search (issue key or JQL)   /: filter   r: refresh   ↑/↓: navigate   ctrl+d/u: scroll desc   Enter: select   Esc: cancel "))
 		s.WriteString("\n\n")
 	}
 
@@ -359,15 +398,23 @@ func (p *JiraPickerState) View() string {
 			th.MutedTextStyle.Render(branchName),
 		))
 		if issue.Description != "" {
-			desc := issue.Description
-			if len(desc) > 200 {
-				desc = desc[:197] + "..."
+			descW := w - 2
+			if descW < 20 {
+				descW = 20
 			}
-			// Truncate to single line for preview
-			if nl := strings.IndexByte(desc, '\n'); nl >= 0 {
-				desc = desc[:nl] + "..."
+			lines := wordWrap(issue.Description, descW)
+			end := p.descOffset + descMaxLines
+			if end > len(lines) {
+				end = len(lines)
 			}
-			s.WriteString(fmt.Sprintf(" %s\n", th.MutedTextStyle.Render(desc)))
+			for _, line := range lines[p.descOffset:end] {
+				s.WriteString(fmt.Sprintf(" %s\n", th.MutedTextStyle.Render(line)))
+			}
+			if len(lines) > descMaxLines {
+				total := len(lines)
+				scrollInfo := fmt.Sprintf("(%d-%d of %d lines · ctrl+d/ctrl+u to scroll)", p.descOffset+1, end, total)
+				s.WriteString(fmt.Sprintf(" %s\n", th.Help.Render(scrollInfo)))
+			}
 		}
 	}
 
