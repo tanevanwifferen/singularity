@@ -29,6 +29,7 @@ const (
 	workflowStepNewConfirm   = "new-confirm"   // confirm creating a fresh worktree
 	workflowStepSelectWT     = "select-wt"     // browse existing worktrees
 	workflowStepExistConfirm = "exist-confirm" // confirm running on existing worktree
+	workflowStepExtraMsg     = "extra-msg"     // optional extra message for the agent
 )
 
 // jiraLoadedMsg carries freshly fetched Jira issues back to the view.
@@ -76,8 +77,12 @@ type JiraView struct {
 	workflowStep        string
 
 	// Existing-worktree picker (workflowStepSelectWT)
-	existingWTs  []git.Worktree
+	existingWTs   []git.Worktree
 	selectedWTIdx int
+
+	// Extra message input (workflowStepExtraMsg)
+	workflowExtraMsg     string
+	workflowFromExisting bool // true if coming from existing-worktree path
 }
 
 // NewJiraView creates a new Jira issues view.
@@ -247,6 +252,8 @@ func (v *JiraView) triggerWorkflow(issue *jira.Issue) tea.Cmd {
 	v.workflowStep = workflowStepChoose
 	v.existingWTs = nil
 	v.selectedWTIdx = 0
+	v.workflowExtraMsg = ""
+	v.workflowFromExisting = false
 	return nil
 }
 
@@ -282,15 +289,9 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 	case workflowStepNewConfirm:
 		switch msg.String() {
 		case "y", "enter":
-			issue := v.workflowIssue
-			branch := v.workflowBranch
-			eng := v.eng
-			proj := v.proj
-			repoPath := v.repoPath
-			jiraURL := v.cfg.BaseURL + "/browse/" + issue.Key
-			return func() tea.Msg {
-				return startJiraWorkflow(issue, branch, eng, proj, repoPath, jiraURL)
-			}
+			v.workflowFromExisting = false
+			v.workflowExtraMsg = ""
+			v.workflowStep = workflowStepExtraMsg
 		case "n", "esc":
 			v.workflowStep = workflowStepChoose
 		}
@@ -318,27 +319,72 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 		switch msg.String() {
 		case "y", "enter":
 			if len(v.existingWTs) > 0 && v.selectedWTIdx < len(v.existingWTs) {
-				wt := v.existingWTs[v.selectedWTIdx]
-				issue := v.workflowIssue
-				eng := v.eng
-				return func() tea.Msg {
-					return startJiraWorkflowExisting(issue, wt.Path, eng)
-				}
+				v.workflowFromExisting = true
+				v.workflowExtraMsg = ""
+				v.workflowStep = workflowStepExtraMsg
 			}
 		case "n", "esc":
 			v.workflowStep = workflowStepSelectWT
+		}
+
+	case workflowStepExtraMsg:
+		switch msg.String() {
+		case "enter":
+			if v.workflowFromExisting {
+				if len(v.existingWTs) > 0 && v.selectedWTIdx < len(v.existingWTs) {
+					wt := v.existingWTs[v.selectedWTIdx]
+					issue := v.workflowIssue
+					eng := v.eng
+					extraMsg := v.workflowExtraMsg
+					return func() tea.Msg {
+						return startJiraWorkflowExisting(issue, wt.Path, eng, extraMsg)
+					}
+				}
+			} else {
+				issue := v.workflowIssue
+				branch := v.workflowBranch
+				eng := v.eng
+				proj := v.proj
+				repoPath := v.repoPath
+				jiraURL := v.cfg.BaseURL + "/browse/" + issue.Key
+				extraMsg := v.workflowExtraMsg
+				return func() tea.Msg {
+					return startJiraWorkflow(issue, branch, eng, proj, repoPath, jiraURL, extraMsg)
+				}
+			}
+		case "esc":
+			if v.workflowFromExisting {
+				v.workflowStep = workflowStepExistConfirm
+			} else {
+				v.workflowStep = workflowStepNewConfirm
+			}
+		case "ctrl+w":
+			v.workflowExtraMsg = components.DeleteWordEnd(v.workflowExtraMsg)
+		case "backspace":
+			if len(v.workflowExtraMsg) > 0 {
+				v.workflowExtraMsg = v.workflowExtraMsg[:len(v.workflowExtraMsg)-1]
+			}
+		default:
+			if msg.Paste && len(msg.Runes) > 0 {
+				v.workflowExtraMsg += string(msg.Runes)
+			} else if len(msg.Runes) == 1 {
+				r := msg.Runes[0]
+				if r >= 32 {
+					v.workflowExtraMsg += string(r)
+				}
+			}
 		}
 	}
 	return nil
 }
 
 // startJiraWorkflow creates worktrees and spawns an agent.
-func startJiraWorkflow(issue *jira.Issue, branch string, eng *engine.Engine, proj *project.Project, repoPath string, jiraURL string) jiraWorkflowDoneMsg {
+func startJiraWorkflow(issue *jira.Issue, branch string, eng *engine.Engine, proj *project.Project, repoPath string, jiraURL string, extraMsg string) jiraWorkflowDoneMsg {
 	if eng == nil {
 		return jiraWorkflowDoneMsg{err: fmt.Errorf("agent engine not available")}
 	}
 
-	agentPrompt := buildJiraAgentPrompt(issue)
+	agentPrompt := buildJiraAgentPrompt(issue, extraMsg)
 
 	// Project mode: create worktrees across all repos via FeatureWorkflow
 	if proj != nil {
@@ -382,11 +428,11 @@ func startJiraWorkflow(issue *jira.Issue, branch string, eng *engine.Engine, pro
 }
 
 // startJiraWorkflowExisting spawns an agent in an already-existing worktree.
-func startJiraWorkflowExisting(issue *jira.Issue, worktreePath string, eng *engine.Engine) jiraWorkflowDoneMsg {
+func startJiraWorkflowExisting(issue *jira.Issue, worktreePath string, eng *engine.Engine, extraMsg string) jiraWorkflowDoneMsg {
 	if eng == nil {
 		return jiraWorkflowDoneMsg{err: fmt.Errorf("agent engine not available")}
 	}
-	agentPrompt := buildJiraAgentPrompt(issue)
+	agentPrompt := buildJiraAgentPrompt(issue, extraMsg)
 	id, err := eng.StartAgent(worktreePath, agentPrompt, engine.AgentOptions{SmartRoute: true})
 	if err != nil {
 		return jiraWorkflowDoneMsg{err: fmt.Errorf("start agent: %w", err)}
@@ -395,7 +441,7 @@ func startJiraWorkflowExisting(issue *jira.Issue, worktreePath string, eng *engi
 }
 
 // buildJiraAgentPrompt constructs an agent task prompt from a Jira issue.
-func buildJiraAgentPrompt(issue *jira.Issue) string {
+func buildJiraAgentPrompt(issue *jira.Issue, extraMsg string) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Implement Jira ticket %s.\n\n", issue.Key))
 	b.WriteString(fmt.Sprintf("Summary: %s\n", issue.Summary))
@@ -415,6 +461,10 @@ func buildJiraAgentPrompt(issue *jira.Issue) string {
 	}
 	b.WriteString("\nYou are working in a dedicated worktree/branch for this ticket. " +
 		"Implement the requirements described above. When done, ensure all tests pass.")
+	if extraMsg != "" {
+		b.WriteString("\n\nAdditional instructions:\n")
+		b.WriteString(extraMsg)
+	}
 	return b.String()
 }
 
@@ -615,6 +665,19 @@ func (v *JiraView) renderWorkflowModal() string {
 			fmt.Sprintf("Path:     %s", truncate(wt.Path, mw-10)),
 			"",
 			"Spawn agent on this worktree? (y/n)",
+		}, mw)
+
+	case workflowStepExtraMsg:
+		input := v.workflowExtraMsg + "█"
+		return renderModal("Extra Instructions (optional)", []string{
+			fmt.Sprintf("Ticket: %s", issue.Key),
+			"",
+			"Add any extra instructions for the agent.",
+			"Leave blank and press Enter to skip.",
+			"",
+			input,
+			"",
+			"Enter: confirm · Esc: back",
 		}, mw)
 	}
 	return ""
