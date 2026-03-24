@@ -519,9 +519,11 @@ func (v *ProjectSyncView) renderLog(s *strings.Builder, th theme.Theme) {
 	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
 	s.WriteString("\n")
 
-	// Calculate visible lines - account for repo status section
-	statusLines := len(v.repoStatuses) + 3 // header + separator + repos
-	maxLines := v.height - statusLines - 14
+	// Calculate visible lines - account for repo status section.
+	// Fixed overhead beyond statusLines: 2 header + 1 blank + 1 legend + 1 blank
+	// + 2 executing + 2 log header/sep + 1 scroll indicator + 1 blank + 10 keybindings = 22.
+	statusLines := len(v.repoStatuses) + 3 // header + separator + repos + trailing blank
+	maxLines := v.height - statusLines - 22
 	if maxLines < 5 {
 		maxLines = 5
 	}
@@ -628,7 +630,7 @@ func (v *ProjectSyncView) opDoneLabel(op SyncOperation) string {
 
 func (v *ProjectSyncView) scrollDown() {
 	statusLines := len(v.repoStatuses) + 3
-	maxLines := v.height - statusLines - 14
+	maxLines := v.height - statusLines - 22
 	if maxLines < 5 {
 		maxLines = 5
 	}
@@ -645,7 +647,7 @@ func (v *ProjectSyncView) scrollUp() {
 
 func (v *ProjectSyncView) scrollToBottom() {
 	statusLines := len(v.repoStatuses) + 3
-	maxLines := v.height - statusLines - 14
+	maxLines := v.height - statusLines - 22
 	if maxLines < 5 {
 		maxLines = 5
 	}
