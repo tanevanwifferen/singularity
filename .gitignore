@@ -1,6 +1,6 @@
 # Build output
 build/
-singularity
+/singularity
 *.exe
 *.exe~
 *.dll
