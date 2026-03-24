@@ -66,6 +66,7 @@ type FeatureWorkflow struct {
 	CreatedAt  time.Time               `json:"created_at"`
 	Error      string                  `json:"error,omitempty"`
 	AgentID    string                  `json:"agent_id,omitempty"`
+	JiraURL    string                  `json:"jira_url,omitempty"`
 
 	project *Project
 	mu      sync.RWMutex

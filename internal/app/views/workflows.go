@@ -745,6 +745,10 @@ func (v *WorkflowsView) buildMRSummaryText(wf *project.FeatureWorkflow) string {
 
 	b.WriteString(fmt.Sprintf("MRs for `%s`:\n", wf.BranchName))
 
+	if wf.JiraURL != "" {
+		b.WriteString(fmt.Sprintf("Jira: %s\n", wf.JiraURL))
+	}
+
 	for _, wr := range wf.Repos {
 		if wr.MRURL == "" {
 			continue
