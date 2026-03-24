@@ -337,14 +337,19 @@ type FilteredDiffHunk struct {
 	AlreadyInBase bool
 }
 
-// GetDeepFileDiff gets the diff between baseBranch and headRef for filePath,
-// and annotates each hunk as "already in base" if all its added lines are
-// already present in the base branch file. This detects squash-merge false
-// positives where git reports changes that are actually already incorporated.
+// GetDeepFileDiff gets the diff between diffBase and headRef for filePath,
+// and annotates each hunk as "already in base" by checking whether all added
+// lines are already present in the defaultBranch version of the file. This
+// detects squash-merge false positives where git reports changes that are
+// actually already incorporated in the default branch.
+//
+// diffBase is the merge-base commit (used for computing the diff).
+// defaultBranch is the current tip of the default branch (used for the
+// "already in base" check — this is where squash-merged content lives).
 //
 // Returns the annotated hunks, the raw diff string, and any error.
-func GetDeepFileDiff(repoPath, baseBranch, headRef, filePath string) ([]FilteredDiffHunk, string, error) {
-	rawDiff, err := GetFileDiff(repoPath, baseBranch, headRef, filePath)
+func GetDeepFileDiff(repoPath, diffBase, headRef, defaultBranch, filePath string) ([]FilteredDiffHunk, string, error) {
+	rawDiff, err := GetFileDiff(repoPath, diffBase, headRef, filePath)
 	if err != nil {
 		return nil, "", err
 	}
@@ -357,10 +362,11 @@ func GetDeepFileDiff(repoPath, baseBranch, headRef, filePath string) ([]Filtered
 		return nil, rawDiff, nil
 	}
 
-	// Get base branch file content to check line presence
-	baseContent, err := GetFileContent(repoPath, baseBranch, filePath)
+	// Get the file content at the current default branch tip to check whether
+	// the branch's additions have already been incorporated (e.g. via squash merge).
+	defaultContent, err := GetFileContent(repoPath, defaultBranch, filePath)
 	if err != nil {
-		// File doesn't exist in base (new file) — all hunks are genuinely new
+		// File doesn't exist in default branch — all hunks are genuinely new
 		result := make([]FilteredDiffHunk, len(hunks))
 		for i, h := range hunks {
 			result[i] = FilteredDiffHunk{h, false}
@@ -368,15 +374,15 @@ func GetDeepFileDiff(repoPath, baseBranch, headRef, filePath string) ([]Filtered
 		return result, rawDiff, nil
 	}
 
-	// Build a set of lines from the base file for fast lookup
-	baseLineSet := make(map[string]bool)
-	for _, line := range strings.Split(baseContent, "\n") {
-		baseLineSet[strings.TrimRight(line, "\r")] = true
+	// Build a set of lines from the default branch file for fast lookup
+	defaultLineSet := make(map[string]bool)
+	for _, line := range strings.Split(defaultContent, "\n") {
+		defaultLineSet[strings.TrimRight(line, "\r")] = true
 	}
 
 	result := make([]FilteredDiffHunk, len(hunks))
 	for i, hunk := range hunks {
-		result[i] = FilteredDiffHunk{hunk, isHunkAlreadyInBase(hunk, baseLineSet)}
+		result[i] = FilteredDiffHunk{hunk, isHunkAlreadyInBase(hunk, defaultLineSet)}
 	}
 	return result, rawDiff, nil
 }
