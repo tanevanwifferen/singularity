@@ -436,11 +436,11 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				v.outputAutoScroll = true
 				v.outputViewport.GotoBottom()
 				return v, nil
-			case "ctrl+d":
+			case "ctrl+d", "pgdown":
 				v.outputAutoScroll = false
 				v.outputViewport.HalfViewDown()
 				return v, nil
-			case "ctrl+u":
+			case "ctrl+u", "pgup":
 				v.outputAutoScroll = false
 				v.outputViewport.HalfViewUp()
 				return v, nil
