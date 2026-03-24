@@ -488,8 +488,10 @@ func (v *SyncView) renderLog(s *strings.Builder, th theme.Theme) {
 	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
 	s.WriteString("\n")
 
-	// Calculate visible lines
-	maxLines := v.height - 18 // Reserve space for header, status, help
+	// Calculate visible lines.
+	// Fixed overhead: 2 header + 6 status + 1 blank + 2 executing + 2 log header/sep
+	// + 1 scroll indicator + 1 blank + 10 keybindings = 27 lines worst-case.
+	maxLines := v.height - 27
 	if maxLines < 5 {
 		maxLines = 5
 	}
@@ -603,7 +605,7 @@ func (v *SyncView) opDoneLabel(op SyncOperation) string {
 }
 
 func (v *SyncView) scrollDown() {
-	maxLines := v.height - 18
+	maxLines := v.height - 27
 	if maxLines < 5 {
 		maxLines = 5
 	}
@@ -619,7 +621,7 @@ func (v *SyncView) scrollUp() {
 }
 
 func (v *SyncView) scrollToBottom() {
-	maxLines := v.height - 18
+	maxLines := v.height - 27
 	if maxLines < 5 {
 		maxLines = 5
 	}
