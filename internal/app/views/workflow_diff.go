@@ -24,7 +24,8 @@ type workflowDiffDoneMsg struct {
 type repoDiffResult struct {
 	RepoName      string
 	WorktreePath  string
-	DefaultBranch string
+	DefaultBranch string // resolved default branch ref (e.g. "main", "origin/main")
+	MergeBase     string // merge-base SHA used for diff computation
 	Diff          *git.BranchDiff
 	Err           error
 	// DeepFileStatus maps file path → true if ALL hunks are already in the base branch
@@ -37,7 +38,8 @@ type diffItem struct {
 	RepoName      string
 	File          *git.FileChange
 	WorktreePath  string
-	DefaultBranch string
+	DefaultBranch string // resolved default branch ref
+	MergeBase     string // merge-base SHA used for diff computation
 	// For repo headers: aggregate stats
 	TotalFiles     int
 	TotalAdditions int
@@ -120,28 +122,30 @@ func (v *WorkflowDiffView) Init() tea.Cmd {
 			wg.Add(1)
 			go func(name string, wr *project.WorkflowRepo) {
 				defer wg.Done()
-				base := wr.DefaultBranch
-				if base == "" {
-					base = "main"
+				defaultBranch := wr.DefaultBranch
+				if defaultBranch == "" {
+					defaultBranch = "main"
 				}
 				// Resolve to an existing ref (handles origin/main fallback)
-				base = git.ResolveRef(wr.WorktreePath, base)
+				defaultBranch = git.ResolveRef(wr.WorktreePath, defaultBranch)
 
 				// Use merge base so the diff matches what an MR would show
 				// (changes introduced by this branch, not diff between branch tips)
-				if mb, err := git.GetMergeBase(wr.WorktreePath, base, "HEAD"); err == nil {
-					base = mb
+				mergeBase := defaultBranch
+				if mb, err := git.GetMergeBase(wr.WorktreePath, defaultBranch, "HEAD"); err == nil {
+					mergeBase = mb
 				}
 
-				diff, err := git.GetBranchDiff(wr.WorktreePath, base, "HEAD")
+				diff, err := git.GetBranchDiff(wr.WorktreePath, mergeBase, "HEAD")
 
 				// Deep check: for each changed file, test whether all its hunks
-				// are already incorporated in the base branch (squash-merge detection).
+				// are already incorporated in the default branch (squash-merge detection).
+				// Compares against the current default branch tip, not the merge-base.
 				var fileStatus map[string]bool
 				if err == nil && diff != nil && len(diff.Files) > 0 {
 					fileStatus = make(map[string]bool, len(diff.Files))
 					for _, f := range diff.Files {
-						hunks, _, ferr := git.GetDeepFileDiff(wr.WorktreePath, base, "HEAD", f.NewPath)
+						hunks, _, ferr := git.GetDeepFileDiff(wr.WorktreePath, mergeBase, "HEAD", defaultBranch, f.NewPath)
 						if ferr != nil {
 							continue
 						}
@@ -160,7 +164,8 @@ func (v *WorkflowDiffView) Init() tea.Cmd {
 				results[name] = &repoDiffResult{
 					RepoName:       name,
 					WorktreePath:   wr.WorktreePath,
-					DefaultBranch:  base,
+					DefaultBranch:  defaultBranch,
+					MergeBase:      mergeBase,
 					Diff:           diff,
 					Err:            err,
 					DeepFileStatus: fileStatus,
@@ -185,6 +190,7 @@ func (v *WorkflowDiffView) buildItems() {
 			RepoName:      name,
 			WorktreePath:  rd.WorktreePath,
 			DefaultBranch: rd.DefaultBranch,
+			MergeBase:     rd.MergeBase,
 		}
 
 		if rd.Err != nil {
@@ -207,6 +213,7 @@ func (v *WorkflowDiffView) buildItems() {
 					File:          &rd.Diff.Files[i],
 					WorktreePath:  rd.WorktreePath,
 					DefaultBranch: rd.DefaultBranch,
+					MergeBase:     rd.MergeBase,
 				}
 				if rd.DeepFileStatus != nil {
 					item.AlreadyInBase = rd.DeepFileStatus[rd.Diff.Files[i].NewPath]
@@ -351,7 +358,7 @@ func (v *WorkflowDiffView) loadSelectedFileDiff() {
 		return
 	}
 
-	hunks, rawDiff, err := git.GetDeepFileDiff(item.WorktreePath, item.DefaultBranch, "HEAD", item.File.NewPath)
+	hunks, rawDiff, err := git.GetDeepFileDiff(item.WorktreePath, item.MergeBase, "HEAD", item.DefaultBranch, item.File.NewPath)
 	if err != nil {
 		v.err = err
 		return
