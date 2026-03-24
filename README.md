@@ -1,37 +1,91 @@
 # Git Frontend
 
-A TUI-based git operations center built in Go. Replaces VS Code for git-centric workflows with a server-client architecture, embedded Claude Code agent pool, and multi-repo project management.
+A TUI-based git operations center built in Go with a server-client architecture. Combines multi-repo project management, an embedded Claude Code agent orchestrator with smart LLM routing, and Jira integration into a single terminal interface.
 
 ## Quick Start
 
 ```bash
 make build && make install
 
-# Single repo — open the current directory
+# Single repo
 git-frontend
-
-# Single repo — explicit path
-git-frontend --repo ~/code/my-project
 
 # Multi-repo project mode
 git-frontend --project-config ~/.config/git-frontend/projects.json
+
+# Headless server + remote TUI client
+git-frontend --server
+git-frontend --client http://localhost:8080
 ```
 
-See **[Repo Mode](docs/repo-mode.md)** and **[Project Mode](docs/project-mode.md)** for detailed guides.
+## Core Features
 
-## Modes
+### Agent Orchestrator
+
+An embedded Claude Code agent pool that manages up to 10 concurrent subprocesses from within the TUI. Each agent runs in its own git worktree for full isolation — changes are merged back on completion, so agents never step on each other or your working tree.
+
+- **Structured JSON streaming** — live output with tool calls, results, and cost tracking
+- **Follow-up messaging** — send additional instructions to running agents via stdin
+- **Worktree isolation** — each agent gets a disposable worktree, auto-merged on success
+- **Timeout enforcement** — kill runaway agents after a configurable duration
+- **Cross-repo context injection** — in project mode, agents receive context files from all repos in the project so they understand the full system
+
+The agent view (`F5`) provides a split-pane console: agent list on the left, live streaming output on the right.
+
+### Smart LLM Router
+
+Before launching an agent, the router classifies the user's prompt using Haiku (fast and cheap) to determine the optimal model and effort level:
+
+| Classification | Model | Use Case |
+|----------------|-------|----------|
+| Planning | Opus | Architecture, design, tradeoff analysis, investigation |
+| Implementation | Sonnet | Code changes, bug fixes, refactoring, feature work |
+
+The classifier also assigns an effort level (low/medium/high) based on task complexity, which is passed to the agent as context. This means simple fixes don't burn expensive tokens on deep reasoning, while complex architectural decisions get the full weight of Opus.
+
+### Git Project Manager
+
+Project mode (`--project-config`) manages multiple repositories as a single unit. A cross-repo dashboard aggregates branch status, dirty state, and sync health across all repos.
+
+**Workflows** coordinate operations across repos simultaneously:
+- **Multi-repo worktrees** — create matching feature branches across all project repos in one action
+- **Cross-repo push** — push the same branch across multiple repos
+- **Coordinated MR/PR creation** — create merge requests across repos with shared context
+- **Branch comparison** — compare a feature branch across all repos, with squash merge detection that compares tree content instead of commit SHAs
+
+Project config is generated automatically by scanning a directory:
+
+```bash
+git-frontend --generate-config-from-dir ~/code/my-org
+git-frontend --init  # scan current directory
+```
+
+### Jira Integration
+
+A built-in Jira client (`g,j` in the TUI) connects to Jira Cloud or Server/Data Center for issue browsing without leaving the terminal.
+
+- **JQL search** — run arbitrary queries from the TUI
+- **Issue browser** — view summaries, descriptions, status, priority, assignees, labels, and sprint info
+- **Dual auth** — email + API token for Cloud, PAT for Server/Data Center
+- **REST API v2/v3** — supports both Jira API versions
+
+### Server-Client Architecture
+
+The app runs in four modes, from local single-user to remote multi-client:
 
 | Flag | Mode | Description |
 |------|------|-------------|
 | *(none)* | Repo | TUI for the current directory |
 | `--repo <path>` | Repo | TUI for a specific repository |
 | `--project-config <path>` | Project | Multi-repo dashboard |
-| `--server` | Server | Headless API daemon (default `localhost:8080`) |
+| `--server` | Server | Headless REST + WebSocket daemon on `localhost:8080` |
 | `--client <url>` | Client | TUI connected to a remote server |
+
+The server exposes a full REST API for repo operations, branch management, commit message generation, MR creation, and project coordination. A WebSocket channel pushes real-time events (branch updates, pipeline status, agent output) to connected clients. Both local and remote TUI modes use the same API surface — in local mode, the server runs in-process.
 
 ## Views
 
-### Repo Mode
+### Repo Mode (F1–F6)
 
 | View | Key | Description |
 |------|-----|-------------|
@@ -53,9 +107,9 @@ See **[Repo Mode](docs/repo-mode.md)** and **[Project Mode](docs/project-mode.md
 | Worktrees | `g,w` | Worktree manager: create, remove, lock, unlock |
 | Pipeline | `g,p` | CI/CD status for GitHub Actions and GitLab CI |
 | Create PR | `g,c` | MR/PR creation with forge auto-detection |
-| Jira | `g,j` | Jira issue browser (if enabled) |
+| Jira | `g,j` | Jira issue browser |
 
-### Project Mode
+### Project Mode (F1–F3)
 
 | View | Key | Description |
 |------|-----|-------------|
@@ -72,21 +126,8 @@ See **[Repo Mode](docs/repo-mode.md)** and **[Project Mode](docs/project-mode.md
 - `/` — search/filter in list views
 - `?` — help overlay
 - `Esc` — back/cancel
-- Mouse clicks on tab bar supported
 
 All keybindings are configurable via `~/.config/git-frontend/keybinds.json`.
-
-## Features
-
-- **Agent pool** — manage concurrent Claude Code subprocesses with structured JSON streaming, follow-up messaging, cost tracking, and worktree isolation
-- **Multi-repo project management** — cross-repo branch comparison, status aggregation, context file injection for agents
-- **Branch comparison** that understands squash merges by comparing tree content, not commit SHAs
-- **AI-powered commit messages** via Claude Code integration
-- **Native GitHub/GitLab integration** — MR/PR creation, CI/CD pipeline monitoring, forge auth auto-detection
-- **Interactive rebase UI** — full pick/reword/edit/squash/fixup/drop support
-- **LRU cache** with TTL for expensive git operations
-- **Configurable keybindings** — global and per-view overrides via JSON
-- **Dark/light themes** with semantic git-aware colors
 
 ## Configuration
 
@@ -99,17 +140,6 @@ All keybindings are configurable via `~/.config/git-frontend/keybinds.json`.
   "forge": { "default_host": "github.com" },
   "ai": { "provider": "claude", "commit_style": "conventional" },
   "jira": { "enabled": false, "base_url": "https://company.atlassian.net" }
-}
-```
-
-### Keybindings (`~/.config/git-frontend/keybinds.json`)
-
-```json
-{
-  "global": { "quit": "ctrl+q" },
-  "views": {
-    "branches": { "checkout": "enter", "delete": "d" }
-  }
 }
 ```
 
@@ -129,20 +159,6 @@ All keybindings are configurable via `~/.config/git-frontend/keybinds.json`.
   }
 }
 ```
-
-Generate a project config by scanning a directory:
-
-```bash
-# Scan and print config to stdout (pipe-friendly)
-git-frontend --generate-config-from-dir ~/code/my-org
-
-# Scan current directory and add to projects config
-git-frontend --init
-```
-
-## API
-
-The server exposes a REST + WebSocket API. See **[Architecture](docs/architecture.md)** for endpoint reference.
 
 ## Build
 
@@ -164,6 +180,7 @@ make clean    # Remove build artifacts
 - **WebSocket**: [gorilla/websocket](https://github.com/gorilla/websocket)
 - **Git**: Native `git` CLI wrapper (no libgit2)
 - **Forge**: `gh` and `glab` CLI integration
+- **Agents**: Claude Code subprocess management
 
 See [tech-decision.md](docs/tech-decision.md) for why Go over Rust.
 
