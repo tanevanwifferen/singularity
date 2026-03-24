@@ -37,3 +37,8 @@ install: build ## Install binary to GOPATH/bin
 # Development helpers
 deps: ## Download dependencies
 	go mod download
+
+setup: ## Install git hooks (works for main repo and all worktrees)
+	cp .githooks/pre-commit .git/hooks/pre-commit
+	chmod +x .git/hooks/pre-commit
+	@echo "Git hooks installed"

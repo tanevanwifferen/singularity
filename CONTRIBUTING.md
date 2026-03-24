@@ -2,13 +2,13 @@
 
 ## Dev Setup
 
-After cloning, enable the git hooks:
+After cloning, install the git hooks:
 
 ```bash
-git config core.hooksPath .githooks
+make setup
 ```
 
-This installs a pre-commit hook that auto-runs `go fmt` on staged Go files before each commit.
+This copies the pre-commit hook into `.git/hooks/`, which is shared across all worktrees. It auto-runs `go fmt` on staged Go files before each commit.
 
 ## Useful Commands
 
