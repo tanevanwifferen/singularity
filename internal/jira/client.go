@@ -116,7 +116,7 @@ func (c *Client) post(path string, payload interface{}) ([]byte, error) {
 	}
 
 	switch resp.StatusCode {
-	case http.StatusOK:
+	case http.StatusOK, http.StatusCreated:
 		return body, nil
 	case http.StatusTooManyRequests:
 		return nil, fmt.Errorf("jira: rate limited (429) — retry after a moment")
@@ -129,6 +129,102 @@ func (c *Client) post(path string, payload interface{}) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("jira: unexpected status %d: %s", resp.StatusCode, string(body))
 	}
+}
+
+// put performs a PUT request with a JSON body and returns the response body.
+func (c *Client) put(path string, payload interface{}) ([]byte, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("jira: failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPut, c.baseURL+path, bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("jira: failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", c.authHeader)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("jira: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("jira: failed to read response: %w", err)
+	}
+
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusNoContent:
+		return body, nil
+	case http.StatusTooManyRequests:
+		return nil, fmt.Errorf("jira: rate limited (429) — retry after a moment")
+	case http.StatusUnauthorized:
+		return nil, fmt.Errorf("jira: authentication failed — check email/token")
+	case http.StatusForbidden:
+		return nil, fmt.Errorf("jira: forbidden — insufficient permissions")
+	case http.StatusNotFound:
+		return nil, fmt.Errorf("jira: resource not found")
+	default:
+		return nil, fmt.Errorf("jira: unexpected status %d: %s", resp.StatusCode, string(body))
+	}
+}
+
+// UpdateFields updates arbitrary fields on an issue via PUT /rest/api/2/issue/{key}.
+func (c *Client) UpdateFields(key string, fields map[string]interface{}) error {
+	_, err := c.put("/rest/api/2/issue/"+url.PathEscape(key), map[string]interface{}{"fields": fields})
+	return err
+}
+
+// AddComment posts a plain-text comment to an issue.
+func (c *Client) AddComment(key string, body string) error {
+	_, err := c.post("/rest/api/2/issue/"+url.PathEscape(key)+"/comment", map[string]interface{}{"body": body})
+	return err
+}
+
+// CreateIssue creates a new issue and returns the created issue with Key, Summary, and Type populated.
+func (c *Client) CreateIssue(project, issueType, summary, description, priority string) (*Issue, error) {
+	payload := map[string]interface{}{
+		"fields": map[string]interface{}{
+			"project":     map[string]interface{}{"key": project},
+			"issuetype":   map[string]interface{}{"name": issueType},
+			"summary":     summary,
+			"description": description,
+			"priority":    map[string]interface{}{"name": priority},
+		},
+	}
+
+	raw, err := c.post("/rest/api/2/issue", payload)
+	if err != nil {
+		return nil, err
+	}
+
+	var created struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(raw, &created); err != nil {
+		return nil, fmt.Errorf("jira: failed to parse create issue response: %w", err)
+	}
+
+	return &Issue{
+		Key:     created.Key,
+		Summary: summary,
+		Type:    issueType,
+	}, nil
+}
+
+// LinkIssues creates an issue link between two issues.
+func (c *Client) LinkIssues(inwardKey, outwardKey, linkType string) error {
+	payload := map[string]interface{}{
+		"type":         map[string]interface{}{"name": linkType},
+		"inwardIssue":  map[string]interface{}{"key": inwardKey},
+		"outwardIssue": map[string]interface{}{"key": outwardKey},
+	}
+	_, err := c.post("/rest/api/2/issueLink", payload)
+	return err
 }
 
 // get performs a GET request and returns the response body.
