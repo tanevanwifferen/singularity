@@ -195,21 +195,19 @@ func (v *DiffView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "up", "k":
-			if v.showDiff && v.diffNavMode {
+			if v.diffNavMode {
 				// Scroll up in diff view
 				if v.diffScrollOffset > 0 {
 					v.diffScrollOffset--
 				}
 			} else if v.selectedIdx > 0 {
 				v.selectedIdx--
-				v.showDiff = false
-				v.currentDiff = ""
-				v.parsedDiffLines = nil
 				v.diffScrollOffset = 0
-				v.diffNavMode = false
+				v.loadFileDiff()
+				v.showDiff = true
 			}
 		case "down", "j":
-			if v.showDiff && v.diffNavMode {
+			if v.diffNavMode {
 				// Scroll down in diff view
 				maxScroll := len(v.parsedDiffLines) - (v.height - 20)
 				if maxScroll < 0 {
@@ -220,11 +218,9 @@ func (v *DiffView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			} else if v.selectedIdx < len(v.files)-1 {
 				v.selectedIdx++
-				v.showDiff = false
-				v.currentDiff = ""
-				v.parsedDiffLines = nil
 				v.diffScrollOffset = 0
-				v.diffNavMode = false
+				v.loadFileDiff()
+				v.showDiff = true
 			}
 		case "g":
 			// g = go to top
@@ -241,20 +237,9 @@ func (v *DiffView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				v.diffScrollOffset = maxScroll
 			}
 		case "enter":
-			// Toggle diff content view
-			if v.selectedIdx < len(v.files) {
-				if v.showDiff {
-					v.showDiff = false
-					v.currentDiff = ""
-					v.parsedDiffLines = nil
-					v.diffScrollOffset = 0
-					v.diffNavMode = false
-				} else {
-					v.loadFileDiff()
-					v.showDiff = true
-					v.diffNavMode = true
-					v.diffScrollOffset = 0
-				}
+			// Toggle diff scroll/nav mode
+			if v.selectedIdx < len(v.files) && v.showDiff {
+				v.diffNavMode = !v.diffNavMode
 			}
 		case "tab":
 			// Switch focus between file list and diff
@@ -276,12 +261,8 @@ func (v *DiffView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return RefreshDoneMsg{}
 			}
 		case "esc":
-			// Close diff content and return to file list (don't exit to Overview)
-			if v.showDiff {
-				v.showDiff = false
-				v.currentDiff = ""
-				v.parsedDiffLines = nil
-				v.diffScrollOffset = 0
+			// Exit diff nav mode and return focus to file list
+			if v.diffNavMode {
 				v.diffNavMode = false
 				v.focusFileList = true
 			}
@@ -299,6 +280,10 @@ func (v *DiffView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case RefreshDoneMsg:
 		v.loading = false
+		if len(v.files) > 0 {
+			v.loadFileDiff()
+			v.showDiff = true
+		}
 	}
 
 	return v, nil
