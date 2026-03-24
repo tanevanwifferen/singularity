@@ -401,6 +401,10 @@ func (v *ProjectSyncView) View() string {
 	v.renderRepoStatuses(&s, th)
 	s.WriteString("\n")
 
+	// Legend
+	v.renderLegend(&s, th)
+	s.WriteString("\n")
+
 	// Confirmation dialog
 	if v.showConfirm {
 		s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf(" %s ", v.confirmMessage)))
@@ -488,6 +492,21 @@ func (v *ProjectSyncView) renderRepoStatuses(s *strings.Builder, th theme.Theme)
 		s.WriteString(line.String())
 		s.WriteString("\n")
 	}
+}
+
+func (v *ProjectSyncView) renderLegend(s *strings.Builder, th theme.Theme) {
+	s.WriteString(th.MutedTextStyle.Render(" Legend: "))
+	s.WriteString(th.DashboardErrorStyle.Render("●"))
+	s.WriteString(th.MutedTextStyle.Render(" dirty  "))
+	s.WriteString(th.StatsStyle.Render("✓"))
+	s.WriteString(th.MutedTextStyle.Render(" synced  "))
+	s.WriteString(th.DashboardAccentStyle.Render("↑"))
+	s.WriteString(th.MutedTextStyle.Render(" ahead  "))
+	s.WriteString(th.DashboardErrorStyle.Render("↓"))
+	s.WriteString(th.MutedTextStyle.Render(" behind  "))
+	s.WriteString(th.MutedTextStyle.Render("⊘"))
+	s.WriteString(th.MutedTextStyle.Render(" no upstream"))
+	s.WriteString("\n")
 }
 
 func (v *ProjectSyncView) renderLog(s *strings.Builder, th theme.Theme) {
