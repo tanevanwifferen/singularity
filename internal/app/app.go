@@ -393,6 +393,9 @@ func (m *Model) initProjectRouter() {
 	}
 
 	// Git operations submenu (accessible via "g" key)
+	projectSyncView := views.NewProjectSyncView(m.proj)
+	router.Register("ProjectSync", projectSyncView)
+
 	syncView := views.NewSyncView(defaultRepoPath)
 	router.Register("Sync", syncView)
 
@@ -416,6 +419,7 @@ func (m *Model) initProjectRouter() {
 	router.Register("CreatePR", prView)
 
 	projGitItems := []components.SubmenuItem{
+		{Key: "a", Label: "Sync All Repos", ViewName: "ProjectSync"},
 		{Key: "s", Label: "Sync (push/pull/fetch)", ViewName: "Sync"},
 		{Key: "b", Label: "Branch Compare", ViewName: "BranchCompare"},
 		{Key: "t", Label: "Stashes", ViewName: "Stashes"},
