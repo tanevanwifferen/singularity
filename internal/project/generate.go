@@ -56,6 +56,39 @@ func PrintGeneratedConfig(cfg *ProjectConfig) error {
 	return enc.Encode(cfg)
 }
 
+// InitProjectFromDir scans dir for git repos and merges the resulting project
+// into the projects config at configPath. Creates the file if it doesn't exist.
+// Returns the project key and the number of repos added.
+func InitProjectFromDir(dir, configPath string) (projectKey string, repoCount int, err error) {
+	generated, err := GenerateConfigFromDir(dir)
+	if err != nil {
+		return "", 0, err
+	}
+
+	// Load existing config or start fresh.
+	existing := &ProjectConfig{Projects: map[string]ProjectDef{}}
+	if data, readErr := os.ReadFile(configPath); readErr == nil {
+		if jsonErr := json.Unmarshal(data, existing); jsonErr != nil {
+			return "", 0, fmt.Errorf("existing config at %q is invalid JSON: %w", configPath, jsonErr)
+		}
+		if existing.Projects == nil {
+			existing.Projects = map[string]ProjectDef{}
+		}
+	}
+
+	// Merge: each key from generated goes into existing (overwrite if present).
+	for key, proj := range generated.Projects {
+		existing.Projects[key] = proj
+		projectKey = key
+		repoCount = len(proj.Repos)
+	}
+
+	if err := SaveConfig(configPath, existing); err != nil {
+		return "", 0, err
+	}
+	return projectKey, repoCount, nil
+}
+
 // findGitRepos walks root and collects RepoDefs for every directory that
 // contains a .git entry. It does not descend into git repos themselves.
 func findGitRepos(root string) ([]RepoDef, error) {

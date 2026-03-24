@@ -19,10 +19,28 @@ func main() {
 	repoPath := flag.String("repo", "", "Repository path")
 	clientURL := flag.String("client", "", "Connect to server at URL (client mode)")
 	projectConfig := flag.String("project-config", "", "Path to project config file (multi-repo)")
-	generateConfigDir := flag.String("generate-config-from-dir", "", "Scan directory for git repos and print a project config JSON to stdout")
+	initFlag := flag.Bool("init", false, "Scan current directory for git repos and add as a project to the projects config")
+	generateConfigDir := flag.String("generate-config-from-dir", "", "Scan directory for git repos and print a project config JSON to stdout (pipe-friendly)")
 	flag.Parse()
 
-	// Config generation mode: scan dir, print JSON, exit.
+	// --init: scan cwd, merge into projects config, exit.
+	if *initFlag {
+		cwd, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: cannot determine current directory: %v\n", err)
+			os.Exit(1)
+		}
+		cfgPath := project.GetDefaultConfigPath()
+		key, count, err := project.InitProjectFromDir(cwd, cfgPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Added project %q with %d repo(s) to %s\n", key, count, cfgPath)
+		return
+	}
+
+	// --generate-config-from-dir: scan dir, print JSON to stdout, exit.
 	if *generateConfigDir != "" {
 		cfg, err := project.GenerateConfigFromDir(*generateConfigDir)
 		if err != nil {
