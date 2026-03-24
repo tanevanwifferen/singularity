@@ -287,8 +287,9 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 			eng := v.eng
 			proj := v.proj
 			repoPath := v.repoPath
+			jiraURL := v.cfg.BaseURL + "/browse/" + issue.Key
 			return func() tea.Msg {
-				return startJiraWorkflow(issue, branch, eng, proj, repoPath)
+				return startJiraWorkflow(issue, branch, eng, proj, repoPath, jiraURL)
 			}
 		case "n", "esc":
 			v.workflowStep = workflowStepChoose
@@ -332,7 +333,7 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 }
 
 // startJiraWorkflow creates worktrees and spawns an agent.
-func startJiraWorkflow(issue *jira.Issue, branch string, eng *engine.Engine, proj *project.Project, repoPath string) jiraWorkflowDoneMsg {
+func startJiraWorkflow(issue *jira.Issue, branch string, eng *engine.Engine, proj *project.Project, repoPath string, jiraURL string) jiraWorkflowDoneMsg {
 	if eng == nil {
 		return jiraWorkflowDoneMsg{err: fmt.Errorf("agent engine not available")}
 	}
@@ -343,6 +344,7 @@ func startJiraWorkflow(issue *jira.Issue, branch string, eng *engine.Engine, pro
 	if proj != nil {
 		baseDir := filepath.Join(os.TempDir(), "git-frontend-workflows")
 		fw := project.NewFeatureWorkflow(proj, branch, baseDir)
+		fw.JiraURL = jiraURL
 		if err := fw.CreateAllWorktrees(); err != nil {
 			return jiraWorkflowDoneMsg{err: fmt.Errorf("create worktrees: %w", err)}
 		}
