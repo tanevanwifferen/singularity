@@ -109,6 +109,10 @@ type JiraView struct {
 	aiOutputEntries []engine.OutputEntry
 	aiOutputOffset  int
 	approvalView    *ApprovalView
+
+	// Text-input for create mode without a ticket
+	showTextInput bool
+	textInput     string
 }
 
 // NewJiraView creates a new Jira issues view.
@@ -135,7 +139,7 @@ func (v *JiraView) SetRepoPath(path string) { v.repoPath = path }
 
 // CapturesInput reports whether the view is consuming all keyboard input.
 func (v *JiraView) CapturesInput() bool {
-	return v.searchMode || v.showWorkflowConfirm || v.aiMode != "" || v.approvalView != nil
+	return v.searchMode || v.showTextInput || v.showWorkflowConfirm || v.aiMode != "" || v.approvalView != nil
 }
 
 // Init loads issues on first display.
@@ -301,6 +305,11 @@ func (v *JiraView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, nil
 		}
 
+		// Text input for create mode
+		if v.showTextInput {
+			return v, v.handleTextInput(msg)
+		}
+
 		// Search / JQL input mode
 		if v.searchMode {
 			return v, v.handleSearchInput(msg)
@@ -319,10 +328,13 @@ func (v *JiraView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "c":
-			// Create stories from selected ticket
+			// Create stories from selected ticket, or from raw text if none selected
 			if item, idx := v.filter.SelectedItem(); idx >= 0 {
 				return v, v.startAIMode("create", &item)
 			}
+			v.showTextInput = true
+			v.textInput = ""
+			return v, nil
 
 		case "s":
 			v.searchMode = true
@@ -735,6 +747,66 @@ func (v *JiraView) handleSearchInput(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+func (v *JiraView) handleTextInput(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "enter":
+		text := strings.TrimSpace(v.textInput)
+		v.showTextInput = false
+		v.textInput = ""
+		if text == "" {
+			return nil
+		}
+		return v.startAIFromText(text)
+
+	case "esc":
+		v.showTextInput = false
+		v.textInput = ""
+
+	case "ctrl+w":
+		v.textInput = components.DeleteWordEnd(v.textInput)
+
+	case "backspace":
+		if len(v.textInput) > 0 {
+			v.textInput = v.textInput[:len(v.textInput)-1]
+		}
+
+	default:
+		if msg.Paste && len(msg.Runes) > 0 {
+			v.textInput += string(msg.Runes)
+		} else if len(msg.Runes) == 1 {
+			r := msg.Runes[0]
+			if r >= 32 {
+				v.textInput += string(r)
+			}
+		}
+	}
+	return nil
+}
+
+func (v *JiraView) startAIFromText(text string) tea.Cmd {
+	v.aiMode = "create"
+	v.aiAgentID = ""
+	v.aiOutputEntries = nil
+	v.aiOutputOffset = 0
+	v.approvalView = nil
+
+	eng := v.eng
+	repoPath := v.repoPath
+	if repoPath == "" && v.proj != nil && len(v.proj.Repos) > 0 {
+		repoPath = v.proj.Repos[0].Path
+	}
+
+	project := v.cfg.DefaultProject
+
+	return func() tea.Msg {
+		if eng == nil {
+			return jiraAIStartedMsg{err: fmt.Errorf("agent engine not available"), mode: "create"}
+		}
+		id, err := jira.CreateStories(eng, nil, text, project, repoPath)
+		return jiraAIStartedMsg{agentID: id, mode: "create", err: err}
+	}
+}
+
 // View renders the Jira issues view.
 func (v *JiraView) View() string {
 	th := theme.GetTheme()
@@ -805,6 +877,16 @@ func (v *JiraView) View() string {
 	if v.showDetail && v.detailIssue != nil {
 		s.WriteString(v.renderDetail(v.detailIssue))
 		return s.String()
+	}
+
+	// Text input for create mode
+	if v.showTextInput {
+		s.WriteString(th.DashboardTitle.Render(" Create Stories from Text "))
+		s.WriteString("\n")
+		s.WriteString(fmt.Sprintf(" > %s█", v.textInput))
+		s.WriteString("\n")
+		s.WriteString(th.Help.Render(" Paste or type a requirement, then Enter to start · Esc: cancel "))
+		s.WriteString("\n\n")
 	}
 
 	// Search input
