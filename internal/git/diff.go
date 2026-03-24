@@ -657,10 +657,15 @@ func normalizeStatus(status string) string {
 // GetCommitFileDiff returns the diff content for a specific file in a commit.
 // Works for merge commits and initial commits.
 func GetCommitFileDiff(repoPath, hash, filePath string) (string, error) {
-	cmd := exec.Command("git", "-C", repoPath, "show", hash, "--", filePath)
+	cmd := exec.Command("git", "-C", repoPath, "diff-tree", "-p", "--no-commit-id", hash, "--", filePath)
 	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to get commit file diff: %w", err)
+	if err != nil || len(strings.TrimSpace(string(output))) == 0 {
+		// Fallback for initial commits or merge commits: use show without metadata
+		cmd = exec.Command("git", "-C", repoPath, "show", "--format=", hash, "--", filePath)
+		output, err = cmd.Output()
+		if err != nil {
+			return "", fmt.Errorf("failed to get commit file diff: %w", err)
+		}
 	}
 	return string(output), nil
 }
