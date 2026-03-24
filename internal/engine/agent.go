@@ -417,16 +417,21 @@ func (a *Agent) processResultEvent(event map[string]interface{}) {
 		a.TotalCostUSD = costUSD
 	}
 	// Transition state on result event since the process may not exit
-	// (stream-json input mode keeps it alive for follow-ups)
+	// (stream-json input mode keeps it alive for follow-ups).
+	// When using a worktree (non-error), defer AgentComplete until after the
+	// merge goroutine finishes so the branch shows as running during rebase/retry.
 	if a.State == AgentRunning || a.State == AgentStarting {
-		now := time.Now()
-		a.EndedAt = &now
 		if isError {
+			now := time.Now()
+			a.EndedAt = &now
 			a.State = AgentError
 			a.Error = result
-		} else {
+		} else if !a.useWorktree {
+			now := time.Now()
+			a.EndedAt = &now
 			a.State = AgentComplete
 		}
+		// useWorktree && !isError: state stays AgentRunning until merge completes
 	}
 	a.mu.Unlock()
 
@@ -454,6 +459,9 @@ func (a *Agent) processResultEvent(event map[string]interface{}) {
 			mergeResult := a.mergeWorktreeBack()
 			a.mu.Lock()
 			a.MergeResult = mergeResult
+			now := time.Now()
+			a.EndedAt = &now
+			a.State = AgentComplete
 			a.mu.Unlock()
 		}()
 	} else if a.useWorktree && isError {
