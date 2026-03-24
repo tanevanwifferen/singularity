@@ -264,6 +264,7 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 	case workflowStepChoose:
 		switch msg.String() {
 		case "n":
+			v.workflowExtraMsg = ""
 			v.workflowStep = workflowStepNewConfirm
 		case "e":
 			repoPath := v.repoPath
@@ -288,76 +289,21 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 
 	case workflowStepNewConfirm:
 		switch msg.String() {
-		case "y", "enter":
+		case "enter":
+			issue := v.workflowIssue
+			branch := v.workflowBranch
+			eng := v.eng
+			proj := v.proj
+			repoPath := v.repoPath
+			jiraURL := v.cfg.BaseURL + "/browse/" + issue.Key
+			extraMsg := v.workflowExtraMsg
 			v.workflowFromExisting = false
+			return func() tea.Msg {
+				return startJiraWorkflow(issue, branch, eng, proj, repoPath, jiraURL, extraMsg)
+			}
+		case "esc":
+			v.workflowStep = workflowStepChoose
 			v.workflowExtraMsg = ""
-			v.workflowStep = workflowStepExtraMsg
-		case "n", "esc":
-			v.workflowStep = workflowStepChoose
-		}
-
-	case workflowStepSelectWT:
-		switch msg.String() {
-		case "up", "k":
-			if v.selectedWTIdx > 0 {
-				v.selectedWTIdx--
-			}
-		case "down", "j":
-			if v.selectedWTIdx < len(v.existingWTs)-1 {
-				v.selectedWTIdx++
-			}
-		case "enter":
-			if len(v.existingWTs) > 0 {
-				v.workflowBranch = v.existingWTs[v.selectedWTIdx].Branch
-				v.workflowStep = workflowStepExistConfirm
-			}
-		case "esc":
-			v.workflowStep = workflowStepChoose
-		}
-
-	case workflowStepExistConfirm:
-		switch msg.String() {
-		case "y", "enter":
-			if len(v.existingWTs) > 0 && v.selectedWTIdx < len(v.existingWTs) {
-				v.workflowFromExisting = true
-				v.workflowExtraMsg = ""
-				v.workflowStep = workflowStepExtraMsg
-			}
-		case "n", "esc":
-			v.workflowStep = workflowStepSelectWT
-		}
-
-	case workflowStepExtraMsg:
-		switch msg.String() {
-		case "enter":
-			if v.workflowFromExisting {
-				if len(v.existingWTs) > 0 && v.selectedWTIdx < len(v.existingWTs) {
-					wt := v.existingWTs[v.selectedWTIdx]
-					issue := v.workflowIssue
-					eng := v.eng
-					extraMsg := v.workflowExtraMsg
-					return func() tea.Msg {
-						return startJiraWorkflowExisting(issue, wt.Path, eng, extraMsg)
-					}
-				}
-			} else {
-				issue := v.workflowIssue
-				branch := v.workflowBranch
-				eng := v.eng
-				proj := v.proj
-				repoPath := v.repoPath
-				jiraURL := v.cfg.BaseURL + "/browse/" + issue.Key
-				extraMsg := v.workflowExtraMsg
-				return func() tea.Msg {
-					return startJiraWorkflow(issue, branch, eng, proj, repoPath, jiraURL, extraMsg)
-				}
-			}
-		case "esc":
-			if v.workflowFromExisting {
-				v.workflowStep = workflowStepExistConfirm
-			} else {
-				v.workflowStep = workflowStepNewConfirm
-			}
 		case "ctrl+w":
 			v.workflowExtraMsg = components.DeleteWordEnd(v.workflowExtraMsg)
 		case "backspace":
@@ -374,6 +320,60 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 				}
 			}
 		}
+
+	case workflowStepSelectWT:
+		switch msg.String() {
+		case "up", "k":
+			if v.selectedWTIdx > 0 {
+				v.selectedWTIdx--
+			}
+		case "down", "j":
+			if v.selectedWTIdx < len(v.existingWTs)-1 {
+				v.selectedWTIdx++
+			}
+		case "enter":
+			if len(v.existingWTs) > 0 {
+				v.workflowBranch = v.existingWTs[v.selectedWTIdx].Branch
+				v.workflowExtraMsg = ""
+				v.workflowStep = workflowStepExistConfirm
+			}
+		case "esc":
+			v.workflowStep = workflowStepChoose
+		}
+
+	case workflowStepExistConfirm:
+		switch msg.String() {
+		case "enter":
+			if len(v.existingWTs) > 0 && v.selectedWTIdx < len(v.existingWTs) {
+				wt := v.existingWTs[v.selectedWTIdx]
+				issue := v.workflowIssue
+				eng := v.eng
+				extraMsg := v.workflowExtraMsg
+				v.workflowFromExisting = true
+				return func() tea.Msg {
+					return startJiraWorkflowExisting(issue, wt.Path, eng, extraMsg)
+				}
+			}
+		case "esc":
+			v.workflowStep = workflowStepSelectWT
+			v.workflowExtraMsg = ""
+		case "ctrl+w":
+			v.workflowExtraMsg = components.DeleteWordEnd(v.workflowExtraMsg)
+		case "backspace":
+			if len(v.workflowExtraMsg) > 0 {
+				v.workflowExtraMsg = v.workflowExtraMsg[:len(v.workflowExtraMsg)-1]
+			}
+		default:
+			if msg.Paste && len(msg.Runes) > 0 {
+				v.workflowExtraMsg += string(msg.Runes)
+			} else if len(msg.Runes) == 1 {
+				r := msg.Runes[0]
+				if r >= 32 {
+					v.workflowExtraMsg += string(r)
+				}
+			}
+		}
+
 	}
 	return nil
 }
@@ -623,11 +623,15 @@ func (v *JiraView) renderWorkflowModal() string {
 		}, mw)
 
 	case workflowStepNewConfirm:
+		input := v.workflowExtraMsg + "█"
 		return renderModal("New Worktree", []string{
 			fmt.Sprintf("Ticket: %s", issue.Key),
 			fmt.Sprintf("Branch: %s", v.workflowBranch),
 			"",
-			"Create worktree + spawn agent? (y/n)",
+			"Custom instructions (optional):",
+			input,
+			"",
+			"Enter: start · Esc: cancel",
 		}, mw)
 
 	case workflowStepSelectWT:
@@ -659,26 +663,18 @@ func (v *JiraView) renderWorkflowModal() string {
 		if label == "" {
 			label = filepath.Base(wt.Path)
 		}
+		input := v.workflowExtraMsg + "█"
 		return renderModal("Run on Worktree", []string{
 			fmt.Sprintf("Ticket: %s", issue.Key),
 			fmt.Sprintf("Worktree: %s", truncate(label, mw-12)),
 			fmt.Sprintf("Path:     %s", truncate(wt.Path, mw-10)),
 			"",
-			"Spawn agent on this worktree? (y/n)",
-		}, mw)
-
-	case workflowStepExtraMsg:
-		input := v.workflowExtraMsg + "█"
-		return renderModal("Extra Instructions (optional)", []string{
-			fmt.Sprintf("Ticket: %s", issue.Key),
-			"",
-			"Add any extra instructions for the agent.",
-			"Leave blank and press Enter to skip.",
-			"",
+			"Custom instructions (optional):",
 			input,
 			"",
-			"Enter: confirm · Esc: back",
+			"Enter: start · Esc: cancel",
 		}, mw)
+
 	}
 	return ""
 }
