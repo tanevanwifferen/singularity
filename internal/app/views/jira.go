@@ -8,13 +8,13 @@ import (
 	"strings"
 	"unicode"
 
-	"git-frontend/internal/app/components"
-	"git-frontend/internal/config"
-	"git-frontend/internal/engine"
-	"git-frontend/internal/git"
-	"git-frontend/internal/jira"
-	"git-frontend/internal/project"
-	"git-frontend/internal/theme"
+	"singularity/internal/app/components"
+	"singularity/internal/config"
+	"singularity/internal/engine"
+	"singularity/internal/git"
+	"singularity/internal/jira"
+	"singularity/internal/project"
+	"singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -388,7 +388,7 @@ func startJiraWorkflow(issue *jira.Issue, branch string, eng *engine.Engine, pro
 
 	// Project mode: create worktrees across all repos via FeatureWorkflow
 	if proj != nil {
-		baseDir := filepath.Join(os.TempDir(), "git-frontend-workflows")
+		baseDir := filepath.Join(os.TempDir(), "singularity-workflows")
 		fw := project.NewFeatureWorkflow(proj, branch, baseDir)
 		fw.JiraURL = jiraURL
 		if err := fw.CreateAllWorktrees(); err != nil {

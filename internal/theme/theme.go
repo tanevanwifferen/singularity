@@ -12,7 +12,7 @@ const (
 	LightThemeType
 )
 
-// Theme colors for git-frontend TUI
+// Theme colors for singularity TUI
 type Theme struct {
 	Type ThemeType
 

@@ -1,13 +1,13 @@
 ---
 title: "Bead 002: Repo Skeleton & Tech Decision"
-labels: ["task", "git-frontend", "phase-1"]
+labels: ["task", "singularity", "phase-1"]
 priority: "P1"
 estimate: 15
 ---
 
 ## Description
 
-Initialize the git-frontend project with tech stack decision and basic skeleton.
+Initialize the singularity project with tech stack decision and basic skeleton.
 
 ## Task
 
@@ -34,12 +34,12 @@ Initialize the git-frontend project with tech stack decision and basic skeleton.
 
 ## Context
 
-Project location: `/home/node/code/git-frontend`
-This is bead 002 of 16 in the git-frontend project.
+Project location: `/home/node/code/singularity`
+This is bead 002 of 16 in the singularity project.
 
 ## Constraints
 
 - Keep it simple - just scaffolding, no real features yet
 - Should take <15 minutes
 - Use Claude Code with opus model
-- All work committed to /home/node/code/git-frontend
+- All work committed to /home/node/code/singularity

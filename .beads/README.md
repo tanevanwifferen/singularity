@@ -1,6 +1,6 @@
 # Git Frontend - Project Beads
 
-**Project:** `/home/node/code/git-frontend`  
+**Project:** `/home/node/code/singularity`  
 **Spec:** `00-project-spec.md`  
 **Status:** Phase 1 - Foundation
 

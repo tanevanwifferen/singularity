@@ -1,6 +1,6 @@
 # Build output
 build/
-git-frontend
+singularity
 *.exe
 *.exe~
 *.dll

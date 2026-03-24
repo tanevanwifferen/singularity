@@ -1,6 +1,6 @@
 # Git Frontend - Project Beads Index
 
-This directory contains individual bead files for the git-frontend project.
+This directory contains individual bead files for the singularity project.
 
 ## Beads
 

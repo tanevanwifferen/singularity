@@ -7,15 +7,14 @@ A TUI-based git operations center built in Go with a server-client architecture.
 ```bash
 make build && make install
 
-# Single repo
-git-frontend
+# Single repo — open the current directory
+singularity
+
+# Single repo — explicit path
+singularity --repo ~/code/my-project
 
 # Multi-repo project mode
-git-frontend --project-config ~/.config/git-frontend/projects.json
-
-# Headless server + remote TUI client
-git-frontend --server
-git-frontend --client http://localhost:8080
+singularity --project-config ~/.config/singularity/projects.json
 ```
 
 ## Core Features
@@ -127,11 +126,11 @@ The server exposes a full REST API for repo operations, branch management, commi
 - `?` — help overlay
 - `Esc` — back/cancel
 
-All keybindings are configurable via `~/.config/git-frontend/keybinds.json`.
+All keybindings are configurable via `~/.config/singularity/keybinds.json`.
 
 ## Configuration
 
-### App Config (`~/.config/git-frontend/config.json`)
+### App Config (`~/.config/singularity/config.json`)
 
 ```json
 {
@@ -143,7 +142,18 @@ All keybindings are configurable via `~/.config/git-frontend/keybinds.json`.
 }
 ```
 
-### Projects (`~/.config/git-frontend/projects.json`)
+### Keybindings (`~/.config/singularity/keybinds.json`)
+
+```json
+{
+  "global": { "quit": "ctrl+q" },
+  "views": {
+    "branches": { "checkout": "enter", "delete": "d" }
+  }
+}
+```
+
+### Projects (`~/.config/singularity/projects.json`)
 
 ```json
 {
@@ -160,10 +170,25 @@ All keybindings are configurable via `~/.config/git-frontend/keybinds.json`.
 }
 ```
 
+Generate a project config by scanning a directory:
+
+```bash
+# Scan and print config to stdout (pipe-friendly)
+singularity --generate-config-from-dir ~/code/my-org
+
+# Scan current directory and add to projects config
+singularity --init
+```
+
+## API
+
+The server exposes a REST + WebSocket API. See **[Architecture](docs/architecture.md)** for endpoint reference.
+
+
 ## Build
 
 ```bash
-make build    # Compile to build/git-frontend
+make build    # Compile to build/singularity
 make install  # Install to GOPATH/bin
 make test     # Run tests
 make fmt      # Format code

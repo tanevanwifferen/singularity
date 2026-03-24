@@ -443,7 +443,7 @@ Each task is designed to be implementable in 1-2 hours. Tasks are ordered by dep
 #### 4.4 — Add keyboard shortcut customization
 **File**: `internal/app/keybinds.go` (new)
 - Default keybind map defined in code
-- Optional JSON config file (`~/.config/git-frontend/keybinds.json`)
+- Optional JSON config file (`~/.config/singularity/keybinds.json`)
 - Config overrides defaults
 - Help overlay reads from resolved keybind map
 - **Acceptance**: User can remap keys via config file
@@ -466,7 +466,7 @@ Each task is designed to be implementable in 1-2 hours. Tasks are ordered by dep
 
 #### 4.7 — Add configuration system
 **File**: `internal/config/config.go` (extend)
-- YAML/JSON config: `~/.config/git-frontend/config.json`
+- YAML/JSON config: `~/.config/singularity/config.json`
 - Options: theme (dark/light), default view, refresh interval, max log depth
 - CLI flags override config file
 - **Acceptance**: App reads config on startup and applies settings

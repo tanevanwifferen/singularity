@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"git-frontend/internal/git"
+	"singularity/internal/git"
 )
 
 // Project represents a loaded multi-repo project with live state

@@ -5,11 +5,11 @@ import (
 	"strings"
 	"time"
 
-	"git-frontend/internal/app/components"
-	"git-frontend/internal/config"
-	"git-frontend/internal/engine"
-	"git-frontend/internal/jira"
-	"git-frontend/internal/theme"
+	"singularity/internal/app/components"
+	"singularity/internal/config"
+	"singularity/internal/engine"
+	"singularity/internal/jira"
+	"singularity/internal/theme"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"

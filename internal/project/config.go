@@ -100,14 +100,14 @@ func SaveConfig(path string, cfg *ProjectConfig) error {
 func GetDefaultConfigPath() string {
 	usr, err := user.Current()
 	if err != nil {
-		return ".git-frontend-projects.json"
+		return ".singularity-projects.json"
 	}
 
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "git-frontend", "projects.json")
+		return filepath.Join(xdg, "singularity", "projects.json")
 	}
 
-	return filepath.Join(usr.HomeDir, ".config", "git-frontend", "projects.json")
+	return filepath.Join(usr.HomeDir, ".config", "singularity", "projects.json")
 }
 
 // Validate checks that the config is well-formed

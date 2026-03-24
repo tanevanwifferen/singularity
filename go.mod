@@ -1,4 +1,4 @@
-module git-frontend
+module singularity
 
 go 1.24.2
 

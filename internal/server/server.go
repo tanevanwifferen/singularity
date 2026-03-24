@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"git-frontend/internal/api"
-	"git-frontend/internal/engine"
-	"git-frontend/internal/git"
-	"git-frontend/internal/project"
+	"singularity/internal/api"
+	"singularity/internal/engine"
+	"singularity/internal/git"
+	"singularity/internal/project"
 	"github.com/gorilla/websocket"
 )
 
@@ -157,7 +157,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	resp := api.StatusResponse{
 		Version: version,
-		Server:  "git-frontend-api",
+		Server:  "singularity-api",
 	}
 
 	if s.repoPath != "" {

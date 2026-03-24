@@ -121,7 +121,7 @@ func TestDetectScope(t *testing.T) {
 	}{
 		{"+++ b/internal/git/repo.go", "git"},
 		{"+++ b/internal/app/app.go", "app"},
-		{"+++ b/cmd/git-frontend/main.go", "cli"},
+		{"+++ b/cmd/singularity/main.go", "cli"},
 	}
 
 	for _, tt := range tests {

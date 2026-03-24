@@ -244,10 +244,10 @@ func GetDefaultKeybindsPath() string {
 	}
 
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "git-frontend", "keybinds.json")
+		return filepath.Join(xdg, "singularity", "keybinds.json")
 	}
 
-	return filepath.Join(usr.HomeDir, ".config", "git-frontend", "keybinds.json")
+	return filepath.Join(usr.HomeDir, ".config", "singularity", "keybinds.json")
 }
 
 // loadConfig loads keybindings from a JSON config file

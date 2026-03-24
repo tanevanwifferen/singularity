@@ -47,9 +47,9 @@ Rust is an excellent choice for many things, but for this specific project:
 ## Project Structure
 
 ```
-git-frontend/
+singularity/
 ├── cmd/
-│   └── git-frontend/
+│   └── singularity/
 │       └── main.go          # Entry point
 ├── internal/
 │   ├── app/                 # Bubbletea app state & logic

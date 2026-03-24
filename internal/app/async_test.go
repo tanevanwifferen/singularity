@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"git-frontend/internal/git"
+	"singularity/internal/git"
 )
 
 // TestAsyncManager_Creation tests basic AsyncManager creation
@@ -421,7 +421,7 @@ func TestBranchComparisonAsync(t *testing.T) {
 	m := NewAsyncManager()
 
 	// Load repo first to get a valid branch
-	repo, err := git.OpenRepo("/home/node/code/git-frontend")
+	repo, err := git.OpenRepo("/home/node/code/singularity")
 	if err != nil {
 		t.Skipf("skipping test - no git repo available: %v", err)
 	}
@@ -436,7 +436,7 @@ func TestBranchComparisonAsync(t *testing.T) {
 		branchB = repo.Branches[1].Name
 	}
 
-	cmd := RunAsyncBranchComparison("/home/node/code/git-frontend", branchA, branchB, m)
+	cmd := RunAsyncBranchComparison("/home/node/code/singularity", branchA, branchB, m)
 	msg := cmd()
 
 	if msg == nil {

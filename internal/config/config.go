@@ -145,15 +145,15 @@ func SaveConfig(path string, config *Config) error {
 func GetConfigPath() string {
 	usr, err := user.Current()
 	if err != nil {
-		return ".git-frontend.json"
+		return ".singularity.json"
 	}
 
 	// Use XDG_CONFIG_HOME if set
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "git-frontend", "config.json")
+		return filepath.Join(xdg, "singularity", "config.json")
 	}
 
-	return filepath.Join(usr.HomeDir, ".config", "git-frontend", "config.json")
+	return filepath.Join(usr.HomeDir, ".config", "singularity", "config.json")
 }
 
 // LoadDefaultConfig loads the default configuration

@@ -1,6 +1,6 @@
 .PHONY: build run clean test help
 
-BINARY_NAME=git-frontend
+BINARY_NAME=singularity
 BUILD_DIR=build
 VERSION=0.0.1
 
@@ -12,10 +12,10 @@ help: ## Show this help message
 
 build: ## Build the binary
 	@echo "Building $(BINARY_NAME) v$(VERSION)..."
-	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/git-frontend
+	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/singularity
 
 run: ## Run the application
-	go run ./cmd/git-frontend
+	go run ./cmd/singularity
 
 clean: ## Clean build artifacts
 	@echo "Cleaning build artifacts..."

@@ -2,7 +2,7 @@
 
 ## Overview
 
-git-frontend uses a layered architecture. In local mode the TUI talks directly to the git and engine layers. In server mode the TUI (or a browser) talks to a daemon over HTTP/WebSocket.
+singularity uses a layered architecture. In local mode the TUI talks directly to the git and engine layers. In server mode the TUI (or a browser) talks to a daemon over HTTP/WebSocket.
 
 ```
 ┌─────────────────────────────────────────┐
@@ -41,7 +41,7 @@ Terminal UI built with Bubble Tea (Elm-inspired model-view-update). In local mod
 
 ### API Server (`internal/server/`)
 
-Started with `git-frontend --server`. Exposes:
+Started with `singularity --server`. Exposes:
 
 - **REST API** — JSON endpoints under `/api/` (see endpoint reference below)
 - **WebSocket** — `/ws` for real-time events (repo updates, branch changes, agent output)
@@ -95,7 +95,7 @@ Responsibilities:
 
 ### Configuration (`internal/config/`)
 
-Loads from `~/.config/git-frontend/config.json`. Supports:
+Loads from `~/.config/singularity/config.json`. Supports:
 - Multiple named profiles
 - Theme customization (dark/light, accent colors)
 - Git settings (default branch, auto-fetch interval)
@@ -185,8 +185,8 @@ main()
 ## Project Structure
 
 ```
-git-frontend/
-├── cmd/git-frontend/        # Entry point & CLI flags
+singularity/
+├── cmd/singularity/        # Entry point & CLI flags
 ├── internal/
 │   ├── app/                 # Bubbletea TUI application
 │   │   ├── views/           # View implementations
