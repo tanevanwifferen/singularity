@@ -83,7 +83,7 @@ type Agent struct {
 	TotalCostUSD float64 `json:"total_cost_usd,omitempty"`
 
 	// Smart routing result (nil if not routed)
-	RouteResult *RouteResult `json:"route_result,omitempty"`
+	RouteResult *ClassificationResult `json:"route_result,omitempty"`
 
 	// sessionID is the actual session ID assigned by Claude (from system/init event)
 	sessionID string
@@ -744,7 +744,7 @@ type AgentSnapshot struct {
 	ExitCode     int
 	Error        string
 	TotalCostUSD float64
-	RouteResult  *RouteResult
+	RouteResult  *ClassificationResult
 	MergeResult  string
 }
 

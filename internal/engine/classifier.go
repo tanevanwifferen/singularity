@@ -18,8 +18,8 @@ const (
 	CategoryImplementation PromptCategory = "implementation"
 )
 
-// RouteResult holds the classification result and selected model
-type RouteResult struct {
+// ClassificationResult holds the classification result and selected model
+type ClassificationResult struct {
 	Category PromptCategory `json:"category"`
 	Model    string         `json:"model"`
 	Effort   string         `json:"effort"` // Effort level: "low", "medium", "high"
@@ -46,7 +46,7 @@ User prompt:
 
 // ClassifyPrompt uses Claude Haiku to classify a prompt as planning or implementation.
 // Returns the category and suggested model.
-func ClassifyPrompt(ctx context.Context, prompt string) (*RouteResult, error) {
+func ClassifyPrompt(ctx context.Context, prompt string) (*ClassificationResult, error) {
 	classifyInput := fmt.Sprintf(classifierPrompt, prompt)
 
 	args := []string{
@@ -69,7 +69,7 @@ func ClassifyPrompt(ctx context.Context, prompt string) (*RouteResult, error) {
 }
 
 // parseClassification extracts the category from the classifier's JSON response
-func parseClassification(response string) (*RouteResult, error) {
+func parseClassification(response string) (*ClassificationResult, error) {
 	// The response should be a JSON object, but it might have extra text around it.
 	// Find the JSON object boundaries.
 	start := strings.Index(response, "{")
@@ -95,7 +95,7 @@ func parseClassification(response string) (*RouteResult, error) {
 		effort = "medium" // default
 	}
 
-	result := &RouteResult{
+	result := &ClassificationResult{
 		Effort:  effort,
 		Reason:  parsed.Reason,
 		Summary: parsed.Summary,
@@ -117,9 +117,9 @@ func parseClassification(response string) (*RouteResult, error) {
 	return result, nil
 }
 
-// RoutePrompt classifies a prompt and returns the routing result.
+// RoutePrompt classifies a prompt and returns the classification result.
 // Uses a 15-second timeout to avoid blocking indefinitely.
-func RoutePrompt(prompt string) (*RouteResult, error) {
+func RoutePrompt(prompt string) (*ClassificationResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 

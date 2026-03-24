@@ -199,10 +199,8 @@ func (m *Model) initRouter() {
 	router.viewKeys["Overview"] = "f1"
 	router.keyToView["f1"] = "Overview"
 
-	dashboard, err := NewBranchDashboard(m.repoPath)
-	if err == nil {
-		router.Register("Branches", dashboard, "f2")
-	}
+	branchesView := views.NewBranchesView(m.repoPath)
+	router.Register("Branches", branchesView, "f2")
 
 	commitView := views.NewCommitView(m.repoPath)
 	router.Register("Commit", commitView, "f3")
@@ -363,10 +361,8 @@ func (m *Model) initProjectRouter() {
 	}
 
 	// Register single-repo views that are also useful in project mode
-	dashboard, err := NewBranchDashboard(defaultRepoPath)
-	if err == nil {
-		router.Register("Branches", dashboard, "f3")
-	}
+	branchesView := views.NewBranchesView(defaultRepoPath)
+	router.Register("Branches", branchesView, "f3")
 
 	commitView := views.NewCommitView(defaultRepoPath)
 	router.Register("Commit", commitView, "f4")
