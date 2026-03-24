@@ -59,7 +59,7 @@ func CreateMergeRequestCLI(repoPath string, provider RemoteProvider, baseBranch 
 		if err != nil {
 			return nil, fmt.Errorf("gh pr create failed: %s", strings.TrimSpace(string(output)))
 		}
-		result.URL = strings.TrimSpace(string(output))
+		result.URL = extractURL(string(output))
 		return result, nil
 	case ProviderGitLab:
 		cmd := exec.Command("glab", "mr", "create", "--yes",
@@ -71,9 +71,21 @@ func CreateMergeRequestCLI(repoPath string, provider RemoteProvider, baseBranch 
 		if err != nil {
 			return nil, fmt.Errorf("glab mr create failed: %s", strings.TrimSpace(string(output)))
 		}
-		result.URL = strings.TrimSpace(string(output))
+		result.URL = extractURL(string(output))
 		return result, nil
 	default:
 		return nil, fmt.Errorf("unknown provider, cannot create MR")
 	}
+}
+
+// extractURL extracts the first https:// URL from CLI output, falling back to
+// the full trimmed output if none is found.
+func extractURL(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "https://") {
+			return line
+		}
+	}
+	return strings.TrimSpace(output)
 }
