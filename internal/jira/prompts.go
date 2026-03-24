@@ -10,8 +10,8 @@ import (
 // RefineTicket launches an agent that explores the codebase and rewrites a Jira ticket
 // to be implementation-ready. The agent writes its proposed changes to .jira-actions.json
 // in the working directory (i.e. filepath.Join(repoPath, ".jira-actions.json")).
-func RefineTicket(eng *engine.Engine, issue *Issue, repoPath string) (string, error) {
-	prompt := buildRefinePrompt(issue, repoPath)
+func RefineTicket(eng *engine.Engine, issue *Issue, repoPath string, focus string) (string, error) {
+	prompt := buildRefinePrompt(issue, repoPath, focus)
 	return eng.StartAgent(repoPath, prompt, engine.AgentOptions{
 		Model:        "sonnet",
 		MaxTurns:     15,
@@ -21,7 +21,7 @@ func RefineTicket(eng *engine.Engine, issue *Issue, repoPath string) (string, er
 }
 
 // buildRefinePrompt constructs the system prompt for the refine-ticket agent.
-func buildRefinePrompt(issue *Issue, repoPath string) string {
+func buildRefinePrompt(issue *Issue, repoPath string, focus string) string {
 	var b strings.Builder
 
 	b.WriteString("You are analyzing a Jira ticket to make it implementation-ready.\n\n")
@@ -44,6 +44,12 @@ func buildRefinePrompt(issue *Issue, repoPath string) string {
 	b.WriteString("\n\n")
 
 	fmt.Fprintf(&b, "## Repository\n\nPath: %s\n\n", repoPath)
+
+	if focus != "" {
+		b.WriteString("## Focus\n\n")
+		fmt.Fprintf(&b, "The user wants you to pay special attention to the following:\n\n> %s\n\n", focus)
+		b.WriteString("Prioritize this area when analyzing the ticket and proposing changes.\n\n")
+	}
 
 	b.WriteString("## Your Task\n\n")
 	b.WriteString("Explore the codebase thoroughly and rewrite this ticket so that a developer can\n")

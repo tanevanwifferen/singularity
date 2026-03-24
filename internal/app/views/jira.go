@@ -113,6 +113,11 @@ type JiraView struct {
 	// Text-input for create mode without a ticket
 	showTextInput bool
 	textInput     string
+
+	// Focus input for refine mode
+	showFocusInput bool
+	focusInput     string
+	focusIssue     *jira.Issue
 }
 
 // NewJiraView creates a new Jira issues view.
@@ -139,7 +144,7 @@ func (v *JiraView) SetRepoPath(path string) { v.repoPath = path }
 
 // CapturesInput reports whether the view is consuming all keyboard input.
 func (v *JiraView) CapturesInput() bool {
-	return v.searchMode || v.showTextInput || v.showWorkflowConfirm || v.aiMode != "" || v.approvalView != nil
+	return v.searchMode || v.showTextInput || v.showFocusInput || v.showWorkflowConfirm || v.aiMode != "" || v.approvalView != nil
 }
 
 // Init loads issues on first display.
@@ -305,6 +310,11 @@ func (v *JiraView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, nil
 		}
 
+		// Focus input for refine mode
+		if v.showFocusInput {
+			return v, v.handleFocusInput(msg)
+		}
+
 		// Text input for create mode
 		if v.showTextInput {
 			return v, v.handleTextInput(msg)
@@ -322,15 +332,18 @@ func (v *JiraView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, v.fetchCmd(v.defaultJQL())
 
 		case "r":
-			// Refine: launch agent on selected ticket
+			// Refine: show focus input, then launch agent
 			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				return v, v.startAIMode("refine", &item)
+				v.showFocusInput = true
+				v.focusInput = ""
+				v.focusIssue = &item
+				return v, nil
 			}
 
 		case "c":
 			// Create stories from selected ticket, or from raw text if none selected
 			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				return v, v.startAIMode("create", &item)
+				return v, v.startAIMode("create", &item, "")
 			}
 			v.showTextInput = true
 			v.textInput = ""
@@ -391,8 +404,48 @@ func (v *JiraView) triggerWorkflow(issue *jira.Issue) tea.Cmd {
 	return nil
 }
 
+// handleFocusInput handles keyboard input for the refine focus prompt.
+func (v *JiraView) handleFocusInput(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "enter":
+		focus := strings.TrimSpace(v.focusInput)
+		issue := v.focusIssue
+		v.showFocusInput = false
+		v.focusInput = ""
+		v.focusIssue = nil
+		if issue == nil {
+			return nil
+		}
+		return v.startAIMode("refine", issue, focus)
+
+	case "esc":
+		v.showFocusInput = false
+		v.focusInput = ""
+		v.focusIssue = nil
+
+	case "ctrl+w":
+		v.focusInput = components.DeleteWordEnd(v.focusInput)
+
+	case "backspace":
+		if len(v.focusInput) > 0 {
+			v.focusInput = v.focusInput[:len(v.focusInput)-1]
+		}
+
+	default:
+		if msg.Paste && len(msg.Runes) > 0 {
+			v.focusInput += string(msg.Runes)
+		} else if len(msg.Runes) == 1 {
+			r := msg.Runes[0]
+			if r >= 32 {
+				v.focusInput += string(r)
+			}
+		}
+	}
+	return nil
+}
+
 // startAIMode launches the appropriate refine/create agent.
-func (v *JiraView) startAIMode(mode string, issue *jira.Issue) tea.Cmd {
+func (v *JiraView) startAIMode(mode string, issue *jira.Issue, focus ...string) tea.Cmd {
 	v.aiMode = mode
 	v.aiAgentID = ""
 	v.aiOutputEntries = nil
@@ -416,7 +469,11 @@ func (v *JiraView) startAIMode(mode string, issue *jira.Issue) tea.Cmd {
 		var err error
 		switch mode {
 		case "refine":
-			id, err = jira.RefineTicket(eng, &issueCopy, repoPath)
+			focusStr := ""
+			if len(focus) > 0 {
+				focusStr = focus[0]
+			}
+			id, err = jira.RefineTicket(eng, &issueCopy, repoPath, focusStr)
 		case "create":
 			project := cfg.DefaultProject
 			if project == "" {
@@ -877,6 +934,16 @@ func (v *JiraView) View() string {
 	if v.showDetail && v.detailIssue != nil {
 		s.WriteString(v.renderDetail(v.detailIssue))
 		return s.String()
+	}
+
+	// Focus input for refine mode
+	if v.showFocusInput {
+		s.WriteString(th.DashboardTitle.Render(" Refine: Focus "))
+		s.WriteString("\n")
+		s.WriteString(fmt.Sprintf(" > %s█", v.focusInput))
+		s.WriteString("\n")
+		s.WriteString(th.Help.Render(" What should the AI focus on? Enter: start (empty = general refine) · Esc: cancel "))
+		s.WriteString("\n\n")
 	}
 
 	// Text input for create mode
