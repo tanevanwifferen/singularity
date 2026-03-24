@@ -396,6 +396,9 @@ func (m *Model) initProjectRouter() {
 	projectSyncView := views.NewProjectSyncView(m.proj)
 	router.Register("ProjectSync", projectSyncView)
 
+	projectDiffView := views.NewProjectDiffView(m.proj)
+	router.Register("ProjectDiff", projectDiffView)
+
 	syncView := views.NewSyncView(defaultRepoPath)
 	router.Register("Sync", syncView)
 
@@ -420,6 +423,7 @@ func (m *Model) initProjectRouter() {
 
 	projGitItems := []components.SubmenuItem{
 		{Key: "a", Label: "Sync All Repos", ViewName: "ProjectSync"},
+		{Key: "d", Label: "Project Diff (open changes)", ViewName: "ProjectDiff"},
 		{Key: "s", Label: "Sync (push/pull/fetch)", ViewName: "Sync"},
 		{Key: "b", Label: "Branch Compare", ViewName: "BranchCompare"},
 		{Key: "t", Label: "Stashes", ViewName: "Stashes"},
