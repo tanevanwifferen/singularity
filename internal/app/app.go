@@ -628,6 +628,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.layout.SetSize(msg.Width, msg.Height)
 		vw, vh := m.layout.AvailableViewDimensions()
 		m.router.NotifySize(vw, vh)
+		return m, nil
 	case WSConnectionMsg:
 		m.wsStatus = msg.Status
 		// Update status message based on connection state
