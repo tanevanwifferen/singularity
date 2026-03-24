@@ -189,6 +189,16 @@ func autoCommitWorktree(wtPath, agentID, task string) (bool, error) {
 		return false, fmt.Errorf("git commit: %w\n%s", err, string(out))
 	}
 
+	// Verify nothing was left uncommitted (e.g. new files missed by staging)
+	verifyCmd := exec.Command("git", "-C", wtPath, "status", "--porcelain")
+	verifyOut, err := verifyCmd.Output()
+	if err != nil {
+		return true, fmt.Errorf("post-commit verify: %w", err)
+	}
+	if remaining := strings.TrimSpace(string(verifyOut)); remaining != "" {
+		return true, fmt.Errorf("files remain uncommitted after auto-commit:\n%s", remaining)
+	}
+
 	return true, nil
 }
 
