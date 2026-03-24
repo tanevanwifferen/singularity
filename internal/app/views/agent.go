@@ -128,9 +128,9 @@ func (v *AgentView) outputHeight() int {
 	available := v.height - 6
 	h := max(available-v.listHeight(), 1)
 	if v.showMessageInput {
-		// Modal box (top border + message + hint + bottom border = 4 lines)
-		// replaces the 1-line hint, so 3 extra lines are needed.
-		h = max(h-3, 1)
+		// renderModal box: top border + message + blank + hint + bottom border = 5 lines
+		// replaces the 1-line hint, so 4 extra lines are needed.
+		h = max(h-4, 1)
 	}
 	return h
 }
@@ -442,6 +442,7 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					v.showMessageInput = true
 					v.messageInput = ""
 					v.focus = focusInput
+					v.recalcLayout()
 				}
 				return v, nil
 			}
@@ -642,10 +643,12 @@ func (v *AgentView) handleMessageInput(msg tea.KeyMsg) tea.Cmd {
 		v.showMessageInput = false
 		v.messageInput = ""
 		v.focus = focusOutput
+		v.recalcLayout()
 	case "esc":
 		v.showMessageInput = false
 		v.messageInput = ""
 		v.focus = focusOutput
+		v.recalcLayout()
 	case "ctrl+w":
 		v.messageInput = components.DeleteWordEnd(v.messageInput)
 	default:
@@ -896,39 +899,16 @@ func (v *AgentView) View() string {
 			s.WriteString("\n")
 		}
 
-		// Message input modal (box overlay below viewport)
+		// Message input modal
 		if v.showMessageInput {
-			boxWidth := v.width - 4
-			if boxWidth < 30 {
-				boxWidth = 30
-			}
-			innerWidth := boxWidth - 4
-
-			s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" ┌%s┐", strings.Repeat("─", boxWidth-2))))
-			s.WriteString("\n")
-
-			msgText := "Message: " + v.messageInput + "█"
-			for len(msgText) > 0 {
-				line := msgText
-				if len(line) > innerWidth {
-					line = msgText[:innerWidth]
-					msgText = msgText[innerWidth:]
-				} else {
-					msgText = ""
-				}
-				s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" │ %-*s │", innerWidth, line)))
-				s.WriteString("\n")
-			}
-
-			s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" │ %-*s │", innerWidth, "Enter: send  Esc: cancel")))
-			s.WriteString("\n")
-			s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" └%s┘", strings.Repeat("─", boxWidth-2))))
-			s.WriteString("\n")
+			msgLines := wrapText("Message: "+v.messageInput+"█", modalWidth(v.width)-4)
+			msgLines = append(msgLines, "", "Enter: send   Esc: cancel")
+			s.WriteString(renderModal("Send Message", msgLines, modalWidth(v.width)))
 		}
 
 		// Output pane hint
 		if v.showMessageInput {
-			// hint already inside the box
+			// hint already inside the modal
 		} else if v.focus == focusOutput {
 			hint := " j/k:scroll  g/G:top/bottom  ctrl+d/u:page  tab:list  esc:close"
 			if v.selectedAgent != nil &&

@@ -48,5 +48,22 @@ func modalWidth(viewWidth int) int {
 	return w
 }
 
+// wrapText splits text into lines of at most width characters.
+func wrapText(text string, width int) []string {
+	if width <= 0 {
+		width = 40
+	}
+	var lines []string
+	for len(text) > 0 {
+		if len(text) <= width {
+			lines = append(lines, text)
+			break
+		}
+		lines = append(lines, text[:width])
+		text = text[width:]
+	}
+	return lines
+}
+
 // DeleteWordEnd is re-exported from components for convenience.
 var DeleteWordEnd = components.DeleteWordEnd
