@@ -10,7 +10,8 @@ import (
 	"git-frontend/internal/server"
 )
 
-const version = "0.0.1"
+// version is set via ldflags at build time by goreleaser.
+var version = "dev"
 
 func main() {
 	// Parse command line flags
