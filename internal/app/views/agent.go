@@ -804,7 +804,7 @@ func (v *AgentView) View() string {
 		if v.jiraPicker.IsAvailable() {
 			jiraHint = "  J:jira"
 		}
-		s.WriteString(th.Help.Render("n:new  J:jira  K:kill  enter:view  d:close  c:clear  r:refresh" + jiraHint))
+		s.WriteString(th.Help.Render("n:new  K:kill  enter:view  d:close  c:clear  r:refresh" + jiraHint))
 	}
 	s.WriteString("\n")
 
