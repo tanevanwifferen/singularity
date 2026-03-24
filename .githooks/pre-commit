@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -e
+
+# Run gofmt on all staged .go files and re-stage any that were reformatted
+STAGED_GO_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.go$' || true)
+
+if [ -z "$STAGED_GO_FILES" ]; then
+  exit 0
+fi
+
+for file in $STAGED_GO_FILES; do
+  gofmt -w "$file"
+  git add "$file"
+done
+
+echo "go fmt applied and changes re-staged"
