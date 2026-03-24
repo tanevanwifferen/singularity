@@ -535,6 +535,20 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.filter.Update(msg)
 			v.syncPreview()
 			return v, nil
+
+		case "pgdown", "ctrl+d":
+			if v.selectedAgent != nil {
+				v.outputAutoScroll = false
+				v.outputViewport.HalfViewDown()
+				return v, nil
+			}
+
+		case "pgup", "ctrl+u":
+			if v.selectedAgent != nil {
+				v.outputAutoScroll = false
+				v.outputViewport.HalfViewUp()
+				return v, nil
+			}
 		}
 
 		// Pass remaining keys to filter
