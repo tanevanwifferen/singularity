@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"git-frontend/internal/api"
-	"git-frontend/internal/git"
+	"singularity/internal/api"
+	"singularity/internal/git"
 
 	"github.com/charmbracelet/bubbletea"
 	"github.com/gorilla/websocket"

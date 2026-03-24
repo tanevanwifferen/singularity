@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"git-frontend/internal/app/components"
+	"singularity/internal/app/components"
 )
 
 // renderModal renders content inside a box-drawing border.

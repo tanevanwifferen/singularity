@@ -3,8 +3,8 @@ package server
 import (
 	"net/http"
 
-	"git-frontend/internal/api"
-	"git-frontend/internal/project"
+	"singularity/internal/api"
+	"singularity/internal/project"
 )
 
 // handleProjectList handles GET /api/project/list

@@ -14,7 +14,7 @@ type SpinnerStyles struct {
 	Message   lipgloss.Style
 }
 
-// DefaultSpinnerStyles returns default styles matching the git-frontend theme.
+// DefaultSpinnerStyles returns default styles matching the singularity theme.
 func DefaultSpinnerStyles() SpinnerStyles {
 	return SpinnerStyles{
 		Container: lipgloss.NewStyle().

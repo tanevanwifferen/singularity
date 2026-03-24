@@ -13,15 +13,15 @@ Project mode lets you manage a set of related git repositories as a single unit.
 
 ```bash
 # Explicit config file
-git-frontend --project-config ~/.config/git-frontend/projects.json
+singularity --project-config ~/.config/singularity/projects.json
 
 # Auto-discovered (default path if file exists)
-git-frontend
+singularity
 ```
 
 ## Setting Up a Project
 
-Projects are defined in `~/.config/git-frontend/projects.json`.
+Projects are defined in `~/.config/singularity/projects.json`.
 
 ### Manual Config
 
@@ -63,18 +63,18 @@ Scan a directory tree for git repos and print a ready-to-use config:
 
 ```bash
 # Print to stdout — review before saving
-git-frontend --generate-config-from-dir ~/code/my-platform
+singularity --generate-config-from-dir ~/code/my-platform
 
 # Scan current directory and add directly to projects config
-git-frontend --init
+singularity --init
 ```
 
 `--generate-config-from-dir` outputs valid JSON to stdout so you can pipe it, edit it, then save it:
 
 ```bash
-git-frontend --generate-config-from-dir ~/code/my-platform \
+singularity --generate-config-from-dir ~/code/my-platform \
   | jq '.projects["my-platform"].context_files = ["README.md"]' \
-  > ~/.config/git-frontend/projects.json
+  > ~/.config/singularity/projects.json
 ```
 
 ## Views
@@ -201,4 +201,4 @@ This is useful before merging or deploying to ensure all repos are ready.
 | Git submenu (`g`) | Full | Not available (use Workflows) |
 | Stash / rebase / worktrees | Yes | Open a repo in repo mode |
 
-For deep single-repo work (interactive rebase, stash management, etc.) within a project, open that repo directly with `git-frontend --repo <path>`.
+For deep single-repo work (interactive rebase, stash management, etc.) within a project, open that repo directly with `singularity --repo <path>`.

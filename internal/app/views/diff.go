@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	"git-frontend/internal/app/components"
-	"git-frontend/internal/git"
-	"git-frontend/internal/theme"
+	"singularity/internal/app/components"
+	"singularity/internal/git"
+	"singularity/internal/theme"
 
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"

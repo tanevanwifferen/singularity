@@ -1,15 +1,15 @@
 # Repo Mode
 
-Repo mode is the default way to use git-frontend. It opens a TUI for a single git repository and gives you a full set of views for commits, branches, diffs, agents, and git operations.
+Repo mode is the default way to use singularity. It opens a TUI for a single git repository and gives you a full set of views for commits, branches, diffs, agents, and git operations.
 
 ## Starting
 
 ```bash
 # Current directory
-git-frontend
+singularity
 
 # Explicit path
-git-frontend --repo ~/code/my-project
+singularity --repo ~/code/my-project
 ```
 
 ## Views
@@ -72,7 +72,7 @@ Agents run as Claude Code subprocesses. Each session has:
 
 ### Config (`F6`)
 
-Settings management. Surfaces the main configurable options from `~/.config/git-frontend/config.json`.
+Settings management. Surfaces the main configurable options from `~/.config/singularity/config.json`.
 
 ## Git Operations Submenu
 
@@ -151,7 +151,7 @@ Browse and link Jira issues. Only shown when `jira.enabled = true` in config.
 
 ## Keybindings
 
-All keybindings can be overridden in `~/.config/git-frontend/keybinds.json`.
+All keybindings can be overridden in `~/.config/singularity/keybinds.json`.
 
 | Key | Action |
 |-----|--------|
@@ -166,7 +166,7 @@ All keybindings can be overridden in `~/.config/git-frontend/keybinds.json`.
 
 ## Configuration Reference
 
-`~/.config/git-frontend/config.json`:
+`~/.config/singularity/config.json`:
 
 ```json
 {

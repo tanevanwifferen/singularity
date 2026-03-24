@@ -8,12 +8,12 @@ import (
 	"sync"
 	"time"
 
-	"git-frontend/internal/api"
-	"git-frontend/internal/git"
+	"singularity/internal/api"
+	"singularity/internal/git"
 	"github.com/gorilla/websocket"
 )
 
-// Client is the API client for connecting to the git-frontend server
+// Client is the API client for connecting to the singularity server
 type Client struct {
 	serverURL string
 	httpClient *http.Client

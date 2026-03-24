@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"git-frontend/internal/git"
-	"git-frontend/internal/theme"
+	"singularity/internal/git"
+	"singularity/internal/theme"
 
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"

@@ -69,7 +69,7 @@ A TUI-first git frontend that:
 ├─────────────────────────────────────────────────────┤
 │                  Storage Layer                      │
 │  - Local git repo                                   │
-│  - Config (~/.config/git-frontend/)                 │
+│  - Config (~/.config/singularity/)                 │
 │  - Cache (CI status, MR state)                      │
 └─────────────────────────────────────────────────────┘
 ```

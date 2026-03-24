@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"git-frontend/internal/app/components"
-	"git-frontend/internal/config"
-	"git-frontend/internal/jira"
-	"git-frontend/internal/theme"
+	"singularity/internal/app/components"
+	"singularity/internal/config"
+	"singularity/internal/jira"
+	"singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

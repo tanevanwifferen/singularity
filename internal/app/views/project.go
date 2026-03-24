@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"git-frontend/internal/app/components"
-	"git-frontend/internal/git"
-	"git-frontend/internal/project"
-	"git-frontend/internal/theme"
+	"singularity/internal/app/components"
+	"singularity/internal/git"
+	"singularity/internal/project"
+	"singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

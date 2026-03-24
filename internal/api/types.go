@@ -1,6 +1,6 @@
 package api
 
-import "git-frontend/internal/git"
+import "singularity/internal/git"
 
 // API types shared between server and client
 

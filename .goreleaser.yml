@@ -1,8 +1,8 @@
 version: 2
 
 builds:
-  - main: ./cmd/git-frontend
-    binary: git-frontend
+  - main: ./cmd/singularity
+    binary: singularity
     env:
       - CGO_ENABLED=0
     goos:
