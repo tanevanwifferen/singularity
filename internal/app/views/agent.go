@@ -424,6 +424,9 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "j", "down":
 				v.outputAutoScroll = false
 				v.outputViewport.LineDown(1)
+				if v.outputViewport.ScrollPercent() >= 1.0 {
+					v.outputAutoScroll = true
+				}
 				return v, nil
 			case "k", "up":
 				v.outputAutoScroll = false
@@ -440,6 +443,9 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "ctrl+d", "pgdown":
 				v.outputAutoScroll = false
 				v.outputViewport.HalfViewDown()
+				if v.outputViewport.ScrollPercent() >= 1.0 {
+					v.outputAutoScroll = true
+				}
 				return v, nil
 			case "ctrl+u", "pgup":
 				v.outputAutoScroll = false
@@ -540,6 +546,9 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if v.selectedAgent != nil {
 				v.outputAutoScroll = false
 				v.outputViewport.HalfViewDown()
+				if v.outputViewport.ScrollPercent() >= 1.0 {
+					v.outputAutoScroll = true
+				}
 				return v, nil
 			}
 
