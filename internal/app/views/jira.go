@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 
 	"singularity/internal/app/components"
@@ -43,6 +44,24 @@ type jiraWorkflowDoneMsg struct {
 	agentID  string
 	repoPath string
 	err      error
+}
+
+// jiraAIStartedMsg signals that a refine/create agent has started.
+type jiraAIStartedMsg struct {
+	agentID string
+	mode    string // "refine" or "create"
+	err     error
+}
+
+// jiraAITickMsg triggers periodic polling of agent output.
+type jiraAITickMsg struct{}
+
+// jiraAIOutputMsg carries new output entries from the agent.
+type jiraAIOutputMsg struct {
+	entries  []engine.OutputEntry
+	done     bool
+	actions  []jira.JiraAction // non-nil when agent completed and actions parsed
+	parseErr error
 }
 
 // JiraView displays a browsable, filterable list of Jira issues.
@@ -83,6 +102,17 @@ type JiraView struct {
 	// Extra message input (workflowStepExtraMsg)
 	workflowExtraMsg     string
 	workflowFromExisting bool // true if coming from existing-worktree path
+
+	// Refine / Create agent mode
+	aiMode          string // "", "refine", "create"
+	aiAgentID       string
+	aiOutputEntries []engine.OutputEntry
+	aiOutputOffset  int
+	approvalView    *ApprovalView
+
+	// Text-input for create mode without a ticket
+	showTextInput bool
+	textInput     string
 }
 
 // NewJiraView creates a new Jira issues view.
@@ -106,6 +136,11 @@ func (v *JiraView) SetProject(proj *project.Project) { v.proj = proj }
 
 // SetRepoPath sets the single-repo path (single-repo mode).
 func (v *JiraView) SetRepoPath(path string) { v.repoPath = path }
+
+// CapturesInput reports whether the view is consuming all keyboard input.
+func (v *JiraView) CapturesInput() bool {
+	return v.searchMode || v.showTextInput || v.showWorkflowConfirm || v.aiMode != "" || v.approvalView != nil
+}
 
 // Init loads issues on first display.
 func (v *JiraView) Init() tea.Cmd {
@@ -137,6 +172,15 @@ func (v *JiraView) fetchCmd(query string) tea.Cmd {
 
 // Update handles messages.
 func (v *JiraView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Forward internal approval messages
+	if v.approvalView != nil {
+		switch msg.(type) {
+		case approvalExecDoneMsg:
+			_, cmd := v.approvalView.Update(msg)
+			return v, cmd
+		}
+	}
+
 	switch msg := msg.(type) {
 
 	case jiraLoadedMsg:
@@ -171,7 +215,77 @@ func (v *JiraView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return ViewChangeMsg{ViewName: "Agents"}
 		}
 
+	case jiraAIStartedMsg:
+		if msg.err != nil {
+			v.err = msg.err
+			v.aiMode = ""
+			return v, nil
+		}
+		v.aiAgentID = msg.agentID
+		return v, v.pollAIOutput()
+
+	case jiraAITickMsg:
+		if v.aiMode != "" && v.aiAgentID != "" {
+			return v, v.fetchAIOutput()
+		}
+
+	case jiraAIOutputMsg:
+		if len(msg.entries) > 0 {
+			v.aiOutputEntries = append(v.aiOutputEntries, msg.entries...)
+			v.aiOutputOffset += len(msg.entries)
+		}
+		if msg.done {
+			if msg.parseErr != nil {
+				v.err = fmt.Errorf("failed to parse agent output: %w", msg.parseErr)
+				v.aiMode = ""
+				return v, nil
+			}
+			if len(msg.actions) > 0 {
+				v.approvalView = NewApprovalView(msg.actions, v.client)
+				return v, nil
+			}
+			// No actions produced
+			v.aiMode = ""
+			v.workflowStatusMsg = "Agent completed but produced no actions"
+			return v, nil
+		}
+		// Keep polling
+		return v, v.pollAIOutput()
+
+	case ApprovalDoneMsg:
+		v.approvalView = nil
+		v.aiMode = ""
+		v.aiAgentID = ""
+		v.aiOutputEntries = nil
+		if msg.Executed {
+			v.workflowStatusMsg = "Actions executed successfully"
+			if msg.Err != nil {
+				v.workflowStatusMsg = fmt.Sprintf("Actions executed with errors: %v", msg.Err)
+			}
+		}
+		return v, nil
+
 	case tea.KeyMsg:
+		// Approval view active
+		if v.approvalView != nil {
+			_, cmd := v.approvalView.Update(msg)
+			return v, cmd
+		}
+
+		// AI agent running - allow Esc to cancel
+		if v.aiMode != "" && v.approvalView == nil {
+			if msg.String() == "esc" {
+				if v.aiAgentID != "" && v.eng != nil {
+					v.eng.KillAgent(v.aiAgentID)
+				}
+				v.aiMode = ""
+				v.aiAgentID = ""
+				v.aiOutputEntries = nil
+				return v, nil
+			}
+			return v, nil // swallow other keys while agent runs
+		}
+
 		// Workflow confirmation modal
 		if v.showWorkflowConfirm {
 			return v, v.handleWorkflowConfirm(msg)
@@ -191,16 +305,36 @@ func (v *JiraView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, nil
 		}
 
+		// Text input for create mode
+		if v.showTextInput {
+			return v, v.handleTextInput(msg)
+		}
+
 		// Search / JQL input mode
 		if v.searchMode {
 			return v, v.handleSearchInput(msg)
 		}
 
 		switch msg.String() {
-		case "r":
+		case "R":
 			v.loading = true
 			v.err = nil
 			return v, v.fetchCmd(v.defaultJQL())
+
+		case "r":
+			// Refine: launch agent on selected ticket
+			if item, idx := v.filter.SelectedItem(); idx >= 0 {
+				return v, v.startAIMode("refine", &item)
+			}
+
+		case "c":
+			// Create stories from selected ticket, or from raw text if none selected
+			if item, idx := v.filter.SelectedItem(); idx >= 0 {
+				return v, v.startAIMode("create", &item)
+			}
+			v.showTextInput = true
+			v.textInput = ""
+			return v, nil
 
 		case "s":
 			v.searchMode = true
@@ -255,6 +389,88 @@ func (v *JiraView) triggerWorkflow(issue *jira.Issue) tea.Cmd {
 	v.workflowExtraMsg = ""
 	v.workflowFromExisting = false
 	return nil
+}
+
+// startAIMode launches the appropriate refine/create agent.
+func (v *JiraView) startAIMode(mode string, issue *jira.Issue) tea.Cmd {
+	v.aiMode = mode
+	v.aiAgentID = ""
+	v.aiOutputEntries = nil
+	v.aiOutputOffset = 0
+	v.approvalView = nil
+
+	eng := v.eng
+	repoPath := v.repoPath
+	if repoPath == "" && v.proj != nil && len(v.proj.Repos) > 0 {
+		repoPath = v.proj.Repos[0].Path
+	}
+
+	issueCopy := *issue
+	cfg := v.cfg
+
+	return func() tea.Msg {
+		if eng == nil {
+			return jiraAIStartedMsg{err: fmt.Errorf("agent engine not available"), mode: mode}
+		}
+		var id string
+		var err error
+		switch mode {
+		case "refine":
+			id, err = jira.RefineTicket(eng, &issueCopy, repoPath)
+		case "create":
+			project := cfg.DefaultProject
+			if project == "" {
+				// extract from issue key
+				if idx := strings.Index(issueCopy.Key, "-"); idx > 0 {
+					project = issueCopy.Key[:idx]
+				}
+			}
+			id, err = jira.CreateStories(eng, &issueCopy, "", project, repoPath)
+		}
+		return jiraAIStartedMsg{agentID: id, mode: mode, err: err}
+	}
+}
+
+// pollAIOutput returns a tea.Cmd that polls agent output after a short delay.
+func (v *JiraView) pollAIOutput() tea.Cmd {
+	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
+		return jiraAITickMsg{}
+	})
+}
+
+// fetchAIOutput returns a tea.Cmd that retrieves new output entries from the agent.
+func (v *JiraView) fetchAIOutput() tea.Cmd {
+	eng := v.eng
+	agentID := v.aiAgentID
+	offset := v.aiOutputOffset
+	repoPath := v.repoPath
+	if repoPath == "" && v.proj != nil && len(v.proj.Repos) > 0 {
+		repoPath = v.proj.Repos[0].Path
+	}
+
+	return func() tea.Msg {
+		entries, err := eng.GetOutputEntries(agentID, offset)
+		if err != nil {
+			return jiraAIOutputMsg{done: true}
+		}
+
+		state, _ := eng.GetStatus(agentID)
+		done := state == engine.AgentComplete || state == engine.AgentError || state == engine.AgentKilled
+
+		var actions []jira.JiraAction
+		var parseErr error
+		if done {
+			actionsPath := filepath.Join(repoPath, ".jira-actions.json")
+			actions, parseErr = jira.ParseJiraActions(actionsPath)
+		}
+
+		return jiraAIOutputMsg{
+			entries:  entries,
+			done:     done,
+			actions:  actions,
+			parseErr: parseErr,
+		}
+	}
 }
 
 // handleWorkflowConfirm handles key input in the multi-step workflow modal.
@@ -531,6 +747,66 @@ func (v *JiraView) handleSearchInput(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+func (v *JiraView) handleTextInput(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "enter":
+		text := strings.TrimSpace(v.textInput)
+		v.showTextInput = false
+		v.textInput = ""
+		if text == "" {
+			return nil
+		}
+		return v.startAIFromText(text)
+
+	case "esc":
+		v.showTextInput = false
+		v.textInput = ""
+
+	case "ctrl+w":
+		v.textInput = components.DeleteWordEnd(v.textInput)
+
+	case "backspace":
+		if len(v.textInput) > 0 {
+			v.textInput = v.textInput[:len(v.textInput)-1]
+		}
+
+	default:
+		if msg.Paste && len(msg.Runes) > 0 {
+			v.textInput += string(msg.Runes)
+		} else if len(msg.Runes) == 1 {
+			r := msg.Runes[0]
+			if r >= 32 {
+				v.textInput += string(r)
+			}
+		}
+	}
+	return nil
+}
+
+func (v *JiraView) startAIFromText(text string) tea.Cmd {
+	v.aiMode = "create"
+	v.aiAgentID = ""
+	v.aiOutputEntries = nil
+	v.aiOutputOffset = 0
+	v.approvalView = nil
+
+	eng := v.eng
+	repoPath := v.repoPath
+	if repoPath == "" && v.proj != nil && len(v.proj.Repos) > 0 {
+		repoPath = v.proj.Repos[0].Path
+	}
+
+	project := v.cfg.DefaultProject
+
+	return func() tea.Msg {
+		if eng == nil {
+			return jiraAIStartedMsg{err: fmt.Errorf("agent engine not available"), mode: "create"}
+		}
+		id, err := jira.CreateStories(eng, nil, text, project, repoPath)
+		return jiraAIStartedMsg{agentID: id, mode: "create", err: err}
+	}
+}
+
 // View renders the Jira issues view.
 func (v *JiraView) View() string {
 	th := theme.GetTheme()
@@ -540,6 +816,48 @@ func (v *JiraView) View() string {
 	}
 
 	var s strings.Builder
+
+	// Approval view
+	if v.approvalView != nil {
+		s.WriteString(v.approvalView.View())
+		return s.String()
+	}
+
+	// AI agent running
+	if v.aiMode != "" {
+		modeLabel := "Refining"
+		if v.aiMode == "create" {
+			modeLabel = "Creating stories"
+		}
+		s.WriteString(th.InfoStyle.Render(fmt.Sprintf(" %s... (Esc to cancel)", modeLabel)))
+		s.WriteString("\n\n")
+		// Show last few output entries
+		start := 0
+		if len(v.aiOutputEntries) > 15 {
+			start = len(v.aiOutputEntries) - 15
+		}
+		for _, entry := range v.aiOutputEntries[start:] {
+			prefix := ""
+			switch entry.Source {
+			case "tool_use":
+				prefix = th.BranchStyle.Render("→ ")
+			case "tool_result":
+				prefix = th.MutedTextStyle.Render("  ")
+			case "text":
+				prefix = "  "
+			case "system":
+				prefix = th.MutedTextStyle.Render("⚙ ")
+			case "error":
+				prefix = th.DashboardErrorStyle.Render("✗ ")
+			}
+			line := entry.Content
+			if len(line) > v.width-4 {
+				line = line[:v.width-7] + "..."
+			}
+			s.WriteString(prefix + line + "\n")
+		}
+		return s.String()
+	}
 
 	// Header
 	title := " Jira Issues "
@@ -561,6 +879,16 @@ func (v *JiraView) View() string {
 		return s.String()
 	}
 
+	// Text input for create mode
+	if v.showTextInput {
+		s.WriteString(th.DashboardTitle.Render(" Create Stories from Text "))
+		s.WriteString("\n")
+		s.WriteString(fmt.Sprintf(" > %s█", v.textInput))
+		s.WriteString("\n")
+		s.WriteString(th.Help.Render(" Paste or type a requirement, then Enter to start · Esc: cancel "))
+		s.WriteString("\n\n")
+	}
+
 	// Search input
 	if v.searchMode {
 		s.WriteString(th.DashboardTitle.Render(" Search "))
@@ -580,7 +908,7 @@ func (v *JiraView) View() string {
 	if v.filter.IsActive() {
 		s.WriteString(v.filter.View())
 	} else {
-		s.WriteString(th.Help.Render(" / to filter • s: search • r: refresh • Enter: detail • ↑↓: navigate "))
+		s.WriteString(th.Help.Render(" / to filter • s: search • R: refresh • r: refine • c: create • Enter: detail • ↑↓: navigate "))
 		s.WriteString("\n\n")
 		s.WriteString(v.filter.View())
 	}
@@ -601,7 +929,7 @@ func (v *JiraView) View() string {
 	s.WriteString("\n")
 	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
 	s.WriteString("\n")
-	s.WriteString(th.Help.Render(" r: Refresh   s: Search   /: Filter   ↑↓: Navigate   Enter: Detail   w: Start Workflow "))
+	s.WriteString(th.Help.Render(" R: Refresh   s: Search   /: Filter   ↑↓: Navigate   Enter: Detail   w: Workflow   r: Refine   c: Create "))
 
 	return s.String()
 }
@@ -803,7 +1131,7 @@ func statusStyle(status string, th theme.Theme) lipgloss.Style {
 
 // ShortHelp returns a short help string.
 func (v *JiraView) ShortHelp() string {
-	return "r: Refresh  s: Search  /: Filter  ↑↓: Navigate  Enter: Detail  Esc: Back"
+	return "R: Refresh  s: Search  /: Filter  r: Refine  c: Create  w: Workflow"
 }
 
 // SetSize updates the view dimensions.
@@ -818,9 +1146,12 @@ func (v *JiraView) SetSize(width, height int) {
 // KeyBindings returns the keybindings for this view.
 func (v *JiraView) KeyBindings() []components.KeyBinding {
 	return []components.KeyBinding{
-		{Key: "r", Description: "Refresh issues"},
+		{Key: "R", Description: "Refresh issues"},
 		{Key: "s", Description: "Search (issue key or JQL)"},
 		{Key: "/", Description: "Filter list"},
+		{Key: "r", Description: "Refine selected ticket"},
+		{Key: "c", Description: "Create stories from selected ticket"},
+		{Key: "w", Description: "Start workflow for selected ticket"},
 		{Key: "↑/k", Description: "Navigate up"},
 		{Key: "↓/j", Description: "Navigate down"},
 		{Key: "Enter", Description: "Show issue detail"},
