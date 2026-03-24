@@ -22,18 +22,24 @@ const (
 type RouteResult struct {
 	Category PromptCategory `json:"category"`
 	Model    string         `json:"model"`
+	Effort   string         `json:"effort"` // Effort level: "low", "medium", "high"
 	Reason   string         `json:"reason"`
 	Summary  string         `json:"summary"` // One-line summary of the task
 }
 
-const classifierPrompt = `Classify the following user prompt into exactly one category.
+const classifierPrompt = `Classify the following user prompt into exactly one category, and pick the appropriate effort level.
 
 Categories:
 - "planning": The user wants to think through architecture, design, strategy, tradeoffs, debugging approach, or investigation. They want analysis, not code changes. Examples: "how should we structure X", "what's the best approach for Y", "investigate why Z is broken", "design a system for W", "what are the tradeoffs of X vs Y".
 - "implementation": The user wants concrete code changes, file edits, bug fixes, feature implementation, refactoring, or any hands-on coding work. Examples: "add a function that does X", "fix the bug in Y", "refactor Z to use W", "write tests for X", "implement feature Y".
 
+Effort levels:
+- "low": Simple, well-defined tasks with little ambiguity. Small edits, trivial fixes, or very narrow questions.
+- "medium": Moderate complexity. Standard feature work, typical bug fixes, or focused investigation.
+- "high": Complex, open-ended, or multi-step tasks. Deep architecture decisions, cross-cutting changes, tricky debugging, or tasks requiring broad reasoning.
+
 Respond with ONLY a JSON object, no other text:
-{"category": "planning" or "implementation", "reason": "one sentence why", "summary": "short one-line summary of what the task asks for (max 60 chars)"}
+{"category": "planning" or "implementation", "effort": "low" or "medium" or "high", "reason": "one sentence why", "summary": "short one-line summary of what the task asks for (max 60 chars)"}
 
 User prompt:
 %s`
@@ -76,6 +82,7 @@ func parseClassification(response string) (*RouteResult, error) {
 
 	var parsed struct {
 		Category string `json:"category"`
+		Effort   string `json:"effort"`
 		Reason   string `json:"reason"`
 		Summary  string `json:"summary"`
 	}
@@ -83,7 +90,13 @@ func parseClassification(response string) (*RouteResult, error) {
 		return nil, fmt.Errorf("failed to parse classifier response: %w", err)
 	}
 
+	effort := strings.ToLower(parsed.Effort)
+	if effort != "low" && effort != "medium" && effort != "high" {
+		effort = "medium" // default
+	}
+
 	result := &RouteResult{
+		Effort:  effort,
 		Reason:  parsed.Reason,
 		Summary: parsed.Summary,
 	}

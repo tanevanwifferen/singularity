@@ -12,6 +12,7 @@ import (
 // AgentOptions configures an agent's behavior
 type AgentOptions struct {
 	Model        string        // Claude model to use (empty = default)
+	Effort       string        // Effort level: "low", "medium", "high" (empty = default)
 	AllowedTools []string      // Restrict available tools
 	MaxTurns     int           // Max conversation turns (0 = unlimited)
 	Timeout      time.Duration // Kill agent after this duration (0 = no timeout)
@@ -89,6 +90,7 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 			if err == nil {
 				agent.mu.Lock()
 				agent.model = route.Model
+				agent.effort = route.Effort
 				agent.RouteResult = route
 				if route.Summary != "" {
 					agent.Summary = route.Summary
