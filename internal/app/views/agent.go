@@ -80,6 +80,7 @@ type AgentView struct {
 	// Jira ticket picker
 	jiraPicker       *JiraPickerState
 	jiraConfirmIssue *jira.Issue // issue pending agent-start confirmation
+	jiraExtraMsg     string      // custom instructions for the jira agent
 }
 
 // NewAgentView creates a new agent console view.
@@ -822,6 +823,7 @@ func (v *AgentView) View() string {
 	if v.jiraConfirmIssue != nil {
 		issue := v.jiraConfirmIssue
 		branch := issueToBranchName(issue)
+		input := v.jiraExtraMsg + "█"
 		s.WriteString("\n")
 		s.WriteString(renderModal("Start Agent from Jira Ticket", []string{
 			"",
@@ -829,10 +831,10 @@ func (v *AgentView) View() string {
 			fmt.Sprintf("  Branch:  %s", branch),
 			fmt.Sprintf("  Type:    %s  Priority: %s", issue.Type, issue.Priority),
 			"",
-			"  Start agent in isolated worktree?",
-			"  (auto-commits + merges back on completion)",
+			"  Custom instructions (optional):",
+			"  " + input,
 			"",
-			"  y/Enter: Start   n/Esc: Cancel",
+			"  Enter: Start   Esc: Cancel",
 		}, modalWidth(v.width)))
 		return s.String()
 	}
@@ -1007,32 +1009,51 @@ func (v *AgentView) handleJiraPickerKey(msg tea.KeyMsg) tea.Cmd {
 	cmd, done, confirmed, issue := v.jiraPicker.HandleKey(msg)
 	if done && confirmed && issue != nil {
 		v.jiraConfirmIssue = issue
+		v.jiraExtraMsg = ""
 	}
 	return cmd
 }
 
-// handleJiraAgentConfirm handles the y/n before starting an agent from a Jira ticket.
+// handleJiraAgentConfirm handles input in the Jira agent confirmation modal.
 func (v *AgentView) handleJiraAgentConfirm(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
-	case "y", "enter":
+	case "enter":
 		issue := v.jiraConfirmIssue
+		extraMsg := v.jiraExtraMsg
 		v.jiraConfirmIssue = nil
-		return v.startAgentFromJira(issue)
-	case "n", "esc":
+		v.jiraExtraMsg = ""
+		return v.startAgentFromJira(issue, extraMsg)
+	case "esc":
 		v.jiraConfirmIssue = nil
+		v.jiraExtraMsg = ""
+	case "ctrl+w":
+		v.jiraExtraMsg = components.DeleteWordEnd(v.jiraExtraMsg)
+	case "backspace":
+		if len(v.jiraExtraMsg) > 0 {
+			v.jiraExtraMsg = v.jiraExtraMsg[:len(v.jiraExtraMsg)-1]
+		}
+	default:
+		if msg.Paste && len(msg.Runes) > 0 {
+			v.jiraExtraMsg += string(msg.Runes)
+		} else if len(msg.Runes) == 1 {
+			r := msg.Runes[0]
+			if r >= 32 {
+				v.jiraExtraMsg += string(r)
+			}
+		}
 	}
 	return nil
 }
 
 // startAgentFromJira starts a new agent for the given Jira ticket using a worktree.
-func (v *AgentView) startAgentFromJira(issue *jira.Issue) tea.Cmd {
+func (v *AgentView) startAgentFromJira(issue *jira.Issue, extraMsg string) tea.Cmd {
 	if issue == nil || v.engine == nil {
 		return nil
 	}
 	eng := v.engine
 	repoPath := v.repoPath
 	ctxFiles := v.contextFiles
-	agentPrompt := buildJiraAgentPrompt(issue, "")
+	agentPrompt := buildJiraAgentPrompt(issue, extraMsg)
 
 	return func() tea.Msg {
 		id, err := eng.StartAgent(repoPath, agentPrompt, engine.AgentOptions{
