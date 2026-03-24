@@ -35,6 +35,7 @@ func (s *Server) handleAgentStart(w http.ResponseWriter, r *http.Request) {
 
 	opts := engine.AgentOptions{
 		Model:        req.Model,
+		Effort:       req.Effort,
 		AllowedTools: req.AllowedTools,
 		MaxTurns:     req.MaxTurns,
 		ContextFiles: req.ContextFiles,

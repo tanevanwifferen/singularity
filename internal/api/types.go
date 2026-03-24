@@ -75,6 +75,7 @@ type AgentStartRequest struct {
 	ProjectPath  string   `json:"project_path"`
 	Task         string   `json:"task"`
 	Model        string   `json:"model,omitempty"`
+	Effort       string   `json:"effort,omitempty"`
 	AllowedTools []string `json:"allowed_tools,omitempty"`
 	MaxTurns     int      `json:"max_turns,omitempty"`
 	TimeoutSecs  int      `json:"timeout_secs,omitempty"`

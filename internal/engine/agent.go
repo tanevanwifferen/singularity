@@ -74,6 +74,7 @@ type Agent struct {
 
 	// Configuration
 	model        string
+	effort       string
 	allowedTools []string
 	maxTurns     int
 	contextFiles []string
@@ -125,6 +126,7 @@ func newAgent(id, workDir, task string, opts AgentOptions) *Agent {
 		output:       make([]OutputEntry, 0),
 		done:         make(chan struct{}),
 		model:        opts.Model,
+		effort:       opts.Effort,
 		allowedTools: opts.AllowedTools,
 		maxTurns:     opts.MaxTurns,
 		contextFiles: opts.ContextFiles,
@@ -197,7 +199,7 @@ func (a *Agent) start() error {
 	a.State = AgentRunning
 
 	if a.RouteResult != nil {
-		a.appendOutput("system", fmt.Sprintf("Routed → %s (%s: %s)", a.RouteResult.Model, a.RouteResult.Category, a.RouteResult.Reason))
+		a.appendOutput("system", fmt.Sprintf("Routed → model=%s effort=%s (%s: %s)", a.RouteResult.Model, a.RouteResult.Effort, a.RouteResult.Category, a.RouteResult.Reason))
 	}
 	a.appendOutput("system", fmt.Sprintf("Agent %s started with task: %s", a.ID, a.Task))
 
@@ -231,6 +233,10 @@ func (a *Agent) buildArgs() []string {
 
 	if a.model != "" {
 		args = append(args, "--model", a.model)
+	}
+
+	if a.effort != "" {
+		args = append(args, "--effort", a.effort)
 	}
 
 	if a.maxTurns > 0 {
