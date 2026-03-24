@@ -19,7 +19,22 @@ func main() {
 	repoPath := flag.String("repo", "", "Repository path")
 	clientURL := flag.String("client", "", "Connect to server at URL (client mode)")
 	projectConfig := flag.String("project-config", "", "Path to project config file (multi-repo)")
+	generateConfigDir := flag.String("generate-config-from-dir", "", "Scan directory for git repos and print a project config JSON to stdout")
 	flag.Parse()
+
+	// Config generation mode: scan dir, print JSON, exit.
+	if *generateConfigDir != "" {
+		cfg, err := project.GenerateConfigFromDir(*generateConfigDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		if err := project.PrintGeneratedConfig(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing output: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	// Server mode
 	if *serverMode {
