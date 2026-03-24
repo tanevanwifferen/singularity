@@ -17,14 +17,14 @@ import (
 
 // BranchesView displays a filterable list of branches with comparison capabilities.
 type BranchesView struct {
-	repoPath    string
-	repo        *git.RepoInfo
-	branches    []git.BranchInfo
-	filter      *components.Filter[git.BranchInfo]
-	loading     bool
-	err         error
-	width       int
-	height      int
+	repoPath string
+	repo     *git.RepoInfo
+	branches []git.BranchInfo
+	filter   *components.Filter[git.BranchInfo]
+	loading  bool
+	err      error
+	width    int
+	height   int
 
 	// Comparison panel state
 	showCompare   bool
@@ -42,19 +42,19 @@ type BranchesView struct {
 	newBranchInput components.Filter[byte]
 
 	// CI status cache
-	pipelines    map[string]*git.PipelineInfo
-	cacheTime    time.Time
+	pipelines     map[string]*git.PipelineInfo
+	cacheTime     time.Time
 	cacheDuration time.Duration
-	ciLoading    bool
+	ciLoading     bool
 }
 
 // NewBranchesView creates a new branches view.
 func NewBranchesView(repoPath string) *BranchesView {
 	v := &BranchesView{
-		repoPath:     repoPath,
-		width:        80,
-		height:       24,
-		pipelines:    make(map[string]*git.PipelineInfo),
+		repoPath:      repoPath,
+		width:         80,
+		height:        24,
+		pipelines:     make(map[string]*git.PipelineInfo),
 		cacheDuration: 2 * time.Minute, // Cache CI status for 2 minutes
 	}
 

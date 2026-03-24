@@ -44,11 +44,11 @@ type projectDiffItem struct {
 
 // ProjectDiffView shows uncommitted changes across all repos in the project.
 type ProjectDiffView struct {
-	proj   *project.Project
-	width  int
-	height int
+	proj    *project.Project
+	width   int
+	height  int
 	loading bool
-	err    error
+	err     error
 
 	repoOrder []string
 	repoDiffs map[string]*repoWorkdirResult
@@ -56,9 +56,9 @@ type ProjectDiffView struct {
 	items       []projectDiffItem
 	selectedIdx int
 
-	showDiff        bool
-	currentDiff     string
-	parsedDiffLines []DiffLine
+	showDiff         bool
+	currentDiff      string
+	parsedDiffLines  []DiffLine
 	diffScrollOffset int
 }
 

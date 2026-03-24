@@ -24,11 +24,11 @@ type WSClient struct {
 	mu         sync.RWMutex
 
 	// Reconnection state
-	reconnectDelay    time.Duration
-	maxReconnectDelay time.Duration
-	reconnectAttempts  int
+	reconnectDelay       time.Duration
+	maxReconnectDelay    time.Duration
+	reconnectAttempts    int
 	maxReconnectAttempts int
-	stopCh             chan struct{}
+	stopCh               chan struct{}
 
 	// Event handlers - each view type registers its handler
 	handlers map[string][]WSEventHandler
@@ -58,13 +58,13 @@ type WSEvent struct {
 // NewWSClient creates a new WebSocket client
 func NewWSClient(url string) *WSClient {
 	return &WSClient{
-		url:                 url,
-		reconnectDelay:      1 * time.Second,
-		maxReconnectDelay:   30 * time.Second,
+		url:                  url,
+		reconnectDelay:       1 * time.Second,
+		maxReconnectDelay:    30 * time.Second,
 		maxReconnectAttempts: 0, // 0 = unlimited
-		stopCh:              make(chan struct{}),
-		handlers:            make(map[string][]WSEventHandler),
-		statusSubscribers:   make([]chan WSConnectionStatus, 0),
+		stopCh:               make(chan struct{}),
+		handlers:             make(map[string][]WSEventHandler),
+		statusSubscribers:    make([]chan WSConnectionStatus, 0),
 	}
 }
 
@@ -367,9 +367,9 @@ type WSPipelineUpdateMsg struct {
 
 // WSAgentOutputMsg is a tea.Msg for agent output events
 type WSAgentOutputMsg struct {
-	AgentID  string
-	Output   string
-	Source   string
+	AgentID   string
+	Output    string
+	Source    string
 	Timestamp time.Time
 }
 
@@ -447,9 +447,9 @@ func NewWSViewUpdater(url string, repoPath string) *WSClient {
 		}
 		return func() tea.Msg {
 			return WSAgentOutputMsg{
-				AgentID:  data.AgentID,
-				Output:   data.Output,
-				Source:   data.Source,
+				AgentID:   data.AgentID,
+				Output:    data.Output,
+				Source:    data.Source,
 				Timestamp: ts,
 			}
 		}

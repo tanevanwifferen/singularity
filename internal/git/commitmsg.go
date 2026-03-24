@@ -14,12 +14,12 @@ import (
 
 // CommitMessage holds a generated commit message
 type CommitMessage struct {
-	Type      string   `json:"type"`      // feat, fix, docs, etc.
-	Scope     string   `json:"scope"`     // optional scope
-	Subject   string   `json:"subject"`   // short description
-	Body      string   `json:"body"`      // optional detailed description
-	Footers   []string `json:"footers"`   // optional footers (BREAKING CHANGE, etc.)
-	Full      string   `json:"full"`      // complete commit message
+	Type    string   `json:"type"`    // feat, fix, docs, etc.
+	Scope   string   `json:"scope"`   // optional scope
+	Subject string   `json:"subject"` // short description
+	Body    string   `json:"body"`    // optional detailed description
+	Footers []string `json:"footers"` // optional footers (BREAKING CHANGE, etc.)
+	Full    string   `json:"full"`    // complete commit message
 }
 
 // claudeConfig holds configuration for Claude API calls
@@ -193,16 +193,16 @@ func attemptClaudeGenerate(path, prompt string) (*CommitMessage, error) {
 // isValidCommitType checks if a commit type is a valid conventional commit type
 func isValidCommitType(t string) bool {
 	validTypes := map[string]bool{
-		"feat":    true,
-		"fix":     true,
-		"docs":    true,
-		"style":   true,
+		"feat":     true,
+		"fix":      true,
+		"docs":     true,
+		"style":    true,
 		"refactor": true,
-		"test":    true,
-		"chore":   true,
-		"perf":    true,
-		"ci":      true,
-		"build":   true,
+		"test":     true,
+		"chore":    true,
+		"perf":     true,
+		"ci":       true,
+		"build":    true,
 	}
 	return validTypes[t]
 }

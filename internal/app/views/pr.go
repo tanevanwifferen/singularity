@@ -52,15 +52,15 @@ type PRView struct {
 // NewPRView creates a new PR/MR creation view.
 func NewPRView(repoPath string) *PRView {
 	return &PRView{
-		repoPath:         repoPath,
-		sourceBranchIdx:  -1,
-		targetBranchIdx:  -1,
-		width:            120,
-		height:           30,
-		editDescription:  false,
-		descLines:        []string{""},
-		descCursorRow:    0,
-		descCursorCol:    0,
+		repoPath:        repoPath,
+		sourceBranchIdx: -1,
+		targetBranchIdx: -1,
+		width:           120,
+		height:          30,
+		editDescription: false,
+		descLines:       []string{""},
+		descCursorRow:   0,
+		descCursorCol:   0,
 	}
 }
 
@@ -279,8 +279,8 @@ func (v *PRView) handleKey(msg tea.KeyMsg) tea.Cmd {
 			} else {
 				v.sourceBranchIdx++
 			}
-		 v.generateTitle()
-		 v.generateDescription()
+			v.generateTitle()
+			v.generateDescription()
 		}
 
 	case "ctrl+k":
@@ -332,14 +332,14 @@ func (v *PRView) handleDescriptionInput(msg tea.Msg) tea.Cmd {
 				line := v.descLines[v.descCursorRow]
 				_ = line[:v.descCursorCol] // prefix before cursor (kept for future use)
 				after := line[v.descCursorCol:]
-				
+
 				// Insert new line after current
 				newLines := make([]string, len(v.descLines)+1)
 				copy(newLines[:v.descCursorRow+1], v.descLines[:v.descCursorRow+1])
 				newLines[v.descCursorRow+1] = after
 				copy(newLines[v.descCursorRow+2:], v.descLines[v.descCursorRow+1:])
 				v.descLines = newLines
-				
+
 				// Move cursor to beginning of new line
 				v.descCursorRow++
 				v.descCursorCol = 0
@@ -369,13 +369,13 @@ func (v *PRView) handleDescriptionInput(msg tea.Msg) tea.Cmd {
 				prevLine := v.descLines[v.descCursorRow-1]
 				currLine := v.descLines[v.descCursorRow]
 				v.descLines[v.descCursorRow-1] = prevLine + currLine
-				
+
 				// Remove current line
 				newLines := make([]string, len(v.descLines)-1)
 				copy(newLines[:v.descCursorRow], v.descLines[:v.descCursorRow])
 				copy(newLines[v.descCursorRow:], v.descLines[v.descCursorRow+1:])
 				v.descLines = newLines
-				
+
 				v.descCursorRow--
 				v.descCursorCol = len(prevLine)
 			}
@@ -390,7 +390,7 @@ func (v *PRView) handleDescriptionInput(msg tea.Msg) tea.Cmd {
 				currLine := v.descLines[v.descCursorRow]
 				nextLine := v.descLines[v.descCursorRow+1]
 				v.descLines[v.descCursorRow] = currLine + nextLine
-				
+
 				// Remove next line
 				newLines := make([]string, len(v.descLines)-1)
 				copy(newLines[:v.descCursorRow+1], v.descLines[:v.descCursorRow+1])
@@ -568,7 +568,7 @@ func (v *PRView) View() string {
 	// Header
 	s.WriteString(th.Title.Render("Create Pull Request"))
 	s.WriteString(" | ")
-	
+
 	// Forge indicator
 	if v.forgeAuth != nil && v.forgeAuth.Valid {
 		forgeName := "GitHub"
@@ -642,7 +642,7 @@ func (v *PRView) View() string {
 	s.WriteString(th.BranchStyle.Render("Description:"))
 	s.WriteString(th.DashboardAccentStyle.Render(" [e] to edit"))
 	s.WriteString("\n")
-	
+
 	if v.editDescription {
 		// Render description editor
 		for i, line := range v.descLines {

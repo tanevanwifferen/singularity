@@ -18,12 +18,12 @@ import (
 
 // RebaseView provides visual interactive rebase planning and execution.
 type RebaseView struct {
-	repoPath    string
-	repo        *git.RepoInfo
-	loading     bool
-	err         error
-	width       int
-	height      int
+	repoPath string
+	repo     *git.RepoInfo
+	loading  bool
+	err      error
+	width    int
+	height   int
 
 	// Branch selection state
 	showBranchSelect bool
@@ -31,9 +31,9 @@ type RebaseView struct {
 	branchCursor     int
 
 	// Rebase planning state
-	commits       []git.RebaseCommit
-	cursor        int
-	baseBranch    string
+	commits    []git.RebaseCommit
+	cursor     int
+	baseBranch string
 
 	// Modal states
 	showExecConfirm     bool
@@ -49,7 +49,7 @@ type RebaseView struct {
 	statusMessage string
 
 	// Conflict state
-	hasConflict    bool
+	hasConflict     bool
 	conflictFiles   []string
 	conflictMessage string
 	currentCommit   string
@@ -60,7 +60,7 @@ func NewRebaseView(repoPath string) *RebaseView {
 	v := &RebaseView{
 		repoPath:     repoPath,
 		width:        80,
-		height:      24,
+		height:       24,
 		cursor:       0,
 		branchCursor: 0,
 	}

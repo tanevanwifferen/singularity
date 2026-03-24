@@ -28,10 +28,10 @@ func DefaultSpinnerStyles() SpinnerStyles {
 // Spinner is a component that displays a loading indicator with a message.
 // It wraps the Bubbles spinner and provides consistent styling.
 type Spinner struct {
-	spinner  spinner.Model
-	message  string
-	visible  bool
-	Styles   SpinnerStyles
+	spinner spinner.Model
+	message string
+	visible bool
+	Styles  SpinnerStyles
 }
 
 // NewSpinner creates a new Spinner component.

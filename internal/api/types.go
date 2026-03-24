@@ -6,11 +6,11 @@ import "singularity/internal/git"
 
 // StatusResponse is the response for /api/status
 type StatusResponse struct {
-	Version   string `json:"version"`
-	Server    string `json:"server"`
-	RepoPath  string `json:"repo_path,omitempty"`
-	RepoInfo  *git.RepoInfo `json:"repo_info,omitempty"`
-	Error     string `json:"error,omitempty"`
+	Version  string        `json:"version"`
+	Server   string        `json:"server"`
+	RepoPath string        `json:"repo_path,omitempty"`
+	RepoInfo *git.RepoInfo `json:"repo_info,omitempty"`
+	Error    string        `json:"error,omitempty"`
 }
 
 // RepoRequest is the request for repo operations
@@ -20,14 +20,14 @@ type RepoRequest struct {
 
 // BranchComparisonRequest is the request for branch comparison
 type BranchComparisonRequest struct {
-	RepoPath  string `json:"repo_path"`
+	RepoPath string `json:"repo_path"`
 	BranchA  string `json:"branch_a"`
 	BranchB  string `json:"branch_b"`
 }
 
 // BranchDiffRequest is the request for branch diff
 type BranchDiffRequest struct {
-	RepoPath  string `json:"repo_path"`
+	RepoPath string `json:"repo_path"`
 	BranchA  string `json:"branch_a"`
 	BranchB  string `json:"branch_b"`
 }
@@ -39,12 +39,12 @@ type CommitMessageRequest struct {
 
 // MRRequest is the request for creating a merge request
 type MRRequest struct {
-	RepoPath      string   `json:"repo_path"`
-	SourceBranch  string   `json:"source_branch"`
-	TargetBranch  string   `json:"target_branch"`
-	Title         string   `json:"title"`
-	Description   string   `json:"description"`
-	Reviewers     []string `json:"reviewers"`
+	RepoPath     string   `json:"repo_path"`
+	SourceBranch string   `json:"source_branch"`
+	TargetBranch string   `json:"target_branch"`
+	Title        string   `json:"title"`
+	Description  string   `json:"description"`
+	Reviewers    []string `json:"reviewers"`
 }
 
 // WSMessage represents a WebSocket message
@@ -55,10 +55,10 @@ type WSMessage struct {
 
 // WSEvent types
 const (
-	WSEventBranchUpdate  = "branch_update"
-	WSEventRepoUpdate    = "repo_update"
+	WSEventBranchUpdate   = "branch_update"
+	WSEventRepoUpdate     = "repo_update"
 	WSEventPipelineUpdate = "pipeline_update"
-	WSEventError         = "error"
+	WSEventError          = "error"
 )
 
 // APIResponse is a generic API response

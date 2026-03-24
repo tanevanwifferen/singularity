@@ -63,7 +63,6 @@ func (s *Server) handleAgentStart(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-
 // handleAgentStatus handles GET /api/agent/status?session_id=...
 func (s *Server) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.URL.Query().Get("session_id")

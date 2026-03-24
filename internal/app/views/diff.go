@@ -34,28 +34,28 @@ type DiffLine struct {
 // Left panel: scrollable file list with status indicators
 // Right panel: file details and diff content
 type DiffView struct {
-	repoPath    string
-	repo        *git.RepoInfo
-	width       int
-	height      int
-	loading     bool
-	err         error
+	repoPath string
+	repo     *git.RepoInfo
+	width    int
+	height   int
+	loading  bool
+	err      error
 
 	// Mode: branch diff or workdir diff
 	mode DiffViewMode
 
 	// Branch comparison mode
-	branchA string
-	branchB string
+	branchA    string
+	branchB    string
 	branchDiff *git.BranchDiff
 
 	// Workdir diff mode
 	workdirDiff *git.WorkdirDiff
 
 	// File list state
-	files      []git.FileChange
+	files       []git.FileChange
 	selectedIdx int
-	showDiff   bool // Whether to show actual diff content
+	showDiff    bool // Whether to show actual diff content
 
 	// Focus: true = file list, false = diff panel
 	focusFileList bool
@@ -64,7 +64,7 @@ type DiffView struct {
 	currentDiff string
 
 	// Parsed diff lines for viewport scrolling
-	parsedDiffLines []DiffLine
+	parsedDiffLines  []DiffLine
 	diffScrollOffset int
 
 	// Navigation mode: when viewing diff content, j/k navigate diff lines
@@ -74,13 +74,13 @@ type DiffView struct {
 // NewDiffView creates a new diff view for branch comparison.
 func NewDiffView(repoPath, branchA, branchB string) *DiffView {
 	return &DiffView{
-		repoPath:    repoPath,
-		branchA:     branchA,
-		branchB:     branchB,
-		mode:        DiffModeBranch,
-		width:       120,
-		height:      30,
-		selectedIdx: 0,
+		repoPath:      repoPath,
+		branchA:       branchA,
+		branchB:       branchB,
+		mode:          DiffModeBranch,
+		width:         120,
+		height:        30,
+		selectedIdx:   0,
 		focusFileList: true,
 	}
 }
@@ -91,11 +91,11 @@ func (v *DiffView) SetRepoPath(path string) { v.repoPath = path }
 // NewWorkdirDiffView creates a new diff view for staged/unstaged changes.
 func NewWorkdirDiffView(repoPath string) *DiffView {
 	return &DiffView{
-		repoPath:    repoPath,
-		mode:        DiffModeWorkdir,
-		width:       120,
-		height:      30,
-		selectedIdx: 0,
+		repoPath:      repoPath,
+		mode:          DiffModeWorkdir,
+		width:         120,
+		height:        30,
+		selectedIdx:   0,
 		focusFileList: true,
 	}
 }

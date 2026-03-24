@@ -11,14 +11,14 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	Version     string            `json:"version"`
-	Theme       ThemeConfig       `json:"theme"`
-	Git         GitConfig         `json:"git"`
-	Forge       ForgeConfig       `json:"forge"`
-	AI          AIConfig          `json:"ai"`
-	Jira        JiraConfig        `json:"jira"`
-	Profiles    map[string]Profile `json:"profiles"`
-	ActiveProfile string          `json:"active_profile"`
+	Version       string             `json:"version"`
+	Theme         ThemeConfig        `json:"theme"`
+	Git           GitConfig          `json:"git"`
+	Forge         ForgeConfig        `json:"forge"`
+	AI            AIConfig           `json:"ai"`
+	Jira          JiraConfig         `json:"jira"`
+	Profiles      map[string]Profile `json:"profiles"`
+	ActiveProfile string             `json:"active_profile"`
 }
 
 // JiraConfig holds Jira integration settings
@@ -33,68 +33,68 @@ type JiraConfig struct {
 // ThemeConfig holds UI theme settings
 type ThemeConfig struct {
 	Style       string `json:"style"`        // "default", "dark", "light"
-	AccentColor string `json:"accent_color"`  // ANSI color name
+	AccentColor string `json:"accent_color"` // ANSI color name
 }
 
 // GitConfig holds git-related settings
 type GitConfig struct {
-	DefaultBranch    string `json:"default_branch"`    // default branch name
-	AutoFetch        bool   `json:"auto_fetch"`        // auto-fetch remote info
-	FetchInterval    int    `json:"fetch_interval"`     // seconds between fetches
-	MaxBranchDepth   int    `json:"max_branch_depth"`   // max branches to show
-	ShowRemoteBranches bool `json:"show_remote_branches"` // show remote branches
+	DefaultBranch      string `json:"default_branch"`       // default branch name
+	AutoFetch          bool   `json:"auto_fetch"`           // auto-fetch remote info
+	FetchInterval      int    `json:"fetch_interval"`       // seconds between fetches
+	MaxBranchDepth     int    `json:"max_branch_depth"`     // max branches to show
+	ShowRemoteBranches bool   `json:"show_remote_branches"` // show remote branches
 }
 
 // ForgeConfig holds forge (GitHub/GitLab) settings
 type ForgeConfig struct {
 	DefaultHost   string   `json:"default_host"`   // "github.com", "gitlab.com"
 	APIURL        string   `json:"api_url"`        // custom API URL
-	Token         string   `json:"token"`         // stored auth token
-	Organizations  []string `json:"organizations"` // default orgs to scope to
+	Token         string   `json:"token"`          // stored auth token
+	Organizations []string `json:"organizations"`  // default orgs to scope to
 	AutoAssignMe  bool     `json:"auto_assign_me"` // auto-assign self to MRs
 }
 
 // AIConfig holds AI-related settings
 type AIConfig struct {
-	Provider     string `json:"provider"`     // "claude", "openai", "local"
-	Model        string `json:"model"`       // model name
-	CommitStyle  string `json:"commit_style"` // "conventional", "verbose", "minimal"
-	MaxTokens    int    `json:"max_tokens"`   // max response tokens
-	Temperature  float64 `json:"temperature"` // generation temperature
+	Provider    string  `json:"provider"`     // "claude", "openai", "local"
+	Model       string  `json:"model"`        // model name
+	CommitStyle string  `json:"commit_style"` // "conventional", "verbose", "minimal"
+	MaxTokens   int     `json:"max_tokens"`   // max response tokens
+	Temperature float64 `json:"temperature"`  // generation temperature
 }
 
 // Profile holds a named configuration profile
 type Profile struct {
-	Name        string     `json:"name"`
-	Description string     `json:"description"`
-	Config      Config     `json:"config"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Config      Config `json:"config"`
 }
 
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	return &Config{
-		Version:     "0.1.0",
+		Version:       "0.1.0",
 		ActiveProfile: "default",
 		Theme: ThemeConfig{
 			Style:       "default",
 			AccentColor: "220",
 		},
 		Git: GitConfig{
-			DefaultBranch:    "main",
-			AutoFetch:        true,
-			FetchInterval:    60,
-			MaxBranchDepth:   50,
+			DefaultBranch:      "main",
+			AutoFetch:          true,
+			FetchInterval:      60,
+			MaxBranchDepth:     50,
 			ShowRemoteBranches: true,
 		},
 		Forge: ForgeConfig{
-			DefaultHost:   "github.com",
-			AutoAssignMe:  true,
+			DefaultHost:  "github.com",
+			AutoAssignMe: true,
 		},
 		AI: AIConfig{
-			Provider:     "claude",
-			CommitStyle:  "conventional",
-			MaxTokens:    1024,
-			Temperature:  0.7,
+			Provider:    "claude",
+			CommitStyle: "conventional",
+			MaxTokens:   1024,
+			Temperature: 0.7,
 		},
 		Profiles: map[string]Profile{},
 	}

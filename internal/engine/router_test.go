@@ -6,11 +6,11 @@ import (
 
 func TestParseClassification(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    string
-		wantCat  PromptCategory
+		name      string
+		input     string
+		wantCat   PromptCategory
 		wantModel string
-		wantErr  bool
+		wantErr   bool
 	}{
 		{
 			name:      "clean planning response",

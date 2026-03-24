@@ -8,14 +8,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"singularity/internal/api"
 	"singularity/internal/git"
-	"github.com/gorilla/websocket"
 )
 
 // Client is the API client for connecting to the singularity server
 type Client struct {
-	serverURL string
+	serverURL  string
 	httpClient *http.Client
 	wsConn     *websocket.Conn
 	wsMux      sync.RWMutex
@@ -214,8 +214,8 @@ func (c *Client) CompareBranches(repoPath, branchA, branchB string) (*git.Branch
 	var comparison git.BranchComparison
 	err := c.doRequest("POST", "/api/branch/compare", api.BranchComparisonRequest{
 		RepoPath: repoPath,
-		BranchA: branchA,
-		BranchB: branchB,
+		BranchA:  branchA,
+		BranchB:  branchB,
 	}, &comparison)
 	return &comparison, err
 }
@@ -225,8 +225,8 @@ func (c *Client) GetBranchDiff(repoPath, branchA, branchB string) (*git.BranchDi
 	var diff git.BranchDiff
 	err := c.doRequest("POST", "/api/branch/diff", api.BranchDiffRequest{
 		RepoPath: repoPath,
-		BranchA: branchA,
-		BranchB: branchB,
+		BranchA:  branchA,
+		BranchB:  branchB,
 	}, &diff)
 	return &diff, err
 }
@@ -242,12 +242,12 @@ func (c *Client) GenerateCommitMessage(repoPath string) (*git.CommitMessage, err
 func (c *Client) CreateMR(repoPath, sourceBranch, targetBranch, title, description string, reviewers []string) (*git.MergeRequest, error) {
 	var mr git.MergeRequest
 	err := c.doRequest("POST", "/api/mr/create", api.MRRequest{
-		RepoPath: repoPath,
+		RepoPath:     repoPath,
 		SourceBranch: sourceBranch,
 		TargetBranch: targetBranch,
-		Title: title,
-		Description: description,
-		Reviewers: reviewers,
+		Title:        title,
+		Description:  description,
+		Reviewers:    reviewers,
 	}, &mr)
 	return &mr, err
 }

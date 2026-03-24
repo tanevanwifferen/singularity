@@ -39,16 +39,16 @@ type configTab struct {
 
 // ConfigView is a TUI form for editing application settings.
 type ConfigView struct {
-	cfg     *config.Config
-	width   int
-	height  int
+	cfg    *config.Config
+	width  int
+	height int
 
-	tabs    []configTab
-	tabIdx  int // active tab (0-based)
+	tabs     []configTab
+	tabIdx   int // active tab (0-based)
 	fieldIdx int // active field within tab
 
-	editing  bool   // whether the cursor is inside a field input
-	editBuf  string // edit buffer for current field
+	editing bool   // whether the cursor is inside a field input
+	editBuf string // edit buffer for current field
 
 	statusMsg string
 	errMsg    string

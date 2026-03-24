@@ -22,11 +22,11 @@ type workflowDiffDoneMsg struct {
 
 // repoDiffResult holds the diff result for a single repo in a workflow.
 type repoDiffResult struct {
-	RepoName       string
-	WorktreePath   string
-	DefaultBranch  string
-	Diff           *git.BranchDiff
-	Err            error
+	RepoName      string
+	WorktreePath  string
+	DefaultBranch string
+	Diff          *git.BranchDiff
+	Err           error
 	// DeepFileStatus maps file path → true if ALL hunks are already in the base branch
 	DeepFileStatus map[string]bool
 }

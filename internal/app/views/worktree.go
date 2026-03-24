@@ -16,43 +16,43 @@ import (
 
 // WorktreeView displays and manages git worktrees.
 type WorktreeView struct {
-	repoPath    string
-	repo        *git.RepoInfo
-	worktrees   []git.Worktree
-	filter      *components.Filter[git.Worktree]
-	loading     bool
-	err         error
-	width       int
-	height      int
+	repoPath  string
+	repo      *git.RepoInfo
+	worktrees []git.Worktree
+	filter    *components.Filter[git.Worktree]
+	loading   bool
+	err       error
+	width     int
+	height    int
 
 	// Agent engine for starting merge agents
 	engine *engine.Engine
 
 	// Modal states
-	showCreate        bool
-	showRemoveConfirm bool
-	showPruneConfirm  bool
+	showCreate         bool
+	showRemoveConfirm  bool
+	showPruneConfirm   bool
 	showNewBranchInput bool
-	showAgentConfirm  bool
-	agentWorktree     *git.Worktree
-	showRebaseConfirm bool
-	rebaseWorktree    *git.Worktree
+	showAgentConfirm   bool
+	agentWorktree      *git.Worktree
+	showRebaseConfirm  bool
+	rebaseWorktree     *git.Worktree
 
 	// Create worktree input state
-	newWorktreePath  string
-	newWorktreePathInput components.Filter[byte]
-	newWorktreeBranch string
+	newWorktreePath        string
+	newWorktreePathInput   components.Filter[byte]
+	newWorktreeBranch      string
 	newWorktreeBranchInput components.Filter[byte]
-	createNewBranch  bool
+	createNewBranch        bool
 
 	// Remove confirmation state
-	removeWorktree    *git.Worktree
-	removeForce       bool
+	removeWorktree *git.Worktree
+	removeForce    bool
 
 	// Branch list for selection during create
-	branches          []git.BranchInfo
-	branchFilter      *components.Filter[git.BranchInfo]
-	showBranchPicker  bool
+	branches         []git.BranchInfo
+	branchFilter     *components.Filter[git.BranchInfo]
+	showBranchPicker bool
 }
 
 // NewWorktreeView creates a new worktree view.

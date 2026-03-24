@@ -77,7 +77,7 @@ type WorkflowsView struct {
 	workflowAgentSnap *engine.AgentSnapshot
 
 	// Jira ticket picker
-	jiraPicker     *JiraPickerState
+	jiraPicker       *JiraPickerState
 	jiraConfirmIssue *jira.Issue // issue pending workflow-start confirmation
 
 	// Drill-down diff view

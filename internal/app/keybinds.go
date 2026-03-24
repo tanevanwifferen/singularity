@@ -14,22 +14,22 @@ type Action string
 
 // Keybinding actions
 const (
-	ActionQuit           Action = "quit"
-	ActionRefresh        Action = "refresh"
-	ActionToggleTheme    Action = "toggle_theme"
-	ActionShowHelp       Action = "show_help"
-	ActionGoBack         Action = "go_back"
-	ActionSwitchView     Action = "switch_view"
-	ActionNavigateUp     Action = "navigate_up"
-	ActionNavigateDown   Action = "navigate_down"
-	ActionNavigateLeft   Action = "navigate_left"
-	ActionNavigateRight  Action = "navigate_right"
-	ActionSelect         Action = "select"
-	ActionCancel         Action = "cancel"
-	ActionSearch         Action = "search"
-	ActionNewItem        Action = "new_item"
-	ActionDeleteItem     Action = "delete_item"
-	ActionClearItem      Action = "clear_item"
+	ActionQuit          Action = "quit"
+	ActionRefresh       Action = "refresh"
+	ActionToggleTheme   Action = "toggle_theme"
+	ActionShowHelp      Action = "show_help"
+	ActionGoBack        Action = "go_back"
+	ActionSwitchView    Action = "switch_view"
+	ActionNavigateUp    Action = "navigate_up"
+	ActionNavigateDown  Action = "navigate_down"
+	ActionNavigateLeft  Action = "navigate_left"
+	ActionNavigateRight Action = "navigate_right"
+	ActionSelect        Action = "select"
+	ActionCancel        Action = "cancel"
+	ActionSearch        Action = "search"
+	ActionNewItem       Action = "new_item"
+	ActionDeleteItem    Action = "delete_item"
+	ActionClearItem     Action = "clear_item"
 )
 
 // DefaultKeybinds defines the default keybindings for the application.
@@ -64,9 +64,9 @@ type KeybindsConfig struct {
 
 // KeybindManager manages keybindings with config file support
 type KeybindManager struct {
-	mu          sync.RWMutex
-	global      map[Action][]string  // resolved global keybinds
-	viewKeybinds map[string]map[Action][]string  // resolved view keybinds by view name
+	mu           sync.RWMutex
+	global       map[Action][]string            // resolved global keybinds
+	viewKeybinds map[string]map[Action][]string // resolved view keybinds by view name
 }
 
 // GlobalKeybinds returns the resolved global keybindings

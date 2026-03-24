@@ -28,31 +28,31 @@ type StagedFile struct {
 type EditMode int
 
 const (
-	StageEditMode EditMode = iota // Default: staging area navigation
-	MessageEditMode                // Editing commit message
-	ConfirmCommitMode             // Confirmation dialog
-	HunkDiffMode                  // Viewing file diff with hunk navigation
-	LineDiffMode                  // Line-level selection within a hunk
+	StageEditMode     EditMode = iota // Default: staging area navigation
+	MessageEditMode                   // Editing commit message
+	ConfirmCommitMode                 // Confirmation dialog
+	HunkDiffMode                      // Viewing file diff with hunk navigation
+	LineDiffMode                      // Line-level selection within a hunk
 )
 
 // CommitView displays the staging area and allows creating commits.
 type CommitView struct {
-	repoPath    string
-	width       int
-	height      int
-	loading     bool
-	generating  bool // AI message generation in progress
-	committing  bool // Commit in progress
-	err         error
-	successMsg  string
+	repoPath   string
+	width      int
+	height     int
+	loading    bool
+	generating bool // AI message generation in progress
+	committing bool // Commit in progress
+	err        error
+	successMsg string
 
 	// Staged and unstaged files
 	stagedFiles   []StagedFile
 	unstagedFiles []StagedFile
 
 	// Navigation state
-	activeSection  int // 0 = staged, 1 = unstaged
-	selectedIndex  int
+	activeSection int // 0 = staged, 1 = unstaged
+	selectedIndex int
 
 	// Message editing state
 	editMode      EditMode
@@ -63,28 +63,28 @@ type CommitView struct {
 	confirmPending bool // Set to true after Ctrl+Enter to show confirm dialog
 
 	// Hunk diff preview state
-	hunkDiffRaw     string         // Raw diff output for the selected file
-	hunkList        []git.DiffHunk // Parsed hunks for the selected file
-	hunkIndex       int            // Currently selected hunk
-	hunkScrollOff   int            // Scroll offset within diff display
-	hunkIsStaged    bool           // Whether we are viewing staged hunks (true) or unstaged (false)
-	hunkFilePath    string         // Path of the file whose hunks are displayed
+	hunkDiffRaw   string         // Raw diff output for the selected file
+	hunkList      []git.DiffHunk // Parsed hunks for the selected file
+	hunkIndex     int            // Currently selected hunk
+	hunkScrollOff int            // Scroll offset within diff display
+	hunkIsStaged  bool           // Whether we are viewing staged hunks (true) or unstaged (false)
+	hunkFilePath  string         // Path of the file whose hunks are displayed
 
 	// Line-selection mode state (within a single hunk)
-	lineCursor      int            // Current cursor position in hunk.Lines
-	lineSelected    map[int]bool   // Set of toggled line indices (into hunk.Lines)
-	lineVisual      bool           // Visual/range selection active
-	lineVisualStart int            // Anchor index for visual selection
+	lineCursor      int          // Current cursor position in hunk.Lines
+	lineSelected    map[int]bool // Set of toggled line indices (into hunk.Lines)
+	lineVisual      bool         // Visual/range selection active
+	lineVisualStart int          // Anchor index for visual selection
 }
 
 // NewCommitView creates a new commit view.
 func NewCommitView(repoPath string) *CommitView {
 	return &CommitView{
-		repoPath:       repoPath,
-		width:          80,
-		height:         24,
-		activeSection:  1, // Start on unstaged (more common to stage from)
-		selectedIndex:  0,
+		repoPath:      repoPath,
+		width:         80,
+		height:        24,
+		activeSection: 1, // Start on unstaged (more common to stage from)
+		selectedIndex: 0,
 	}
 }
 

@@ -7,19 +7,19 @@ import (
 
 // Cache provides caching for git operations
 type Cache struct {
-	mu       sync.RWMutex
-	entries  map[string]*CacheEntry
-	maxAge   time.Duration
-	maxSize  int
-	hits     int
-	misses   int
+	mu      sync.RWMutex
+	entries map[string]*CacheEntry
+	maxAge  time.Duration
+	maxSize int
+	hits    int
+	misses  int
 }
 
 // CacheEntry holds a cached value with expiration
 type CacheEntry struct {
-	Value      interface{}
-	CreatedAt  time.Time
-	AccessedAt time.Time
+	Value       interface{}
+	CreatedAt   time.Time
+	AccessedAt  time.Time
 	AccessCount int
 }
 
@@ -69,10 +69,10 @@ func (c *Cache) Set(key string, value interface{}) {
 	}
 
 	c.entries[key] = &CacheEntry{
-		Value:        value,
-		CreatedAt:    time.Now(),
-		AccessedAt:   time.Now(),
-		AccessCount:  0,
+		Value:       value,
+		CreatedAt:   time.Now(),
+		AccessedAt:  time.Now(),
+		AccessCount: 0,
 	}
 }
 

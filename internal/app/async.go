@@ -20,11 +20,11 @@ type AsyncMsg interface {
 type AsyncOpType string
 
 const (
-	OpLoadRepo       AsyncOpType = "load_repo"
-	OpRefreshRepo    AsyncOpType = "refresh_repo"
+	OpLoadRepo        AsyncOpType = "load_repo"
+	OpRefreshRepo     AsyncOpType = "refresh_repo"
 	OpCompareBranches AsyncOpType = "compare_branches"
-	OpListBranches   AsyncOpType = "list_branches"
-	OpGetStatus      AsyncOpType = "get_status"
+	OpListBranches    AsyncOpType = "list_branches"
+	OpGetStatus       AsyncOpType = "get_status"
 )
 
 // RepoLoadedMsg is sent when repository data has been loaded.
@@ -62,11 +62,11 @@ func (StatusLoadedMsg) isAsyncMsg() {}
 
 // AsyncOperation represents a tracked async operation.
 type AsyncOperation struct {
-	ID       string
-	Type     AsyncOpType
-	Cancel   context.CancelFunc
-	Done     chan struct{}
-	mu       sync.RWMutex
+	ID        string
+	Type      AsyncOpType
+	Cancel    context.CancelFunc
+	Done      chan struct{}
+	mu        sync.RWMutex
 	cancelled bool
 }
 

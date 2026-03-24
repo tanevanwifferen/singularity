@@ -10,12 +10,12 @@ import (
 
 // FileChange represents a changed file in a diff
 type FileChange struct {
-	Status      string `json:"status"`      // A=Added, M=Modified, D=Deleted, R=Renamed, C=Copied
-	OldPath     string `json:"old_path"`
-	NewPath     string `json:"new_path"`
-	Additions   int    `json:"additions"`
-	Deletions   int    `json:"deletions"`
-	Similarity  int    `json:"similarity"` // For renames/copies (0-100)
+	Status     string `json:"status"` // A=Added, M=Modified, D=Deleted, R=Renamed, C=Copied
+	OldPath    string `json:"old_path"`
+	NewPath    string `json:"new_path"`
+	Additions  int    `json:"additions"`
+	Deletions  int    `json:"deletions"`
+	Similarity int    `json:"similarity"` // For renames/copies (0-100)
 }
 
 // BranchDiff holds the result of comparing two branches at file level
@@ -399,20 +399,20 @@ func isHunkAlreadyInBase(hunk DiffHunk, baseLineSet map[string]bool) bool {
 
 // WorkdirStatus holds status info for a file in the working directory
 type WorkdirStatus struct {
-	Path         string // File path
-	StagedStatus string // Status in staging area (A/M/D/R/?)
-	UnstagedStatus string // Status in working tree (A/M/D/R/?)
-	StagedAdditions int
-	StagedDeletions int
+	Path              string // File path
+	StagedStatus      string // Status in staging area (A/M/D/R/?)
+	UnstagedStatus    string // Status in working tree (A/M/D/R/?)
+	StagedAdditions   int
+	StagedDeletions   int
 	UnstagedAdditions int
 	UnstagedDeletions int
 }
 
 // WorkdirDiff holds all working directory changes
 type WorkdirDiff struct {
-	Files        []WorkdirStatus
-	TotalStagedAdds int
-	TotalStagedDels int
+	Files             []WorkdirStatus
+	TotalStagedAdds   int
+	TotalStagedDels   int
 	TotalUnstagedAdds int
 	TotalUnstagedDels int
 }
@@ -444,10 +444,10 @@ func GetWorkdirStatus(repoPath string) (*WorkdirDiff, error) {
 	// First, add all staged files
 	for _, f := range stagedDiff.Files {
 		statusMap[f.NewPath] = &WorkdirStatus{
-			Path:              f.NewPath,
-			StagedStatus:      f.Status,
-			StagedAdditions:   f.Additions,
-			StagedDeletions:   f.Deletions,
+			Path:            f.NewPath,
+			StagedStatus:    f.Status,
+			StagedAdditions: f.Additions,
+			StagedDeletions: f.Deletions,
 		}
 	}
 
@@ -459,10 +459,10 @@ func GetWorkdirStatus(repoPath string) (*WorkdirDiff, error) {
 			existing.UnstagedDeletions = f.Deletions
 		} else {
 			statusMap[f.NewPath] = &WorkdirStatus{
-				Path:                f.NewPath,
-				UnstagedStatus:      f.Status,
-				UnstagedAdditions:   f.Additions,
-				UnstagedDeletions:   f.Deletions,
+				Path:              f.NewPath,
+				UnstagedStatus:    f.Status,
+				UnstagedAdditions: f.Additions,
+				UnstagedDeletions: f.Deletions,
 			}
 		}
 	}
@@ -521,11 +521,11 @@ func GetWorkdirStatus(repoPath string) (*WorkdirDiff, error) {
 	}
 
 	return &WorkdirDiff{
-		Files:              files,
-		TotalStagedAdds:    totalStagedAdds,
-		TotalStagedDels:    totalStagedDels,
-		TotalUnstagedAdds:  totalUnstagedAdds,
-		TotalUnstagedDels:  totalUnstagedDels,
+		Files:             files,
+		TotalStagedAdds:   totalStagedAdds,
+		TotalStagedDels:   totalStagedDels,
+		TotalUnstagedAdds: totalUnstagedAdds,
+		TotalUnstagedDels: totalUnstagedDels,
 	}, nil
 }
 
@@ -814,6 +814,7 @@ func UnstageHunk(repoPath, filePath string, hunk DiffHunk) error {
 	}
 	return nil
 }
+
 // buildPartialPatch constructs a patch containing only selected lines from a hunk.
 // For staging: unselected "+" lines are dropped, unselected "-" lines become context.
 // For unstaging (reverse=true): the same logic applies but the patch will be applied

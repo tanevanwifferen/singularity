@@ -15,35 +15,35 @@ import (
 
 // PipelineView displays CI/CD pipeline status for branches.
 type PipelineView struct {
-	repoPath    string
-	repo        *git.RepoInfo
-	branches    []git.BranchInfo
-	pipelines   map[string]*git.PipelineInfo
-	loading     bool
-	err         error
-	width       int
-	height      int
+	repoPath  string
+	repo      *git.RepoInfo
+	branches  []git.BranchInfo
+	pipelines map[string]*git.PipelineInfo
+	loading   bool
+	err       error
+	width     int
+	height    int
 
 	// Selection state
 	selectedIdx    int
 	expandedBranch string
 
 	// Auto-refresh state
-	autoRefresh    bool
+	autoRefresh     bool
 	refreshInterval time.Duration
-	lastRefresh    time.Time
+	lastRefresh     time.Time
 
 	// Retry state
-	retryBranch    string
-	showRetryBusy  bool
+	retryBranch   string
+	showRetryBusy bool
 }
 
 // NewPipelineView creates a new pipeline view.
 func NewPipelineView(repoPath string) *PipelineView {
 	v := &PipelineView{
-		repoPath:         repoPath,
-		refreshInterval:  30 * time.Second,
-		selectedIdx:       0,
+		repoPath:        repoPath,
+		refreshInterval: 30 * time.Second,
+		selectedIdx:     0,
 	}
 
 	return v

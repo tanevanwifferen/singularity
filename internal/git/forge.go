@@ -17,11 +17,11 @@ const (
 
 // ForgeAuth holds authentication info for a forge
 type ForgeAuth struct {
-	Type     ForgeType `json:"type"`
-	Username string    `json:"username"`
-	AuthToken string   `json:"auth_token"` // Token or OAuth token
-	APIURL   string    `json:"api_url"`
-	Valid    bool      `json:"valid"`
+	Type      ForgeType `json:"type"`
+	Username  string    `json:"username"`
+	AuthToken string    `json:"auth_token"` // Token or OAuth token
+	APIURL    string    `json:"api_url"`
+	Valid     bool      `json:"valid"`
 }
 
 // DetectForgeAuth checks for existing authentication with GitHub or GitLab

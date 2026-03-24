@@ -46,8 +46,8 @@ type HelpOverlay struct {
 	termHeight  int
 
 	Bindings []KeyBinding
-	scroll  int
-	visible int // how many bindings visible at once
+	scroll   int
+	visible  int // how many bindings visible at once
 }
 
 // NewHelpOverlay creates a help overlay.

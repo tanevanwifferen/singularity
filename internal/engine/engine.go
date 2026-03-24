@@ -24,9 +24,9 @@ type AgentOptions struct {
 
 // Engine manages a pool of Claude Code agent subprocesses
 type Engine struct {
-	agents   map[string]*Agent
-	mu       sync.RWMutex
-	idSeq    atomic.Int64
+	agents    map[string]*Agent
+	mu        sync.RWMutex
+	idSeq     atomic.Int64
 	maxAgents int
 }
 

@@ -21,23 +21,23 @@ const version = "0.0.1"
 
 // Model represents the application state
 type Model struct {
-	quitting         bool
-	showQuitConfirm  bool
-	quitConfirm      components.ConfirmDialog
-	repoPath         string
-	projectPath      string
-	repoInfo         *git.RepoInfo
-	proj             *project.Project
-	engine           *engine.Engine
-	statusMsg        string
-	errorMsg         string
-	router           *Router
-	layout           *Layout
-	wsClient         *WSClient
-	wsStatus         WSConnectionStatus
-	projectMode      bool
-	activeRepoIdx    int // index of active repo in project (for [ / ] cycling)
-	cfg              *config.Config
+	quitting        bool
+	showQuitConfirm bool
+	quitConfirm     components.ConfirmDialog
+	repoPath        string
+	projectPath     string
+	repoInfo        *git.RepoInfo
+	proj            *project.Project
+	engine          *engine.Engine
+	statusMsg       string
+	errorMsg        string
+	router          *Router
+	layout          *Layout
+	wsClient        *WSClient
+	wsStatus        WSConnectionStatus
+	projectMode     bool
+	activeRepoIdx   int // index of active repo in project (for [ / ] cycling)
+	cfg             *config.Config
 }
 
 // New creates a new app model
@@ -768,12 +768,12 @@ func (m Model) View() string {
 
 	// Build the view
 	view := th.Title.Render("Git Frontend") + "\n"
-	view += th.Version.Render("v" + version) + "\n\n"
+	view += th.Version.Render("v"+version) + "\n\n"
 
 	if m.errorMsg != "" {
 		view += lipgloss.NewStyle().
 			Foreground(th.Error).
-			Render("Error: "+m.errorMsg+"\n\n")
+			Render("Error: " + m.errorMsg + "\n\n")
 	}
 
 	if m.statusMsg != "" {

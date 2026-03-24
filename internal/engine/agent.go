@@ -64,13 +64,13 @@ type Agent struct {
 	outputMu sync.Mutex
 
 	// Process management
-	cmd    *exec.Cmd
+	cmd     *exec.Cmd
 	stdin   io.WriteCloser
 	stdinMu sync.Mutex
-	stdout io.ReadCloser
-	stderr io.ReadCloser
-	done   chan struct{}
-	mu     sync.Mutex
+	stdout  io.ReadCloser
+	stderr  io.ReadCloser
+	done    chan struct{}
+	mu      sync.Mutex
 
 	// Configuration
 	model        string
@@ -105,9 +105,9 @@ type OutputEntry struct {
 	Content   string    `json:"content"`
 
 	// Structured fields for tool events
-	ToolName  string `json:"tool_name,omitempty"`
-	ToolID    string `json:"tool_id,omitempty"`
-	IsError   bool   `json:"is_error,omitempty"`
+	ToolName string `json:"tool_name,omitempty"`
+	ToolID   string `json:"tool_id,omitempty"`
+	IsError  bool   `json:"is_error,omitempty"`
 }
 
 // newAgent creates a new agent instance
@@ -329,7 +329,7 @@ func (a *Agent) processEvent(event map[string]interface{}) {
 				a.sessionID = sid
 				a.mu.Unlock()
 			}
-		// Skip hook_started, hook_response — noisy
+			// Skip hook_started, hook_response — noisy
 		}
 
 	case "result":

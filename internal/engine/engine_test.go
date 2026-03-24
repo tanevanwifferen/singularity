@@ -343,7 +343,6 @@ func TestAgentIsActive(t *testing.T) {
 	}
 }
 
-
 func TestBuildArgs(t *testing.T) {
 	a := newAgent("test", os.TempDir(), "do something", AgentOptions{
 		Model:        "sonnet",

@@ -11,13 +11,13 @@ import (
 
 // RepoInfo holds information about a git repository
 type RepoInfo struct {
-	Path          string        `json:"path"`
-	IsBare        bool          `json:"is_bare"`
-	CurrentBranch string        `json:"current_branch"`
-	HEAD          string        `json:"head"`
-	Remotes       []RemoteInfo  `json:"remotes"`
-	Branches      []BranchInfo  `json:"branches"`
-	IsDirty       bool          `json:"is_dirty"`
+	Path          string       `json:"path"`
+	IsBare        bool         `json:"is_bare"`
+	CurrentBranch string       `json:"current_branch"`
+	HEAD          string       `json:"head"`
+	Remotes       []RemoteInfo `json:"remotes"`
+	Branches      []BranchInfo `json:"branches"`
+	IsDirty       bool         `json:"is_dirty"`
 }
 
 // RemoteInfo holds information about a git remote

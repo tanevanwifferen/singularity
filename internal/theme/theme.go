@@ -36,8 +36,8 @@ type Theme struct {
 	Surface    lipgloss.Color
 
 	// Accent colors
-	Accent   lipgloss.Color
-	Accent2  lipgloss.Color
+	Accent  lipgloss.Color
+	Accent2 lipgloss.Color
 
 	// Border colors
 	Border lipgloss.Color
@@ -51,13 +51,13 @@ type Theme struct {
 	ErrorStyle   lipgloss.Style
 
 	// Dashboard styles
-	DashboardTitle         lipgloss.Style
-	BranchStyle            lipgloss.Style
-	SelectedBranchStyle    lipgloss.Style
-	StatsStyle             lipgloss.Style
-	CommitStyle            lipgloss.Style
-	DashboardErrorStyle    lipgloss.Style
-	DashboardAccentStyle   lipgloss.Style
+	DashboardTitle       lipgloss.Style
+	BranchStyle          lipgloss.Style
+	SelectedBranchStyle  lipgloss.Style
+	StatsStyle           lipgloss.Style
+	CommitStyle          lipgloss.Style
+	DashboardErrorStyle  lipgloss.Style
+	DashboardAccentStyle lipgloss.Style
 
 	// Stash styles
 	StashStyle         lipgloss.Style
@@ -80,21 +80,21 @@ type Theme struct {
 
 // darkTheme is the default dark theme
 var darkTheme = Theme{
-	Type:        DarkThemeType,
-	Added:       lipgloss.Color("82"),    // Green
-	Removed:     lipgloss.Color("196"),   // Red
-	Modified:    lipgloss.Color("226"),   // Yellow
-	Info:        lipgloss.Color("75"),    // Blue
-	Warning:     lipgloss.Color("226"),   // Yellow
-	Error:       lipgloss.Color("196"),   // Red
+	Type:          DarkThemeType,
+	Added:         lipgloss.Color("82"),  // Green
+	Removed:       lipgloss.Color("196"), // Red
+	Modified:      lipgloss.Color("226"), // Yellow
+	Info:          lipgloss.Color("75"),  // Blue
+	Warning:       lipgloss.Color("226"), // Yellow
+	Error:         lipgloss.Color("196"), // Red
 	PrimaryText:   lipgloss.Color("205"), // Magenta/pink
 	SecondaryText: lipgloss.Color("86"),  // Green
 	MutedText:     lipgloss.Color("241"), // Gray
-	Background: lipgloss.Color("57"),     // Dark blue
-	Surface:    lipgloss.Color("235"),     // Dark gray
-	Accent:     lipgloss.Color("220"),     // Orange/yellow
-	Accent2:    lipgloss.Color("82"),      // Green
-	Border:     lipgloss.Color("240"),     // Gray
+	Background:    lipgloss.Color("57"),  // Dark blue
+	Surface:       lipgloss.Color("235"), // Dark gray
+	Accent:        lipgloss.Color("220"), // Orange/yellow
+	Accent2:       lipgloss.Color("82"),  // Green
+	Border:        lipgloss.Color("240"), // Gray
 
 	Title: lipgloss.NewStyle().
 		Bold(true).
@@ -119,54 +119,54 @@ var darkTheme = Theme{
 		Foreground(lipgloss.Color("196")),
 
 	DashboardTitle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("205")).
-			Bold(true),
+		Foreground(lipgloss.Color("205")).
+		Bold(true),
 
 	BranchStyle: lipgloss.NewStyle().
 		Foreground(lipgloss.Color("86")),
 
 	SelectedBranchStyle: lipgloss.NewStyle().
-				Foreground(lipgloss.Color("220")).
-				Background(lipgloss.Color("235")).
-				Bold(true),
+		Foreground(lipgloss.Color("220")).
+		Background(lipgloss.Color("235")).
+		Bold(true),
 
 	StatsStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("244")),
+		Foreground(lipgloss.Color("244")),
 
 	CommitStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240")),
+		Foreground(lipgloss.Color("240")),
 
 	DashboardErrorStyle: lipgloss.NewStyle().
-				Foreground(lipgloss.Color("196")),
+		Foreground(lipgloss.Color("196")),
 
 	DashboardAccentStyle: lipgloss.NewStyle().
-				Foreground(lipgloss.Color("220")),
+		Foreground(lipgloss.Color("220")),
 
 	StashStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("227")),
+		Foreground(lipgloss.Color("227")),
 
 	SelectedStashStyle: lipgloss.NewStyle().
-				Foreground(lipgloss.Color("227")).
-				Background(lipgloss.Color("235")).
-				Bold(true),
+		Foreground(lipgloss.Color("227")).
+		Background(lipgloss.Color("235")).
+		Bold(true),
 
 	MutedTextStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241")),
+		Foreground(lipgloss.Color("241")),
 
 	HeaderStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("205")).
-			Bold(true).
-			Padding(0, 1),
+		Foreground(lipgloss.Color("205")).
+		Bold(true).
+		Padding(0, 1),
 
 	BodyStyle: lipgloss.NewStyle().
 		Foreground(lipgloss.Color("244")),
 
 	FooterStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241")).
-			Italic(true),
+		Foreground(lipgloss.Color("241")).
+		Italic(true),
 
 	BorderStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240")),
+		Foreground(lipgloss.Color("240")),
 
 	ModalBorderColor:   lipgloss.Color("240"),
 	ModalInfoBorder:    lipgloss.Color("75"),
@@ -177,21 +177,21 @@ var darkTheme = Theme{
 
 // lightTheme is a light theme optimized for light backgrounds
 var lightTheme = Theme{
-	Type:        LightThemeType,
-	Added:       lipgloss.Color("28"),    // Dark green
-	Removed:     lipgloss.Color("160"),   // Dark red
-	Modified:    lipgloss.Color("172"),   // Dark orange (readable on white)
-	Info:        lipgloss.Color("25"),    // Dark blue
-	Warning:     lipgloss.Color("172"),   // Dark orange
-	Error:       lipgloss.Color("160"),   // Dark red
+	Type:          LightThemeType,
+	Added:         lipgloss.Color("28"),  // Dark green
+	Removed:       lipgloss.Color("160"), // Dark red
+	Modified:      lipgloss.Color("172"), // Dark orange (readable on white)
+	Info:          lipgloss.Color("25"),  // Dark blue
+	Warning:       lipgloss.Color("172"), // Dark orange
+	Error:         lipgloss.Color("160"), // Dark red
 	PrimaryText:   lipgloss.Color("54"),  // Dark magenta
 	SecondaryText: lipgloss.Color("22"),  // Dark green
 	MutedText:     lipgloss.Color("240"), // Medium gray (visible on white)
-	Background: lipgloss.Color("231"),    // White
-	Surface:    lipgloss.Color("254"),    // Very light gray
-	Accent:     lipgloss.Color("166"),    // Dark orange (readable on light bg)
-	Accent2:    lipgloss.Color("28"),     // Dark green
-	Border:     lipgloss.Color("244"),    // Medium gray (visible on white)
+	Background:    lipgloss.Color("231"), // White
+	Surface:       lipgloss.Color("254"), // Very light gray
+	Accent:        lipgloss.Color("166"), // Dark orange (readable on light bg)
+	Accent2:       lipgloss.Color("28"),  // Dark green
+	Border:        lipgloss.Color("244"), // Medium gray (visible on white)
 
 	Title: lipgloss.NewStyle().
 		Bold(true).
@@ -216,54 +216,54 @@ var lightTheme = Theme{
 		Foreground(lipgloss.Color("160")),
 
 	DashboardTitle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("54")).
-			Bold(true),
+		Foreground(lipgloss.Color("54")).
+		Bold(true),
 
 	BranchStyle: lipgloss.NewStyle().
 		Foreground(lipgloss.Color("22")),
 
 	SelectedBranchStyle: lipgloss.NewStyle().
-				Foreground(lipgloss.Color("166")).
-				Background(lipgloss.Color("254")).
-				Bold(true),
+		Foreground(lipgloss.Color("166")).
+		Background(lipgloss.Color("254")).
+		Bold(true),
 
 	StatsStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("236")),
+		Foreground(lipgloss.Color("236")),
 
 	CommitStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("238")),
+		Foreground(lipgloss.Color("238")),
 
 	DashboardErrorStyle: lipgloss.NewStyle().
-				Foreground(lipgloss.Color("160")),
+		Foreground(lipgloss.Color("160")),
 
 	DashboardAccentStyle: lipgloss.NewStyle().
-				Foreground(lipgloss.Color("166")),
+		Foreground(lipgloss.Color("166")),
 
 	StashStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("130")),
+		Foreground(lipgloss.Color("130")),
 
 	SelectedStashStyle: lipgloss.NewStyle().
-				Foreground(lipgloss.Color("130")).
-				Background(lipgloss.Color("254")).
-				Bold(true),
+		Foreground(lipgloss.Color("130")).
+		Background(lipgloss.Color("254")).
+		Bold(true),
 
 	MutedTextStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240")),
+		Foreground(lipgloss.Color("240")),
 
 	HeaderStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("54")).
-			Bold(true).
-			Padding(0, 1),
+		Foreground(lipgloss.Color("54")).
+		Bold(true).
+		Padding(0, 1),
 
 	BodyStyle: lipgloss.NewStyle().
 		Foreground(lipgloss.Color("236")),
 
 	FooterStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240")).
-			Italic(true),
+		Foreground(lipgloss.Color("240")).
+		Italic(true),
 
 	BorderStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("244")),
+		Foreground(lipgloss.Color("244")),
 
 	ModalBorderColor:   lipgloss.Color("244"),
 	ModalInfoBorder:    lipgloss.Color("25"),

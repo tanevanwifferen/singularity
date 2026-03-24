@@ -42,13 +42,13 @@ func (s SessionState) String() string {
 
 // Session represents a Claude Code session
 type Session struct {
-	ID        string         `json:"id"`
-	Project   string         `json:"project"`
-	State     SessionState   `json:"state"`
-	StartedAt time.Time      `json:"started_at"`
-	EndedAt   *time.Time     `json:"ended_at,omitempty"`
-	Output    []string       `json:"output"`
-	Error     string         `json:"error,omitempty"`
+	ID        string       `json:"id"`
+	Project   string       `json:"project"`
+	State     SessionState `json:"state"`
+	StartedAt time.Time    `json:"started_at"`
+	EndedAt   *time.Time   `json:"ended_at,omitempty"`
+	Output    []string     `json:"output"`
+	Error     string       `json:"error,omitempty"`
 	mu        sync.Mutex
 }
 

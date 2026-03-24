@@ -9,11 +9,11 @@ import (
 
 // BranchComparison holds the result of comparing two branches
 type BranchComparison struct {
-	Ahead     int `json:"ahead"`
-	Behind    int `json:"behind"`
-	Diverged  bool `json:"diverged"`
-	BranchA   string `json:"branch_a"`
-	BranchB   string `json:"branch_b"`
+	Ahead    int    `json:"ahead"`
+	Behind   int    `json:"behind"`
+	Diverged bool   `json:"diverged"`
+	BranchA  string `json:"branch_a"`
+	BranchB  string `json:"branch_b"`
 }
 
 // CompareBranches compares two branches and returns ahead/behind counts

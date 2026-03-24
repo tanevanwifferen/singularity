@@ -66,14 +66,14 @@ type WorkflowRepo struct {
 
 // FeatureWorkflow orchestrates a cross-repo feature branch lifecycle
 type FeatureWorkflow struct {
-	BranchName string                  `json:"branch_name"`
-	BaseDir    string                  `json:"base_dir"`
+	BranchName string                   `json:"branch_name"`
+	BaseDir    string                   `json:"base_dir"`
 	Repos      map[string]*WorkflowRepo `json:"repos"`
-	State      WorkflowState           `json:"state"`
-	CreatedAt  time.Time               `json:"created_at"`
-	Error      string                  `json:"error,omitempty"`
-	AgentID    string                  `json:"agent_id,omitempty"`
-	JiraURL    string                  `json:"jira_url,omitempty"`
+	State      WorkflowState            `json:"state"`
+	CreatedAt  time.Time                `json:"created_at"`
+	Error      string                   `json:"error,omitempty"`
+	AgentID    string                   `json:"agent_id,omitempty"`
+	JiraURL    string                   `json:"jira_url,omitempty"`
 
 	project *Project
 	mu      sync.RWMutex
@@ -81,16 +81,16 @@ type FeatureWorkflow struct {
 
 // WorkflowStatus is a snapshot summary of the workflow
 type WorkflowStatus struct {
-	BranchName      string        `json:"branch_name"`
-	State           WorkflowState `json:"state"`
-	TotalRepos      int           `json:"total_repos"`
-	WorktreesCreated int          `json:"worktrees_created"`
-	Pushed          int           `json:"pushed"`
-	MRsCreated      int           `json:"mrs_created"`
-	Errors          int           `json:"errors"`
-	Error           string        `json:"error,omitempty"`
-	AgentID         string        `json:"agent_id,omitempty"`
-	HasAgent        bool          `json:"has_agent"`
+	BranchName       string        `json:"branch_name"`
+	State            WorkflowState `json:"state"`
+	TotalRepos       int           `json:"total_repos"`
+	WorktreesCreated int           `json:"worktrees_created"`
+	Pushed           int           `json:"pushed"`
+	MRsCreated       int           `json:"mrs_created"`
+	Errors           int           `json:"errors"`
+	Error            string        `json:"error,omitempty"`
+	AgentID          string        `json:"agent_id,omitempty"`
+	HasAgent         bool          `json:"has_agent"`
 }
 
 // sanitizeBranchForPath replaces characters that are problematic in filesystem paths

@@ -17,11 +17,11 @@ type Project struct {
 
 // Repo represents a single repository within a project
 type Repo struct {
-	Name          string         `json:"name"`
-	Path          string         `json:"path"`
-	DefaultBranch string         `json:"default_branch"`
-	Info          *git.RepoInfo  `json:"info,omitempty"`
-	Error         string         `json:"error,omitempty"`
+	Name          string        `json:"name"`
+	Path          string        `json:"path"`
+	DefaultBranch string        `json:"default_branch"`
+	Info          *git.RepoInfo `json:"info,omitempty"`
+	Error         string        `json:"error,omitempty"`
 }
 
 // RepoStatus summarizes a repo's state for the dashboard
@@ -48,8 +48,8 @@ type ProjectStatus struct {
 
 // BranchExistence tracks whether a branch exists across repos
 type BranchExistence struct {
-	Branch string            `json:"branch"`
-	Repos  map[string]bool   `json:"repos"` // repo name -> exists
+	Branch string          `json:"branch"`
+	Repos  map[string]bool `json:"repos"` // repo name -> exists
 }
 
 // NewProject creates a Project from a ProjectDef

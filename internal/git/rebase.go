@@ -163,12 +163,12 @@ func (op RebaseOperation) Shortcut() string {
 
 // RebaseCommit represents a commit in an interactive rebase
 type RebaseCommit struct {
-	SHA     string `json:"sha"`
-	ShortSHA string `json:"short_sha"`
-	Short   string `json:"short"`
-	Message string `json:"message"`
-	Author  string `json:"author"`
-	Date    string `json:"date"`
+	SHA       string          `json:"sha"`
+	ShortSHA  string          `json:"short_sha"`
+	Short     string          `json:"short"`
+	Message   string          `json:"message"`
+	Author    string          `json:"author"`
+	Date      string          `json:"date"`
 	Operation RebaseOperation `json:"operation"`
 }
 
@@ -195,12 +195,12 @@ func GetRebasePlan(repoPath, from, to string) ([]RebaseCommit, error) {
 		}
 
 		commits = append(commits, RebaseCommit{
-			SHA:        parts[0],
-			ShortSHA:   parts[0][:7],
-			Message:    parts[1],
-			Author:     parts[2],
-			Date:       parts[3],
-			Operation:  RebasePick,
+			SHA:       parts[0],
+			ShortSHA:  parts[0][:7],
+			Message:   parts[1],
+			Author:    parts[2],
+			Date:      parts[3],
+			Operation: RebasePick,
 		})
 	}
 
@@ -237,10 +237,10 @@ func ParseTodoList(todo string) ([]RebaseCommit, error) {
 		message := parts[2]
 
 		commits = append(commits, RebaseCommit{
-			SHA:        sha,
-			ShortSHA:   sha[:7],
-			Message:    message,
-			Operation:  op,
+			SHA:       sha,
+			ShortSHA:  sha[:7],
+			Message:   message,
+			Operation: op,
 		})
 	}
 

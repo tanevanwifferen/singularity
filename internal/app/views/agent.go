@@ -35,7 +35,7 @@ type AgentInfo struct {
 type agentFocus int
 
 const (
-	focusList   agentFocus = iota
+	focusList agentFocus = iota
 	focusOutput
 	focusInput
 )
@@ -45,12 +45,12 @@ type AgentView struct {
 	repoPath     string
 	engine       *engine.Engine
 	contextFiles []string // Files to inject into agent prompts
-	agents   []AgentInfo
-	filter   *components.Filter[AgentInfo]
-	loading  bool
-	width    int
-	height   int
-	err      error
+	agents       []AgentInfo
+	filter       *components.Filter[AgentInfo]
+	loading      bool
+	width        int
+	height       int
+	err          error
 
 	// Split pane focus
 	focus agentFocus

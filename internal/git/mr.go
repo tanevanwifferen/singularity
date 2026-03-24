@@ -14,15 +14,15 @@ import (
 
 // MergeRequest represents a merge/pull request
 type MergeRequest struct {
-	Number      int       `json:"number"`
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	SourceBranch string   `json:"source_branch"`
-	TargetBranch string   `json:"target_branch"`
-	Author      string    `json:"author"`
-	State       string    `json:"state"`
-	URL         string    `json:"url"`
-	WebURL      string    `json:"web_url"`
+	Number       int    `json:"number"`
+	Title        string `json:"title"`
+	Description  string `json:"description"`
+	SourceBranch string `json:"source_branch"`
+	TargetBranch string `json:"target_branch"`
+	Author       string `json:"author"`
+	State        string `json:"state"`
+	URL          string `json:"url"`
+	WebURL       string `json:"web_url"`
 }
 
 // CreateMR creates a merge request
@@ -321,7 +321,7 @@ func GenerateMRTitle(repoPath, sourceBranch, targetBranch string) (string, error
 	// Use the first commit message as the title
 	firstCommit := commits[0]
 	title := firstCommit.Subject
-	
+
 	// Add count if multiple commits
 	if len(commits) > 1 {
 		title = fmt.Sprintf("%s (+%d more)", title, len(commits)-1)
@@ -373,10 +373,10 @@ func GetCommitsBetween(repoPath, fromBranch, toBranch string) ([]CommitInfo, err
 
 // CommitInfo holds commit information
 type CommitInfo struct {
-	SHA      string
-	Subject  string
-	Author   string
-	Date     string
+	SHA     string
+	Subject string
+	Author  string
+	Date    string
 }
 
 // Helper functions

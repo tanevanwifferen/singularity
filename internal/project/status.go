@@ -10,19 +10,19 @@ import (
 
 // CrossRepoComparison holds branch comparison data across repos
 type CrossRepoComparison struct {
-	Branch      string                    `json:"branch"`
-	BaseBranch  string                    `json:"base_branch"`
-	Repos       map[string]*RepoCompare   `json:"repos"`
+	Branch     string                  `json:"branch"`
+	BaseBranch string                  `json:"base_branch"`
+	Repos      map[string]*RepoCompare `json:"repos"`
 }
 
 // RepoCompare holds comparison data for a single repo
 type RepoCompare struct {
-	RepoName string `json:"repo_name"`
-	Ahead    int    `json:"ahead"`
-	Behind   int    `json:"behind"`
-	Diverged bool   `json:"diverged"`
-	HasBranch bool  `json:"has_branch"`
-	Error    string `json:"error,omitempty"`
+	RepoName  string `json:"repo_name"`
+	Ahead     int    `json:"ahead"`
+	Behind    int    `json:"behind"`
+	Diverged  bool   `json:"diverged"`
+	HasBranch bool   `json:"has_branch"`
+	Error     string `json:"error,omitempty"`
 }
 
 // CompareBranchAcrossRepos compares a branch against the default branch in all repos

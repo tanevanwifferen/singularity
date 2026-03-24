@@ -42,7 +42,6 @@ type KeyCapturer interface {
 	CapturesKey(key string) bool
 }
 
-
 // RepoPathSetter is an optional interface for views that can switch
 // to a different repository path (used in project mode repo cycling).
 type RepoPathSetter interface {
@@ -57,7 +56,7 @@ type SwitchViewMsg struct {
 // Router manages multiple views and handles switching between them.
 type Router struct {
 	views      map[string]View
-	viewOrder  []string // deterministic ordering of view names
+	viewOrder  []string          // deterministic ordering of view names
 	viewKeys   map[string]string // view name → shortcut key (e.g. "Overview" → "o")
 	keyToView  map[string]string // shortcut key → view name (e.g. "o" → "Overview")
 	activeName string
@@ -74,12 +73,12 @@ type Router struct {
 	viewHeight int
 
 	// Help overlay state
-	showHelp   bool
+	showHelp    bool
 	helpOverlay components.HelpOverlay
 
 	// Submenu overlay state
-	showSubmenu    bool
-	activeSubmenu  *components.Submenu
+	showSubmenu   bool
+	activeSubmenu *components.Submenu
 }
 
 // NewRouter creates a new router with the given initial view.

@@ -19,15 +19,15 @@ import (
 
 // LogCommit represents a commit entry in the log view
 type LogCommit struct {
-	Hash       string
-	ShortHash  string
-	Subject    string
-	Body       string
-	Author     string
+	Hash        string
+	ShortHash   string
+	Subject     string
+	Body        string
+	Author      string
 	AuthorEmail string
-	Date       time.Time
-	Refs       string
-	FilesCount int
+	Date        time.Time
+	Refs        string
+	FilesCount  int
 }
 
 // LogView displays a scrollable commit log with filtering and detail view.
@@ -43,7 +43,7 @@ type LogView struct {
 	height      int
 
 	// Filter state
-	authorFilter string
+	authorFilter  string
 	messageFilter string
 
 	// Pagination
@@ -69,7 +69,7 @@ type LogView struct {
 	// Commit operations modal states
 	showCherryPickConfirm bool
 	cherryPickHash        string
-	showResetMenu         bool   // shows soft/mixed/hard submenu
+	showResetMenu         bool // shows soft/mixed/hard submenu
 	resetHash             string
 	resetMode             string // "soft", "mixed", "hard"
 	showResetConfirm      bool
@@ -83,11 +83,11 @@ type LogView struct {
 // NewLogView creates a new log view.
 func NewLogView(repoPath string) *LogView {
 	v := &LogView{
-		repoPath:  repoPath,
-		width:     80,
-		height:    24,
-		pageSize:  50,
-		hasMore:   true,
+		repoPath: repoPath,
+		width:    80,
+		height:   24,
+		pageSize: 50,
+		hasMore:  true,
 	}
 
 	// Initialize the filter with commit items
@@ -222,14 +222,14 @@ func (v *LogView) parseCommits(output string) ([]LogCommit, error) {
 		fmt.Sscanf(parts[6], "%d", &timestamp)
 
 		commit := LogCommit{
-			Hash:       parts[0],
-			ShortHash:  parts[1],
-			Subject:    parts[2],
-			Body:       parts[3],
-			Author:     parts[4],
+			Hash:        parts[0],
+			ShortHash:   parts[1],
+			Subject:     parts[2],
+			Body:        parts[3],
+			Author:      parts[4],
 			AuthorEmail: parts[5],
-			Date:       time.Unix(timestamp, 0),
-			Refs:       parts[7],
+			Date:        time.Unix(timestamp, 0),
+			Refs:        parts[7],
 		}
 
 		commits = append(commits, commit)

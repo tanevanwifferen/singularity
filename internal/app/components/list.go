@@ -77,13 +77,13 @@ type List[T any] struct {
 // NewList creates a new List component with the given items and renderer.
 func NewList[T any](items []T, renderer ItemRenderer[T]) *List[T] {
 	return &List[T]{
-		Items:          items,
-		Cursor:         0,
-		Offset:         0,
-		Height:         20,
-		Renderer:       renderer,
-		Styles:         DefaultListStyles(),
-		ShowStatusBar:  true,
+		Items:           items,
+		Cursor:          0,
+		Offset:          0,
+		Height:          20,
+		Renderer:        renderer,
+		Styles:          DefaultListStyles(),
+		ShowStatusBar:   true,
 		statusBarHeight: 1,
 	}
 }

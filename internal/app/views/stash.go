@@ -15,18 +15,18 @@ import (
 
 // StashView displays a list of git stash entries with management capabilities.
 type StashView struct {
-	repoPath    string
-	repo        *git.RepoInfo
-	stashes     []git.StashEntry
-	filter      *components.Filter[git.StashEntry]
-	loading     bool
-	err         error
-	width       int
-	height      int
+	repoPath string
+	repo     *git.RepoInfo
+	stashes  []git.StashEntry
+	filter   *components.Filter[git.StashEntry]
+	loading  bool
+	err      error
+	width    int
+	height   int
 
 	// Preview panel state
-	showPreview   bool
-	previewStash  *git.StashEntry
+	showPreview  bool
+	previewStash *git.StashEntry
 
 	// Modal states for destructive operations
 	showDropConfirm  bool
@@ -36,9 +36,9 @@ type StashView struct {
 	popStashIndex    int
 
 	// New stash input state
-	showNewStash    bool
-	newStashMessage string
-	newStashInput   components.Filter[byte]
+	showNewStash      bool
+	newStashMessage   string
+	newStashInput     components.Filter[byte]
 	newStashUntracked bool
 }
 

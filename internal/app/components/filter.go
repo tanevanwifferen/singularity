@@ -80,13 +80,13 @@ type Filter[T any] struct {
 // NewFilter creates a new filter component wrapping the given items and renderer.
 func NewFilter[T any](items []T, renderer ItemRenderer[T]) *Filter[T] {
 	f := &Filter[T]{
-		sourceItems:     items,
-		filteredItems:   items,
-		sourceRenderer:  renderer,
-		Styles:          DefaultFilterStyles(),
-		filterCursor:    0,
-		active:          false,
-		height:          20,
+		sourceItems:    items,
+		filteredItems:  items,
+		sourceRenderer: renderer,
+		Styles:         DefaultFilterStyles(),
+		filterCursor:   0,
+		active:         false,
+		height:         20,
 	}
 
 	// Create the underlying list with filtered renderer

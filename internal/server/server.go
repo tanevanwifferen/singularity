@@ -12,22 +12,22 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"singularity/internal/api"
 	"singularity/internal/engine"
 	"singularity/internal/git"
 	"singularity/internal/project"
-	"github.com/gorilla/websocket"
 )
 
 const version = "0.0.1"
 
 // Server is the HTTP/WebSocket server
 type Server struct {
-	addr       string
-	httpServer *http.Server
-	wsUpgrader websocket.Upgrader
-	wsClients  map[*websocket.Conn]bool
-	wsMux      sync.RWMutex
+	addr          string
+	httpServer    *http.Server
+	wsUpgrader    websocket.Upgrader
+	wsClients     map[*websocket.Conn]bool
+	wsMux         sync.RWMutex
 	repoPath      string
 	stopCh        chan struct{}
 	engine        *engine.Engine
@@ -125,7 +125,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/commit/message", withCORS(s.handleCommitMessage))
 	mux.HandleFunc("/api/mr/create", withCORS(s.handleMRCreate))
 	mux.HandleFunc("/api/forge/auth", withCORS(s.handleForgeAuth))
-	
+
 	// Project routes
 	mux.HandleFunc("/api/project/list", withCORS(s.handleProjectList))
 	mux.HandleFunc("/api/project/load", withCORS(s.handleProjectLoad))
@@ -146,7 +146,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 	// WebSocket route
 	mux.HandleFunc("/ws", s.handleWebSocket)
-	
+
 	// Health check
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})

@@ -11,12 +11,12 @@ import (
 type PipelineStatus string
 
 const (
-	PipelinePending PipelineStatus = "pending"
-	PipelineRunning PipelineStatus = "running"
-	PipelineSuccess PipelineStatus = "success"
-	PipelineFailed  PipelineStatus = "failed"
+	PipelinePending  PipelineStatus = "pending"
+	PipelineRunning  PipelineStatus = "running"
+	PipelineSuccess  PipelineStatus = "success"
+	PipelineFailed   PipelineStatus = "failed"
 	PipelineCanceled PipelineStatus = "canceled"
-	PipelineSkipped PipelineStatus = "skipped"
+	PipelineSkipped  PipelineStatus = "skipped"
 )
 
 func (s PipelineStatus) String() string {
@@ -52,10 +52,10 @@ type Job struct {
 
 // PipelineInfo holds pipeline information for a branch
 type PipelineInfo struct {
-	Branch    string         `json:"branch"`
-	Pipeline  *Pipeline      `json:"pipeline"`
-	HasPipeline bool         `json:"has_pipeline"`
-	Status    PipelineStatus `json:"status"`
+	Branch      string         `json:"branch"`
+	Pipeline    *Pipeline      `json:"pipeline"`
+	HasPipeline bool           `json:"has_pipeline"`
+	Status      PipelineStatus `json:"status"`
 }
 
 // GetPipelineStatus fetches the pipeline status for a branch
@@ -71,7 +71,7 @@ func GetPipelineStatus(repoPath, branch string) (*PipelineInfo, error) {
 	}
 
 	info := &PipelineInfo{
-		Branch:     branch,
+		Branch:      branch,
 		HasPipeline: false,
 	}
 
@@ -129,11 +129,11 @@ func getGitLabPipeline(repoPath, branch string, auth *ForgeAuth) (*Pipeline, err
 
 	pipelineData := pipelines[0]
 	pipeline := &Pipeline{
-		ID:      int64(pipelineData["id"].(float64)),
-		Ref:     pipelineData["ref"].(string),
-		SHA:     pipelineData["sha"].(string),
-		Status:  PipelineStatus(pipelineData["status"].(string)),
-		WebURL:  pipelineData["web_url"].(string),
+		ID:     int64(pipelineData["id"].(float64)),
+		Ref:    pipelineData["ref"].(string),
+		SHA:    pipelineData["sha"].(string),
+		Status: PipelineStatus(pipelineData["status"].(string)),
+		WebURL: pipelineData["web_url"].(string),
 	}
 
 	// Parse dates
@@ -196,14 +196,14 @@ func getGitHubWorkflow(repoPath, branch string, auth *ForgeAuth) (*Pipeline, err
 
 	var response struct {
 		WorkflowRuns []struct {
-			ID       int64  `json:"id"`
-			Name     string `json:"name"`
-			Status   string `json:"status"`
+			ID         int64  `json:"id"`
+			Name       string `json:"name"`
+			Status     string `json:"status"`
 			Conclusion string `json:"conclusion"`
-			HeadSHA  string `json:"head_sha"`
-			HTMLURL  string `json:"html_url"`
-			CreatedAt string `json:"created_at"`
-			UpdatedAt string `json:"updated_at"`
+			HeadSHA    string `json:"head_sha"`
+			HTMLURL    string `json:"html_url"`
+			CreatedAt  string `json:"created_at"`
+			UpdatedAt  string `json:"updated_at"`
 		} `json:"workflow_runs"`
 	}
 
@@ -225,12 +225,12 @@ func getGitHubWorkflow(repoPath, branch string, auth *ForgeAuth) (*Pipeline, err
 	}
 
 	pipeline := &Pipeline{
-		ID:      run.ID,
-		Ref:     branch,
-		SHA:     run.HeadSHA,
-		Status:  status,
-		WebURL:  run.HTMLURL,
-		Jobs:    []Job{{Name: run.Name, Status: status}},
+		ID:     run.ID,
+		Ref:    branch,
+		SHA:    run.HeadSHA,
+		Status: status,
+		WebURL: run.HTMLURL,
+		Jobs:   []Job{{Name: run.Name, Status: status}},
 	}
 
 	pipeline.CreatedAt, _ = time.Parse(time.RFC3339, run.CreatedAt)
@@ -341,7 +341,7 @@ func FormatPipelineStatus(status PipelineStatus) string {
 func PipelineStatusColor(status PipelineStatus) string {
 	switch status {
 	case PipelineSuccess:
-		return "86"  // green
+		return "86" // green
 	case PipelineFailed:
 		return "196" // red
 	case PipelineRunning:
