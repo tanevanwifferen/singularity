@@ -222,6 +222,13 @@ func (fw *FeatureWorkflow) RemoveAllWorktrees() error {
 	}
 	wg.Wait()
 
+	// Remove the workflow directory (baseDir/sanitized-branch/) now that
+	// all repo worktrees inside it have been removed.  os.Remove only
+	// succeeds if the directory is empty, so this is safe.  If a repo
+	// worktree removal failed and left files behind, this will be a no-op.
+	workflowDir := filepath.Join(fw.BaseDir, sanitizeBranchForPath(fw.BranchName))
+	os.Remove(workflowDir)
+
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 	fw.State = WorkflowDone
