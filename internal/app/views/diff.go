@@ -23,10 +23,11 @@ const (
 
 // DiffLine represents a single line in a parsed diff
 type DiffLine struct {
-	Content    string
-	LineType   string // "+", "-", " ", "@" (hunk header), "" (header)
-	OldLineNum int    // Line number in old file (0 if not applicable)
-	NewLineNum int    // Line number in new file (0 if not applicable)
+	Content       string
+	LineType      string // "+", "-", " ", "@" (hunk header), "" (header)
+	OldLineNum    int    // Line number in old file (0 if not applicable)
+	NewLineNum    int    // Line number in new file (0 if not applicable)
+	AlreadyInBase bool   // true if this line belongs to a hunk already in the base branch
 }
 
 // DiffView provides a split-panel diff viewer interface.

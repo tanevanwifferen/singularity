@@ -22,11 +22,13 @@ type workflowDiffDoneMsg struct {
 
 // repoDiffResult holds the diff result for a single repo in a workflow.
 type repoDiffResult struct {
-	RepoName      string
-	WorktreePath  string
-	DefaultBranch string
-	Diff          *git.BranchDiff
-	Err           error
+	RepoName       string
+	WorktreePath   string
+	DefaultBranch  string
+	Diff           *git.BranchDiff
+	Err            error
+	// DeepFileStatus maps file path → true if ALL hunks are already in the base branch
+	DeepFileStatus map[string]bool
 }
 
 // diffItem is a flattened entry in the navigation list — either a repo header or a file.
@@ -41,6 +43,14 @@ type diffItem struct {
 	TotalAdditions int
 	TotalDeletions int
 	Error          string
+	// AlreadyInBase: true if all hunks for this file are already in the base branch
+	AlreadyInBase bool
+}
+
+// hunkStats tracks how many diff hunks are genuinely new vs already in base.
+type hunkStats struct {
+	Total         int
+	AlreadyInBase int
 }
 
 // WorkflowDiffView shows all git changes for a workflow, grouped by repo.
@@ -65,6 +75,7 @@ type WorkflowDiffView struct {
 	parsedDiffLines  []DiffLine
 	diffScrollOffset int
 	diffNavMode      bool
+	diffHunkStats    hunkStats
 
 	// Focus: true = item list, false = diff panel
 	focusItemList bool
@@ -120,14 +131,40 @@ func (v *WorkflowDiffView) Init() tea.Cmd {
 				if base == "" {
 					base = "main"
 				}
+				// Resolve to an existing ref (handles origin/main fallback)
+				base = git.ResolveRef(wr.WorktreePath, base)
+
 				diff, err := git.GetBranchDiff(wr.WorktreePath, base, "HEAD")
+
+				// Deep check: for each changed file, test whether all its hunks
+				// are already incorporated in the base branch (squash-merge detection).
+				var fileStatus map[string]bool
+				if err == nil && diff != nil && len(diff.Files) > 0 {
+					fileStatus = make(map[string]bool, len(diff.Files))
+					for _, f := range diff.Files {
+						hunks, _, ferr := git.GetDeepFileDiff(wr.WorktreePath, base, "HEAD", f.NewPath)
+						if ferr != nil {
+							continue
+						}
+						allInBase := len(hunks) > 0
+						for _, h := range hunks {
+							if !h.AlreadyInBase {
+								allInBase = false
+								break
+							}
+						}
+						fileStatus[f.NewPath] = allInBase
+					}
+				}
+
 				mu.Lock()
 				results[name] = &repoDiffResult{
-					RepoName:      name,
-					WorktreePath:  wr.WorktreePath,
-					DefaultBranch: base,
-					Diff:          diff,
-					Err:           err,
+					RepoName:       name,
+					WorktreePath:   wr.WorktreePath,
+					DefaultBranch:  base,
+					Diff:           diff,
+					Err:            err,
+					DeepFileStatus: fileStatus,
 				}
 				mu.Unlock()
 			}(name, wr)
@@ -166,12 +203,16 @@ func (v *WorkflowDiffView) buildItems() {
 
 		if rd.Diff != nil {
 			for i := range rd.Diff.Files {
-				v.items = append(v.items, diffItem{
+				item := diffItem{
 					RepoName:      name,
 					File:          &rd.Diff.Files[i],
 					WorktreePath:  rd.WorktreePath,
 					DefaultBranch: rd.DefaultBranch,
-				})
+				}
+				if rd.DeepFileStatus != nil {
+					item.AlreadyInBase = rd.DeepFileStatus[rd.Diff.Files[i].NewPath]
+				}
+				v.items = append(v.items, item)
 			}
 		}
 	}
@@ -290,6 +331,7 @@ func (v *WorkflowDiffView) closeDiff() {
 	v.parsedDiffLines = nil
 	v.diffScrollOffset = 0
 	v.diffNavMode = false
+	v.diffHunkStats = hunkStats{}
 	v.focusItemList = true
 }
 
@@ -303,17 +345,48 @@ func (v *WorkflowDiffView) loadSelectedFileDiff() {
 		return
 	}
 
-	diff, err := git.GetFileDiff(item.WorktreePath, item.DefaultBranch, "HEAD", item.File.NewPath)
+	hunks, rawDiff, err := git.GetDeepFileDiff(item.WorktreePath, item.DefaultBranch, "HEAD", item.File.NewPath)
 	if err != nil {
 		v.err = err
 		return
 	}
-	v.currentDiff = diff
-	v.parsedDiffLines = ParseDiffLines(diff)
+	v.currentDiff = rawDiff
+	v.parsedDiffLines = parseDeepDiffLines(rawDiff, hunks)
+	v.diffHunkStats = computeHunkStats(hunks)
 	v.showDiff = true
 	v.diffNavMode = true
 	v.diffScrollOffset = 0
 	v.focusItemList = false
+}
+
+// parseDeepDiffLines parses raw diff output and annotates lines with AlreadyInBase
+// based on the filtered hunk results from GetDeepFileDiff.
+func parseDeepDiffLines(rawDiff string, filteredHunks []git.FilteredDiffHunk) []DiffLine {
+	lines := ParseDiffLines(rawDiff)
+	if len(filteredHunks) == 0 {
+		return lines
+	}
+	hunkIdx := -1
+	for i := range lines {
+		if lines[i].LineType == "@" {
+			hunkIdx++
+		}
+		if hunkIdx >= 0 && hunkIdx < len(filteredHunks) {
+			lines[i].AlreadyInBase = filteredHunks[hunkIdx].AlreadyInBase
+		}
+	}
+	return lines
+}
+
+// computeHunkStats tallies how many hunks are new vs already in the base branch.
+func computeHunkStats(hunks []git.FilteredDiffHunk) hunkStats {
+	stats := hunkStats{Total: len(hunks)}
+	for _, h := range hunks {
+		if h.AlreadyInBase {
+			stats.AlreadyInBase++
+		}
+	}
+	return stats
 }
 
 // View renders the workflow diff view.
@@ -538,13 +611,17 @@ func (v *WorkflowDiffView) renderFileEntry(item diffItem, selected bool, width i
 	line.WriteString(style.Render(path))
 
 	if item.File != nil {
-		if item.File.Additions > 0 {
-			line.WriteString(" ")
-			line.WriteString(th.DashboardAccentStyle.Render(fmt.Sprintf("+%d", item.File.Additions)))
-		}
-		if item.File.Deletions > 0 {
-			line.WriteString(" ")
-			line.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf("-%d", item.File.Deletions)))
+		if item.AlreadyInBase {
+			line.WriteString(th.MutedTextStyle.Render(" ✓merged"))
+		} else {
+			if item.File.Additions > 0 {
+				line.WriteString(" ")
+				line.WriteString(th.DashboardAccentStyle.Render(fmt.Sprintf("+%d", item.File.Additions)))
+			}
+			if item.File.Deletions > 0 {
+				line.WriteString(" ")
+				line.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf("-%d", item.File.Deletions)))
+			}
 		}
 	}
 
@@ -655,6 +732,23 @@ func (v *WorkflowDiffView) renderDetailPanel(width int) string {
 	s.WriteString(th.StatsStyle.Render(fmt.Sprintf(" %s ", strings.Repeat("─", dividerLen-2))))
 	s.WriteString("\n")
 
+	if v.showDiff && v.diffHunkStats.Total > 0 {
+		if v.diffHunkStats.AlreadyInBase == v.diffHunkStats.Total {
+			s.WriteString(th.MutedTextStyle.Render(fmt.Sprintf(
+				" ✓ All %d hunk(s) already incorporated in base branch",
+				v.diffHunkStats.Total,
+			)))
+		} else if v.diffHunkStats.AlreadyInBase > 0 {
+			s.WriteString(th.MutedTextStyle.Render(fmt.Sprintf(
+				" ✓ %d/%d hunk(s) already in base  |  %d genuinely new",
+				v.diffHunkStats.AlreadyInBase, v.diffHunkStats.Total,
+				v.diffHunkStats.Total-v.diffHunkStats.AlreadyInBase,
+			)))
+		}
+		if v.diffHunkStats.AlreadyInBase > 0 {
+			s.WriteString("\n")
+		}
+	}
 	if v.showDiff && len(v.parsedDiffLines) > 0 {
 		s.WriteString(v.renderDiffWithGutter(width))
 	} else if v.showDiff && v.currentDiff == "" {
@@ -734,6 +828,11 @@ func (v *WorkflowDiffView) renderDiffWithGutter(width int) string {
 		default:
 			lineStyle = th.Help
 			gutter = "      "
+		}
+
+		// Dim lines that belong to hunks already incorporated in the base branch
+		if line.AlreadyInBase {
+			lineStyle = th.MutedTextStyle
 		}
 
 		content := line.Content

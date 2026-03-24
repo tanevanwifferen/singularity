@@ -30,9 +30,16 @@ type BranchDiff struct {
 
 // GetBranchDiff compares two branches and returns file-level diff statistics
 func GetBranchDiff(repoPath, branchA, branchB string) (*BranchDiff, error) {
-	// Run git diff --numstat to get additions/deletions per file
-	cmd := exec.Command("git", "-C", repoPath, "diff", "--numstat", fmt.Sprintf("%s..%s", branchA, branchB))
-	output, err := cmd.Output()
+	revRange := fmt.Sprintf("%s..%s", branchA, branchB)
+
+	// Get name-status for accurate file statuses (A/M/D/R)
+	nameStatusCmd := exec.Command("git", "-C", repoPath, "diff", "--name-status", revRange)
+	nameStatusOut, _ := nameStatusCmd.Output()
+	statusMap := parseNameStatus(string(nameStatusOut))
+
+	// Get numstat for line counts
+	numstatCmd := exec.Command("git", "-C", repoPath, "diff", "--numstat", revRange)
+	numstatOut, err := numstatCmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get diff stats: %w", err)
 	}
@@ -41,61 +48,50 @@ func GetBranchDiff(repoPath, branchA, branchB string) (*BranchDiff, error) {
 	totalAdditions := 0
 	totalDeletions := 0
 
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	scanner := bufio.NewScanner(strings.NewReader(string(numstatOut)))
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
 			continue
 		}
 
-		// Parse numstat format: "\t\t" for binary files, "additions\tdeletions\tpath" otherwise
 		parts := strings.Split(line, "\t")
 		if len(parts) < 3 {
 			continue
 		}
 
 		file := FileChange{}
+		path := parts[2]
 
-		// Handle binary files (shown as -\t-\tfilename)
 		if parts[0] == "-" && parts[1] == "-" {
-			file.Status = "M" // Binary modified
-			file.NewPath = parts[2]
+			// Binary file
+			file.Status = "M"
+			file.NewPath = path
+			if s, ok := statusMap[path]; ok {
+				file.Status = s
+			}
 			files = append(files, file)
 			continue
 		}
 
-		// Parse additions
 		if parts[0] != "-" {
-			additions, err := strconv.Atoi(parts[0])
-			if err != nil {
-				continue
+			if n, err := strconv.Atoi(parts[0]); err == nil {
+				file.Additions = n
+				totalAdditions += n
 			}
-			file.Additions = additions
-			totalAdditions += additions
 		}
-
-		// Parse deletions
 		if parts[1] != "-" {
-			deletions, err := strconv.Atoi(parts[1])
-			if err != nil {
-				continue
+			if n, err := strconv.Atoi(parts[1]); err == nil {
+				file.Deletions = n
+				totalDeletions += n
 			}
-			file.Deletions = deletions
-			totalDeletions += deletions
 		}
 
-		file.NewPath = parts[2]
-		file.Status = "M" // Default to modified, could be enhanced to detect A/D
-
-		// Detect file status from path markers (git diff --name-status would be better)
-		if strings.HasPrefix(parts[2], "a/") {
-			file.Status = "A"
-			file.NewPath = strings.TrimPrefix(parts[2], "a/")
-		} else if strings.HasPrefix(parts[2], "d/") {
-			file.Status = "D"
-			file.NewPath = strings.TrimPrefix(parts[2], "d/")
+		file.NewPath = path
+		file.Status = "M"
+		if s, ok := statusMap[path]; ok {
+			file.Status = s
 		}
-
 		files = append(files, file)
 	}
 
@@ -111,6 +107,25 @@ func GetBranchDiff(repoPath, branchA, branchB string) (*BranchDiff, error) {
 		BranchA:        branchA,
 		BranchB:        branchB,
 	}, nil
+}
+
+// parseNameStatus parses git diff --name-status output into a path→status map.
+func parseNameStatus(output string) map[string]string {
+	statusMap := make(map[string]string)
+	for _, line := range strings.Split(output, "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		statusCode := string(parts[0][0]) // First char: A, M, D, R, C, etc.
+		// For renames (R100), the new path is the last field
+		path := parts[len(parts)-1]
+		statusMap[path] = statusCode
+	}
+	return statusMap
 }
 
 // GetChangedFiles returns just the list of changed file paths
@@ -276,6 +291,99 @@ func GetFileDiff(repoPath, branchA, branchB, filePath string) (string, error) {
 		return "", fmt.Errorf("failed to get file diff: %w", err)
 	}
 	return string(output), nil
+}
+
+// ResolveRef tries to find an existing git ref for the given name.
+// First tries the exact name, then "origin/<name>".
+// Returns the first ref that resolves, or the original name if none found.
+func ResolveRef(repoPath, ref string) string {
+	cmd := exec.Command("git", "-C", repoPath, "rev-parse", "--verify", "--quiet", ref)
+	if err := cmd.Run(); err == nil {
+		return ref
+	}
+	originRef := "origin/" + ref
+	cmd = exec.Command("git", "-C", repoPath, "rev-parse", "--verify", "--quiet", originRef)
+	if err := cmd.Run(); err == nil {
+		return originRef
+	}
+	return ref
+}
+
+// GetFileContent gets the raw content of a file at a specific git ref.
+func GetFileContent(repoPath, ref, filePath string) (string, error) {
+	cmd := exec.Command("git", "-C", repoPath, "show", fmt.Sprintf("%s:%s", ref, filePath))
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get content of %s at %s: %w", filePath, ref, err)
+	}
+	return string(output), nil
+}
+
+// FilteredDiffHunk wraps DiffHunk with a flag indicating whether all added lines
+// are already present in the base branch (squash-merge false positive detection).
+type FilteredDiffHunk struct {
+	DiffHunk
+	AlreadyInBase bool
+}
+
+// GetDeepFileDiff gets the diff between baseBranch and headRef for filePath,
+// and annotates each hunk as "already in base" if all its added lines are
+// already present in the base branch file. This detects squash-merge false
+// positives where git reports changes that are actually already incorporated.
+//
+// Returns the annotated hunks, the raw diff string, and any error.
+func GetDeepFileDiff(repoPath, baseBranch, headRef, filePath string) ([]FilteredDiffHunk, string, error) {
+	rawDiff, err := GetFileDiff(repoPath, baseBranch, headRef, filePath)
+	if err != nil {
+		return nil, "", err
+	}
+	if rawDiff == "" {
+		return nil, "", nil
+	}
+
+	hunks := ParseHunks(rawDiff)
+	if len(hunks) == 0 {
+		return nil, rawDiff, nil
+	}
+
+	// Get base branch file content to check line presence
+	baseContent, err := GetFileContent(repoPath, baseBranch, filePath)
+	if err != nil {
+		// File doesn't exist in base (new file) — all hunks are genuinely new
+		result := make([]FilteredDiffHunk, len(hunks))
+		for i, h := range hunks {
+			result[i] = FilteredDiffHunk{h, false}
+		}
+		return result, rawDiff, nil
+	}
+
+	// Build a set of lines from the base file for fast lookup
+	baseLineSet := make(map[string]bool)
+	for _, line := range strings.Split(baseContent, "\n") {
+		baseLineSet[strings.TrimRight(line, "\r")] = true
+	}
+
+	result := make([]FilteredDiffHunk, len(hunks))
+	for i, hunk := range hunks {
+		result[i] = FilteredDiffHunk{hunk, isHunkAlreadyInBase(hunk, baseLineSet)}
+	}
+	return result, rawDiff, nil
+}
+
+// isHunkAlreadyInBase returns true if the hunk has additions and all of them
+// are already present in the base file content set.
+func isHunkAlreadyInBase(hunk DiffHunk, baseLineSet map[string]bool) bool {
+	hasAdditions := false
+	for _, line := range hunk.Lines {
+		if line.LineType == "+" {
+			hasAdditions = true
+			content := strings.TrimRight(strings.TrimPrefix(line.Content, "+"), "\r")
+			if !baseLineSet[content] {
+				return false
+			}
+		}
+	}
+	return hasAdditions
 }
 
 // WorkdirStatus holds status info for a file in the working directory
