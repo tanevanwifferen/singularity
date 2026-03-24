@@ -79,6 +79,7 @@ type WorkflowsView struct {
 	// Jira ticket picker
 	jiraPicker       *JiraPickerState
 	jiraConfirmIssue *jira.Issue // issue pending workflow-start confirmation
+	jiraExtraMsg     string      // optional extra instructions for the agent
 
 	// Drill-down diff view
 	workflowDiffView *WorkflowDiffView
@@ -499,34 +500,54 @@ func (v *WorkflowsView) handleJiraPickerKey(msg tea.KeyMsg) tea.Cmd {
 	return cmd
 }
 
-// handleJiraWorkflowConfirm handles the y/n/e confirmation before creating a workflow from a Jira ticket.
+// handleJiraWorkflowConfirm handles input in the Jira workflow confirmation modal.
 func (v *WorkflowsView) handleJiraWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
-	case "y", "enter":
+	case "enter":
 		issue := v.jiraConfirmIssue
+		extraMsg := v.jiraExtraMsg
 		v.jiraConfirmIssue = nil
-		return v.startWorkflowFromJira(issue)
+		v.jiraExtraMsg = ""
+		return v.startWorkflowFromJira(issue, extraMsg)
 	case "e":
 		wf := v.currentWorkflow()
 		if wf != nil {
 			issue := v.jiraConfirmIssue
+			extraMsg := v.jiraExtraMsg
 			v.jiraConfirmIssue = nil
-			return v.startWorkflowFromJiraOnExisting(issue, wf)
+			v.jiraExtraMsg = ""
+			return v.startWorkflowFromJiraOnExisting(issue, wf, extraMsg)
 		}
-	case "n", "esc":
+	case "esc":
 		v.jiraConfirmIssue = nil
+		v.jiraExtraMsg = ""
+	case "ctrl+w":
+		v.jiraExtraMsg = components.DeleteWordEnd(v.jiraExtraMsg)
+	case "backspace":
+		if len(v.jiraExtraMsg) > 0 {
+			v.jiraExtraMsg = v.jiraExtraMsg[:len(v.jiraExtraMsg)-1]
+		}
+	default:
+		if msg.Paste && len(msg.Runes) > 0 {
+			v.jiraExtraMsg += string(msg.Runes)
+		} else if len(msg.Runes) == 1 {
+			r := msg.Runes[0]
+			if r >= 32 {
+				v.jiraExtraMsg += string(r)
+			}
+		}
 	}
 	return nil
 }
 
 // startWorkflowFromJira creates a FeatureWorkflow from a Jira issue and spawns an agent.
-func (v *WorkflowsView) startWorkflowFromJira(issue *jira.Issue) tea.Cmd {
+func (v *WorkflowsView) startWorkflowFromJira(issue *jira.Issue, extraMsg string) tea.Cmd {
 	if issue == nil || v.proj == nil {
 		return nil
 	}
 	branchName := issueToBranchName(issue)
 	baseDir := v.workflowBaseDir
-	agentPrompt := buildJiraAgentPrompt(issue, "")
+	agentPrompt := buildJiraAgentPrompt(issue, extraMsg)
 
 	wf := project.NewFeatureWorkflow(v.proj, branchName, baseDir)
 	v.workflows = append(v.workflows, wf)
@@ -569,11 +590,11 @@ func (v *WorkflowsView) startWorkflowFromJira(issue *jira.Issue) tea.Cmd {
 
 // startWorkflowFromJiraOnExisting spawns an agent for a Jira issue on an already-created workflow
 // (reusing its existing worktrees rather than creating new ones).
-func (v *WorkflowsView) startWorkflowFromJiraOnExisting(issue *jira.Issue, wf *project.FeatureWorkflow) tea.Cmd {
+func (v *WorkflowsView) startWorkflowFromJiraOnExisting(issue *jira.Issue, wf *project.FeatureWorkflow, extraMsg string) tea.Cmd {
 	if issue == nil || wf == nil {
 		return nil
 	}
-	agentPrompt := buildJiraAgentPrompt(issue, "")
+	agentPrompt := buildJiraAgentPrompt(issue, extraMsg)
 	eng := v.engine
 	var ctxFiles []string
 	if v.proj != nil {
@@ -1067,12 +1088,14 @@ func (v *WorkflowsView) View() string {
 	if v.jiraConfirmIssue != nil {
 		issue := v.jiraConfirmIssue
 		branch := issueToBranchName(issue)
+		input := v.jiraExtraMsg + "█"
 		lines := []string{
 			"",
 			fmt.Sprintf("  Ticket: %s — %s", th.DashboardAccentStyle.Render(issue.Key), issue.Summary),
 			fmt.Sprintf("  Branch: %s", th.MutedTextStyle.Render(branch)),
 			"",
-			"  Create worktrees for all repos + spawn agent?",
+			"  Custom instructions (optional):",
+			"  " + input,
 			"",
 		}
 		if wf := v.currentWorkflow(); wf != nil {
@@ -1080,7 +1103,7 @@ func (v *WorkflowsView) View() string {
 				fmt.Sprintf("  e: Use selected workflow (%s)", th.MutedTextStyle.Render(wf.BranchName)),
 			)
 		}
-		lines = append(lines, "  y: New worktrees  n: Cancel")
+		lines = append(lines, "  Enter: New worktrees  Esc: Cancel")
 		s.WriteString(renderModal("Start Workflow from Jira", lines, modalWidth(v.width)))
 		s.WriteString("\n")
 		return s.String()
