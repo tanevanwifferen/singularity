@@ -82,6 +82,22 @@ func DeleteBranch(repoPath, branch string, force bool) error {
 	return nil
 }
 
+// DeleteRemoteBranch deletes a branch from the remote (git push <remote> --delete <branch>).
+// Returns nil if the remote branch does not exist.
+func DeleteRemoteBranch(repoPath, remote, branch string) error {
+	cmd := exec.Command("git", "-C", repoPath, "push", remote, "--delete", branch)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(output))
+		// Not an error if the branch simply doesn't exist on the remote
+		if strings.Contains(msg, "remote ref does not exist") || strings.Contains(msg, "error: unable to delete") {
+			return nil
+		}
+		return fmt.Errorf("delete remote branch failed: %s", msg)
+	}
+	return nil
+}
+
 // CreateBranch creates and checks out a new branch from the default branch
 func CreateBranch(repoPath, branch, fromBranch string) error {
 	cmd := exec.Command("git", "-C", repoPath, "checkout", "-b", branch, fromBranch)

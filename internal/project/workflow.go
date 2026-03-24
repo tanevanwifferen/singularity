@@ -196,6 +196,14 @@ func (fw *FeatureWorkflow) RemoveAllWorktrees() error {
 				wr.Error = ""
 			}
 
+			// Delete the remote branch before the local one (tracking info needed to find remote)
+			if delErr := git.DeleteRemoteBranch(wr.OriginalPath, "origin", fw.BranchName); delErr != nil {
+				// Not fatal
+				if wr.Error == "" {
+					wr.Error = fmt.Sprintf("delete remote branch: %v", delErr)
+				}
+			}
+
 			// Delete the local branch (force in case it's unmerged)
 			if delErr := git.DeleteBranch(wr.OriginalPath, fw.BranchName, true); delErr != nil {
 				// Not fatal -- branch may not exist or may be checked out
