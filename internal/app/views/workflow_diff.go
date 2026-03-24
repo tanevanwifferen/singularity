@@ -238,6 +238,8 @@ func (v *WorkflowDiffView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 		}
+		// Auto-show diff for the initially selected file
+		v.loadSelectedFileDiff()
 
 	case tea.KeyMsg:
 		switch msg.String() {
