@@ -117,7 +117,12 @@ func (v *AgentView) listHeight() int {
 		}
 		return available * 2 / 5
 	}
-	return max(v.height-5, 4) // full height minus chrome (reserves space for modals)
+	h := v.height - 1 // subtract stats line
+	if v.showNewAgent {
+		// blank line + top border + content line + hint line + bottom border = 5 lines
+		h -= 5
+	}
+	return max(h, 4)
 }
 
 // outputHeight returns the height available for the output pane.
@@ -844,16 +849,16 @@ func (v *AgentView) View() string {
 		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" ┌%s┐", strings.Repeat("─", boxWidth-2))))
 		s.WriteString("\n")
 
-		taskText := "Task: " + v.newAgentTask + "█"
-		for len(taskText) > 0 {
-			line := taskText
-			if len(line) > innerWidth {
-				line = taskText[:innerWidth]
-				taskText = taskText[innerWidth:]
+		taskRunes := []rune("Task: " + v.newAgentTask + "█")
+		for len(taskRunes) > 0 {
+			chunk := taskRunes
+			if len(chunk) > innerWidth {
+				chunk = taskRunes[:innerWidth]
+				taskRunes = taskRunes[innerWidth:]
 			} else {
-				taskText = ""
+				taskRunes = nil
 			}
-			s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" │ %-*s │", innerWidth, line)))
+			s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" │ %-*s │", innerWidth, string(chunk))))
 			s.WriteString("\n")
 		}
 
