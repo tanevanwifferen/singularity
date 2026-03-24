@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/git"
 )
 
 // TestAsyncManager_Creation tests basic AsyncManager creation

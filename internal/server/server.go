@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"singularity/internal/api"
-	"singularity/internal/engine"
-	"singularity/internal/git"
-	"singularity/internal/project"
+	"gitlab.com/tanevanwifferen1/singularity/internal/api"
+	"gitlab.com/tanevanwifferen1/singularity/internal/engine"
+	"gitlab.com/tanevanwifferen1/singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/project"
 )
 
 const version = "0.0.1"

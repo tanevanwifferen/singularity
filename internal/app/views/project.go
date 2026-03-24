@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"singularity/internal/app/components"
-	"singularity/internal/git"
-	"singularity/internal/project"
-	"singularity/internal/theme"
+	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
+	"gitlab.com/tanevanwifferen1/singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/project"
+	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

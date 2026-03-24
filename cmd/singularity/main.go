@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	"singularity/internal/app"
-	"singularity/internal/project"
-	"singularity/internal/server"
+	"gitlab.com/tanevanwifferen1/singularity/internal/app"
+	"gitlab.com/tanevanwifferen1/singularity/internal/project"
+	"gitlab.com/tanevanwifferen1/singularity/internal/server"
 )
 
 // version is set via ldflags at build time by goreleaser.

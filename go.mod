@@ -1,4 +1,4 @@
-module singularity
+module gitlab.com/tanevanwifferen1/singularity
 
 go 1.24.2
 

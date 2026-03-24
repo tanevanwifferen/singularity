@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"singularity/internal/api"
-	"singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/api"
+	"gitlab.com/tanevanwifferen1/singularity/internal/git"
 )
 
 // Client is the API client for connecting to the singularity server
