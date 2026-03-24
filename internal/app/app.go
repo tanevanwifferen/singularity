@@ -283,7 +283,8 @@ func (m *Model) initRouter() {
 
 	// Notify router of initial window size
 	if m.layout != nil {
-		m.router.NotifySize(m.layout.width, m.layout.height)
+		vw, vh := m.layout.AvailableViewDimensions()
+		m.router.NotifySize(vw, vh)
 	}
 }
 
@@ -432,7 +433,8 @@ func (m *Model) initProjectRouter() {
 
 	// Notify router of initial window size
 	if m.layout != nil {
-		m.router.NotifySize(m.layout.width, m.layout.height)
+		vw, vh := m.layout.AvailableViewDimensions()
+		m.router.NotifySize(vw, vh)
 	}
 }
 
