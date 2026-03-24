@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"singularity/internal/engine"
+	"gitlab.com/tanevanwifferen1/singularity/internal/engine"
 )
 
 // RefineTicket launches an agent that explores the codebase and rewrites a Jira ticket

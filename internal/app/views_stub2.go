@@ -3,8 +3,8 @@ package app
 import (
 	"fmt"
 
-	"singularity/internal/app/components"
-	"singularity/internal/theme"
+	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
+	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	"github.com/charmbracelet/bubbletea"
 )

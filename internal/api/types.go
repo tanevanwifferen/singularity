@@ -1,6 +1,6 @@
 package api
 
-import "singularity/internal/git"
+import "gitlab.com/tanevanwifferen1/singularity/internal/git"
 
 // API types shared between server and client
 

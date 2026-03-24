@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/git"
 )
 
 // Project represents a loaded multi-repo project with live state

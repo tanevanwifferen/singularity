@@ -3,8 +3,8 @@ package server
 import (
 	"net/http"
 
-	"singularity/internal/api"
-	"singularity/internal/project"
+	"gitlab.com/tanevanwifferen1/singularity/internal/api"
+	"gitlab.com/tanevanwifferen1/singularity/internal/project"
 )
 
 // handleProjectList handles GET /api/project/list

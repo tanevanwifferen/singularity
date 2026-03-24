@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"singularity/internal/app/components"
-	"singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
+	"gitlab.com/tanevanwifferen1/singularity/internal/git"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

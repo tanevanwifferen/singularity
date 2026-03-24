@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"singularity/internal/app/components"
-	"singularity/internal/app/views"
+	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
+	"gitlab.com/tanevanwifferen1/singularity/internal/app/views"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

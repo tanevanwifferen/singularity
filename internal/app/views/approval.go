@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"singularity/internal/jira"
-	"singularity/internal/theme"
+	"gitlab.com/tanevanwifferen1/singularity/internal/jira"
+	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

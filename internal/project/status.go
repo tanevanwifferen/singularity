@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/git"
 )
 
 // CrossRepoComparison holds branch comparison data across repos

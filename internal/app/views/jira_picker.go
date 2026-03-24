@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"singularity/internal/app/components"
-	"singularity/internal/config"
-	"singularity/internal/jira"
-	"singularity/internal/theme"
+	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
+	"gitlab.com/tanevanwifferen1/singularity/internal/config"
+	"gitlab.com/tanevanwifferen1/singularity/internal/jira"
+	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

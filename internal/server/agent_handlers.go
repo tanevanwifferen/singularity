@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"time"
 
-	"singularity/internal/api"
-	"singularity/internal/engine"
+	"gitlab.com/tanevanwifferen1/singularity/internal/api"
+	"gitlab.com/tanevanwifferen1/singularity/internal/engine"
 )
 
 // handleAgentStart handles POST /api/agent/start

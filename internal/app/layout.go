@@ -5,10 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"singularity/internal/theme"
+	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	"github.com/charmbracelet/lipgloss"
-	"singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/git"
 )
 
 // Layout manages the shared TUI layout structure.

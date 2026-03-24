@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/git"
 )
 
 // WorkflowState represents the current phase of a feature workflow

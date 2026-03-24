@@ -22,4 +22,14 @@ checksum:
   name_template: "checksums.txt"
 
 changelog:
-  use: gitlab
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+
+release:
+  gitlab:
+    owner: tanevanwifferen1
+    name: singularity
