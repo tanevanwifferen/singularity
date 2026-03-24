@@ -36,6 +36,7 @@ type Model struct {
 	wsClient         *WSClient
 	wsStatus         WSConnectionStatus
 	projectMode      bool
+	activeRepoIdx    int // index of active repo in project (for [ / ] cycling)
 	cfg              *config.Config
 }
 
@@ -346,11 +347,19 @@ func (m *Model) initProjectRouter() {
 	router.submenuViews["WorkflowDiff"] = true // hide from tab bar
 	workflowsView.SetWorkflowDiffView(workflowDiffView)
 
-	// Use the first repo's path as the default for single-repo views.
+	// Use the active repo's path as the default for single-repo views.
 	// Fall back to the project directory itself.
 	defaultRepoPath := m.projectPath
 	if m.proj != nil && len(m.proj.Repos) > 0 {
-		defaultRepoPath = m.proj.Repos[0].Path
+		if m.activeRepoIdx >= len(m.proj.Repos) {
+			m.activeRepoIdx = 0
+		}
+		defaultRepoPath = m.proj.Repos[m.activeRepoIdx].Path
+	}
+
+	// Load repo info for the status bar
+	if repoInfo, err := git.OpenRepo(defaultRepoPath); err == nil {
+		m.repoInfo = repoInfo
 	}
 
 	// Register single-repo views that are also useful in project mode
@@ -479,6 +488,31 @@ func (m *Model) discoverProject(dir string) *project.Project {
 	return proj
 }
 
+// switchToProjectRepo updates all single-repo views to point at the repo at the given index.
+func (m *Model) switchToProjectRepo(idx int) tea.Cmd {
+	repo := m.proj.Repos[idx]
+	m.router.SetAllRepoPath(repo.Path)
+
+	// Load repo info for the status bar
+	repoInfo, err := git.OpenRepo(repo.Path)
+	if err == nil {
+		m.repoInfo = repoInfo
+	}
+
+	m.statusMsg = fmt.Sprintf("Switched to repo: %s", repo.Name)
+
+	// Re-init the active view so it reloads data for the new repo
+	return m.router.ActiveView().Init()
+}
+
+// activeRepoName returns the name of the currently active repo in project mode.
+func (m *Model) activeRepoName() string {
+	if m.proj != nil && m.activeRepoIdx < len(m.proj.Repos) {
+		return m.proj.Repos[m.activeRepoIdx].Name
+	}
+	return ""
+}
+
 // Init initializes the tea program
 func (m Model) Init() tea.Cmd {
 	if m.router == nil {
@@ -566,6 +600,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.projectMode = true
 				m.loadProject()
 				return m, nil
+			}
+		case "[":
+			if !viewCapturesInput && m.projectMode && m.proj != nil && len(m.proj.Repos) > 1 {
+				m.activeRepoIdx = (m.activeRepoIdx - 1 + len(m.proj.Repos)) % len(m.proj.Repos)
+				return m, m.switchToProjectRepo(m.activeRepoIdx)
+			}
+		case "]":
+			if !viewCapturesInput && m.projectMode && m.proj != nil && len(m.proj.Repos) > 1 {
+				m.activeRepoIdx = (m.activeRepoIdx + 1) % len(m.proj.Repos)
+				return m, m.switchToProjectRepo(m.activeRepoIdx)
 			}
 		case "T":
 			if !viewCapturesInput {
@@ -686,7 +730,15 @@ func (m Model) View() string {
 	if m.router != nil && m.layout != nil {
 		var base string
 		if m.proj != nil {
-			base = m.layout.Render(m.router, m.repoInfo, m.router.View(), m.proj.Name)
+			opts := RenderOpts{ProjectName: m.proj.Name}
+			if len(m.proj.Repos) > 1 {
+				opts.RepoSel = &RepoSelector{
+					ActiveIdx:  m.activeRepoIdx,
+					TotalRepos: len(m.proj.Repos),
+					RepoName:   m.proj.Repos[m.activeRepoIdx].Name,
+				}
+			}
+			base = m.layout.Render(m.router, m.repoInfo, m.router.View(), opts)
 		} else {
 			base = m.layout.Render(m.router, m.repoInfo, m.router.View())
 		}

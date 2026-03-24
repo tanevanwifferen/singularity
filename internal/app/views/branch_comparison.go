@@ -42,6 +42,9 @@ func NewBranchComparisonView(repoPath string) *BranchComparisonView {
 	}
 }
 
+// SetRepoPath updates the repository path for this view.
+func (v *BranchComparisonView) SetRepoPath(path string) { v.repoPath = path }
+
 // Init initializes the view.
 func (v *BranchComparisonView) Init() tea.Cmd {
 	v.loading = true

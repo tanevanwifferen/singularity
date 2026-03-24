@@ -49,6 +49,9 @@ func NewPipelineView(repoPath string) *PipelineView {
 	return v
 }
 
+// SetRepoPath updates the repository path for this view.
+func (v *PipelineView) SetRepoPath(path string) { v.repoPath = path }
+
 // Init initializes the pipeline view.
 func (v *PipelineView) Init() tea.Cmd {
 	v.loading = true

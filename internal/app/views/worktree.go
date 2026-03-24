@@ -71,6 +71,9 @@ func NewWorktreeView(repoPath string) *WorktreeView {
 	return v
 }
 
+// SetRepoPath updates the repository path for this view.
+func (v *WorktreeView) SetRepoPath(path string) { v.repoPath = path }
+
 // SetEngine sets the agent engine used to start merge agents.
 func (v *WorktreeView) SetEngine(eng *engine.Engine) {
 	v.engine = eng

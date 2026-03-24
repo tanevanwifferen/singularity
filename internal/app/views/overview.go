@@ -45,6 +45,9 @@ func NewOverviewView(repoPath string) *OverviewView {
 	}
 }
 
+// SetRepoPath updates the repository path for this view.
+func (v *OverviewView) SetRepoPath(path string) { v.repoPath = path }
+
 // Init initializes the overview view.
 func (v *OverviewView) Init() tea.Cmd {
 	v.loading = true

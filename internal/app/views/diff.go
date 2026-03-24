@@ -84,6 +84,9 @@ func NewDiffView(repoPath, branchA, branchB string) *DiffView {
 	}
 }
 
+// SetRepoPath updates the repository path for this view.
+func (v *DiffView) SetRepoPath(path string) { v.repoPath = path }
+
 // NewWorkdirDiffView creates a new diff view for staged/unstaged changes.
 func NewWorkdirDiffView(repoPath string) *DiffView {
 	return &DiffView{

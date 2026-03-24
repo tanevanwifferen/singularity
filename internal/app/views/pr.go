@@ -64,6 +64,9 @@ func NewPRView(repoPath string) *PRView {
 	}
 }
 
+// SetRepoPath updates the repository path for this view.
+func (v *PRView) SetRepoPath(path string) { v.repoPath = path }
+
 // SetPendingSourceBranch pre-selects a branch as the source on the next data load.
 func (v *PRView) SetPendingSourceBranch(name string) {
 	v.pendingSourceBranch = name

@@ -68,6 +68,9 @@ func NewRebaseView(repoPath string) *RebaseView {
 	return v
 }
 
+// SetRepoPath updates the repository path for this view.
+func (v *RebaseView) SetRepoPath(path string) { v.repoPath = path }
+
 // Init initializes the rebase view.
 func (v *RebaseView) Init() tea.Cmd {
 	v.loading = true

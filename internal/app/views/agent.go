@@ -140,6 +140,9 @@ func (v *AgentView) outputHeight() int {
 	return h
 }
 
+// SetRepoPath updates the repository path for this view.
+func (v *AgentView) SetRepoPath(path string) { v.repoPath = path }
+
 // SetEngine sets the agent engine (allows late binding)
 func (v *AgentView) SetEngine(eng *engine.Engine) {
 	v.engine = eng

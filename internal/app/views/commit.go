@@ -88,6 +88,9 @@ func NewCommitView(repoPath string) *CommitView {
 	}
 }
 
+// SetRepoPath updates the repository path for this view.
+func (v *CommitView) SetRepoPath(path string) { v.repoPath = path }
+
 // Init initializes the commit view.
 func (v *CommitView) Init() tea.Cmd {
 	v.loading = true

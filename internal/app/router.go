@@ -43,6 +43,12 @@ type KeyCapturer interface {
 }
 
 
+// RepoPathSetter is an optional interface for views that can switch
+// to a different repository path (used in project mode repo cycling).
+type RepoPathSetter interface {
+	SetRepoPath(path string)
+}
+
 // SwitchViewMsg is a message to switch to a different view.
 type SwitchViewMsg struct {
 	ViewName string
@@ -492,6 +498,16 @@ func (r *Router) NotifySize(width, height int) {
 	// Also update help overlay size if visible
 	if r.showHelp {
 		r.helpOverlay.SetSize(width, height)
+	}
+}
+
+// SetAllRepoPath updates the repo path on all views that implement RepoPathSetter.
+// This is used in project mode to switch the repo that single-repo views operate on.
+func (r *Router) SetAllRepoPath(path string) {
+	for _, view := range r.views {
+		if rps, ok := view.(RepoPathSetter); ok {
+			rps.SetRepoPath(path)
+		}
 	}
 }
 

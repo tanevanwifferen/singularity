@@ -112,6 +112,9 @@ func NewSyncView(repoPath string) *SyncView {
 	}
 }
 
+// SetRepoPath updates the repository path for this view.
+func (v *SyncView) SetRepoPath(path string) { v.repoPath = path }
+
 // Init initializes the sync view.
 func (v *SyncView) Init() tea.Cmd {
 	v.loading = true

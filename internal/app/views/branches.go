@@ -66,6 +66,9 @@ func NewBranchesView(repoPath string) *BranchesView {
 	return v
 }
 
+// SetRepoPath updates the repository path for this view.
+func (v *BranchesView) SetRepoPath(path string) { v.repoPath = path }
+
 // Init initializes the branches view.
 func (v *BranchesView) Init() tea.Cmd {
 	v.loading = true

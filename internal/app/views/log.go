@@ -102,6 +102,9 @@ func NewLogView(repoPath string) *LogView {
 	return v
 }
 
+// SetRepoPath updates the repository path for this view.
+func (v *LogView) SetRepoPath(path string) { v.repoPath = path }
+
 // Init initializes the log view.
 func (v *LogView) Init() tea.Cmd {
 	v.loading = true

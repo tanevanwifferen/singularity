@@ -122,9 +122,16 @@ func (l *Layout) RenderTabBar(router *Router) string {
 	return tabBar
 }
 
+// RepoSelector holds state for the project-mode repo cycling indicator.
+type RepoSelector struct {
+	ActiveIdx  int
+	TotalRepos int
+	RepoName   string
+}
+
 // RenderStatusBar renders the status bar at the bottom of the screen.
 // projectName is an optional fallback displayed when repoInfo is nil (e.g. project mode).
-func (l *Layout) RenderStatusBar(repoInfo *git.RepoInfo, viewName string, projectName string) string {
+func (l *Layout) RenderStatusBar(repoInfo *git.RepoInfo, viewName string, projectName string, repoSel ...RepoSelector) string {
 	// Build status bar content
 	var status string
 
@@ -140,6 +147,12 @@ func (l *Layout) RenderStatusBar(repoInfo *git.RepoInfo, viewName string, projec
 		repoName := filepath.Base(repoInfo.Path)
 		status += l.primaryTextStyle.Render(repoName)
 
+		// Repo selector indicator (project mode with multiple repos)
+		if len(repoSel) > 0 && repoSel[0].TotalRepos > 1 {
+			sel := repoSel[0]
+			status += l.mutedTextStyle.Render(fmt.Sprintf(" [%d/%d]", sel.ActiveIdx+1, sel.TotalRepos))
+		}
+
 		// Branch info
 		if repoInfo.CurrentBranch != "" {
 			status += l.mutedTextStyle.Render(" · ")
@@ -153,14 +166,24 @@ func (l *Layout) RenderStatusBar(repoInfo *git.RepoInfo, viewName string, projec
 		}
 	} else if projectName != "" {
 		status += l.primaryTextStyle.Render(projectName)
+
+		// Repo selector indicator even without repoInfo
+		if len(repoSel) > 0 && repoSel[0].TotalRepos > 1 {
+			sel := repoSel[0]
+			status += l.mutedTextStyle.Render(fmt.Sprintf(" · "))
+			status += l.primaryTextStyle.Render(sel.RepoName)
+			status += l.mutedTextStyle.Render(fmt.Sprintf(" [%d/%d]", sel.ActiveIdx+1, sel.TotalRepos))
+		}
 	} else {
 		status += l.mutedTextStyle.Render("No repository")
 	}
 
-	// Right side: view name
+	// Right side: view name + repo cycling hint
 	if viewName != "" {
-		// Pad to align view name to the right
 		viewLabel := fmt.Sprintf("│ %s", viewName)
+		if len(repoSel) > 0 && repoSel[0].TotalRepos > 1 {
+			viewLabel += "  [ ]/[ ]: switch repo"
+		}
 		plainLen := len(stripAnsi(status)) + len(stripAnsi(viewLabel))
 		status += l.statusBarStyle.Width(l.width - plainLen).Render(viewLabel)
 	}
@@ -184,9 +207,14 @@ func (l *Layout) AvailableViewDimensions() (width, height int) {
 	return width, height
 }
 
+// RenderOpts holds optional parameters for layout rendering.
+type RenderOpts struct {
+	ProjectName string
+	RepoSel     *RepoSelector
+}
+
 // Render renders the complete layout with the active view content.
-// projectName is displayed in the status bar when repoInfo is nil (project mode).
-func (l *Layout) Render(router *Router, repoInfo *git.RepoInfo, activeViewContent string, projectName ...string) string {
+func (l *Layout) Render(router *Router, repoInfo *git.RepoInfo, activeViewContent string, opts ...RenderOpts) string {
 	th := theme.GetTheme()
 	l.rebuildStyles()
 
@@ -220,13 +248,17 @@ func (l *Layout) Render(router *Router, repoInfo *git.RepoInfo, activeViewConten
 	output += "\n"
 
 	// Status bar (no trailing newline — avoids scrolling the tab bar off screen)
-	pName := ""
-	if len(projectName) > 0 {
-		pName = projectName[0]
+	var opt RenderOpts
+	if len(opts) > 0 {
+		opt = opts[0]
 	}
-	statusBar := l.RenderStatusBar(repoInfo, "", pName)
+	var repoSelArgs []RepoSelector
+	if opt.RepoSel != nil {
+		repoSelArgs = []RepoSelector{*opt.RepoSel}
+	}
+	statusBar := l.RenderStatusBar(repoInfo, "", opt.ProjectName, repoSelArgs...)
 	if router != nil {
-		statusBar = l.RenderStatusBar(repoInfo, router.ActiveName(), pName)
+		statusBar = l.RenderStatusBar(repoInfo, router.ActiveName(), opt.ProjectName, repoSelArgs...)
 	}
 	output += statusBar
 

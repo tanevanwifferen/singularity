@@ -58,6 +58,9 @@ func NewStashView(repoPath string) *StashView {
 	return v
 }
 
+// SetRepoPath updates the repository path for this view.
+func (v *StashView) SetRepoPath(path string) { v.repoPath = path }
+
 // Init initializes the stash view.
 func (v *StashView) Init() tea.Cmd {
 	v.loading = true

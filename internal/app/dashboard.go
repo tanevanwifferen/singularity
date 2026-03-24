@@ -38,6 +38,21 @@ func NewBranchDashboard(repoPath string) (*BranchDashboard, error) {
 	}, nil
 }
 
+// SetRepoPath updates the repository path and reloads data.
+func (d *BranchDashboard) SetRepoPath(path string) {
+	repo, err := git.OpenRepo(path)
+	if err != nil {
+		d.err = err
+		return
+	}
+	d.repo = repo
+	d.branches = repo.Branches
+	d.err = nil
+	if d.selected >= len(d.branches) {
+		d.selected = 0
+	}
+}
+
 // Init initializes the dashboard
 func (d *BranchDashboard) Init() tea.Cmd {
 	return nil
