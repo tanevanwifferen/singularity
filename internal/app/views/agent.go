@@ -727,6 +727,22 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			v.outputViewport.HalfViewUp()
 			return v, nil
 		}
+
+	case "a":
+		// Open approval view for completed Jira refine/create agents
+		if v.selectedAgent != nil && v.jiraAgentMeta != nil {
+			if meta, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
+				if v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentError || v.selectedAgent.State == engine.AgentKilled {
+					actions, err := jira.ParseJiraActions(meta.ActionsFile)
+					if err == nil && len(actions) > 0 && v.jiraClient != nil {
+						v.approvalView = NewApprovalView(actions, v.jiraClient)
+						v.approvalView.SetSize(v.width, v.height)
+						v.approvalAgent = v.selectedAgent.ID
+					}
+				}
+			}
+		}
+		return v, nil
 	}
 
 	// Pass remaining keys to filter
@@ -973,10 +989,21 @@ func (v *AgentView) View() string {
 			focusIndicator = lipgloss.NewStyle().Foreground(th.Accent).Bold(true).Render(">")
 		}
 
-		s.WriteString(fmt.Sprintf("%s%s%s\n",
+		// Show review proposal button for completed Jira refine/create agents
+		reviewBtn := ""
+		if v.jiraAgentMeta != nil {
+			if _, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
+				if v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentError || v.selectedAgent.State == engine.AgentKilled {
+					reviewBtn = "  " + lipgloss.NewStyle().Foreground(th.Accent).Bold(true).Render("[ a: Review Proposal ]")
+				}
+			}
+		}
+
+		s.WriteString(fmt.Sprintf("%s%s%s%s\n",
 			focusIndicator,
 			th.DashboardTitle.Render(header),
 			th.MutedTextStyle.Render(scrollPct),
+			reviewBtn,
 		))
 
 		// Viewport content
@@ -1014,7 +1041,15 @@ func (v *AgentView) View() string {
 			}
 			s.WriteString(th.Help.Render(hint))
 		} else {
-			s.WriteString(th.Help.Render(" tab:focus output  esc/d:close"))
+			hint := " tab:focus output  esc/d:close"
+			if v.selectedAgent != nil && v.jiraAgentMeta != nil {
+				if _, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
+					if v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentError || v.selectedAgent.State == engine.AgentKilled {
+						hint += "  a:review proposal"
+					}
+				}
+			}
+			s.WriteString(th.Help.Render(hint))
 		}
 	}
 
