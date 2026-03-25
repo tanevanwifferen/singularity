@@ -98,6 +98,16 @@ func DeleteRemoteBranch(repoPath, remote, branch string) error {
 	return nil
 }
 
+// CheckoutDetached checks out the current HEAD in detached state
+func CheckoutDetached(repoPath string) error {
+	cmd := exec.Command("git", "-C", repoPath, "checkout", "--detach", "HEAD")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("checkout detached failed: %s", strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
 // CreateBranch creates and checks out a new branch from the default branch
 func CreateBranch(repoPath, branch, fromBranch string) error {
 	cmd := exec.Command("git", "-C", repoPath, "checkout", "-b", branch, fromBranch)

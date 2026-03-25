@@ -24,6 +24,10 @@ type OverviewView struct {
 	worktreeCnt int
 	loading     bool
 	err         error
+
+	// Detached checkout state
+	showDetachConfirm bool
+	actionResult      string
 }
 
 // CommitInfo holds information about a recent commit.
@@ -134,6 +138,27 @@ type RefreshDoneMsg struct{}
 func (v *OverviewView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if v.actionResult != "" {
+			v.actionResult = ""
+		}
+
+		if v.showDetachConfirm {
+			switch msg.String() {
+			case "y", "enter":
+				v.showDetachConfirm = false
+				err := git.CheckoutDetached(v.repoPath)
+				if err != nil {
+					v.actionResult = fmt.Sprintf("✗ %v", err)
+				} else {
+					v.actionResult = "✓ Checked out HEAD in detached state"
+				}
+				v.loadData()
+			case "n", "esc":
+				v.showDetachConfirm = false
+			}
+			return v, nil
+		}
+
 		switch msg.String() {
 		case "r":
 			v.loading = true
@@ -141,6 +166,8 @@ func (v *OverviewView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				v.loadData()
 				return RefreshDoneMsg{}
 			}
+		case "D":
+			v.showDetachConfirm = true
 		}
 	case RefreshDoneMsg:
 		v.loading = false
@@ -228,6 +255,28 @@ func (v *OverviewView) View() string {
 
 	s.WriteString("\n")
 
+	// Detached checkout confirmation modal
+	if v.showDetachConfirm {
+		lines := []string{
+			"",
+			"  Checkout HEAD in detached state?",
+			"",
+			"  y: Yes  n/Esc: Cancel",
+		}
+		s.WriteString(renderModal("Checkout Detached HEAD", lines, modalWidth(v.width)))
+		s.WriteString("\n")
+	}
+
+	// Action result flash
+	if v.actionResult != "" {
+		if strings.HasPrefix(v.actionResult, "✓") {
+			s.WriteString(theme.DashboardAccentStyle.Render(" " + v.actionResult))
+		} else {
+			s.WriteString(theme.DashboardErrorStyle.Render(" " + v.actionResult))
+		}
+		s.WriteString("\n\n")
+	}
+
 	// Recent commits section
 	s.WriteString(theme.StatsStyle.Render(" Recent Commits "))
 	s.WriteString("\n")
@@ -269,7 +318,10 @@ func (v *OverviewView) findCurrentBranch() *git.BranchInfo {
 
 // ShortHelp returns a short help string.
 func (v *OverviewView) ShortHelp() string {
-	return "r: Refresh"
+	if v.showDetachConfirm {
+		return "y: Confirm  n/Esc: Cancel"
+	}
+	return "r: Refresh  D: Checkout Detached"
 }
 
 // Refresh reloads repository data.
@@ -282,5 +334,6 @@ func (v *OverviewView) Refresh() error {
 func (v *OverviewView) KeyBindings() []components.KeyBinding {
 	return []components.KeyBinding{
 		{Key: "r", Description: "Refresh repository data"},
+		{Key: "D", Description: "Checkout HEAD in detached state"},
 	}
 }
