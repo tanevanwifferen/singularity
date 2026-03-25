@@ -75,6 +75,14 @@ type ProjectView struct {
 	showDetachAllConfirm bool
 	detachAllResult      string
 
+	// Sync-to-worktrees state (W): checkout main dir as detached at each worktree HEAD
+	showSyncWorktreeConfirm bool
+	syncWorktreeResult      string
+
+	// Checkout all main branches state (A): checkout default branch in every repo
+	showCheckoutAllMainConfirm bool
+	checkoutAllMainResult      string
+
 	// Filter for tree list
 	filter *components.Filter[treeNode]
 }
@@ -349,6 +357,12 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.detachAllResult != "" {
 			v.detachAllResult = ""
 		}
+		if v.syncWorktreeResult != "" {
+			v.syncWorktreeResult = ""
+		}
+		if v.checkoutAllMainResult != "" {
+			v.checkoutAllMainResult = ""
+		}
 
 		// Handle new branch creation mode
 		if v.showNewBranch {
@@ -483,6 +497,71 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, nil
 		}
 
+		// Handle sync-to-worktrees confirmation (W)
+		if v.showSyncWorktreeConfirm {
+			switch msg.String() {
+			case "y", "enter":
+				var results []string
+				if v.proj != nil {
+					for _, repo := range v.proj.Repos {
+						worktrees, err := git.GetWorktrees(repo.Path)
+						if err != nil {
+							results = append(results, fmt.Sprintf("✗ %s: %v", repo.Name, err))
+							continue
+						}
+						if len(worktrees) < 2 {
+							results = append(results, fmt.Sprintf("⊘ %s: no worktrees", repo.Name))
+							continue
+						}
+						mainPath := worktrees[0].Path
+						for _, wt := range worktrees[1:] {
+							if wt.HEAD == "" {
+								continue
+							}
+							if err := git.CheckoutDetachedAt(mainPath, wt.HEAD); err != nil {
+								results = append(results, fmt.Sprintf("✗ %s/%s: %v", repo.Name, filepath.Base(wt.Path), err))
+							} else {
+								results = append(results, fmt.Sprintf("✓ %s: main→%s (%s)", repo.Name, filepath.Base(wt.Path), wt.HEAD[:7]))
+							}
+						}
+					}
+				}
+				v.syncWorktreeResult = strings.Join(results, "\n")
+				v.showSyncWorktreeConfirm = false
+				v.loadData()
+			case "n", "esc":
+				v.showSyncWorktreeConfirm = false
+			}
+			return v, nil
+		}
+
+		// Handle checkout-all-main confirmation (A)
+		if v.showCheckoutAllMainConfirm {
+			switch msg.String() {
+			case "y", "enter":
+				var results []string
+				if v.proj != nil {
+					for _, repo := range v.proj.Repos {
+						branch := repo.DefaultBranch
+						if branch == "" {
+							branch = "main"
+						}
+						if err := git.Checkout(repo.Path, branch); err != nil {
+							results = append(results, fmt.Sprintf("✗ %s: %v", repo.Name, err))
+						} else {
+							results = append(results, fmt.Sprintf("✓ %s: checked out '%s'", repo.Name, branch))
+						}
+					}
+				}
+				v.checkoutAllMainResult = strings.Join(results, "\n")
+				v.showCheckoutAllMainConfirm = false
+				v.loadData()
+			case "n", "esc":
+				v.showCheckoutAllMainConfirm = false
+			}
+			return v, nil
+		}
+
 		// Handle checkout-by-name mode
 		if v.showCheckoutByName {
 			switch msg.Type {
@@ -585,6 +664,12 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "D":
 			// Prompt to checkout all worktrees of all repos as detached HEAD
 			v.showDetachAllConfirm = true
+		case "W":
+			// Sync: checkout main dir of each repo as detached at each worktree's HEAD
+			v.showSyncWorktreeConfirm = true
+		case "A":
+			// Checkout default branch in all repos
+			v.showCheckoutAllMainConfirm = true
 		case "M":
 			// Checkout default branch for selected repo
 			node := v.selectedNode()
@@ -781,6 +866,39 @@ func (v *ProjectView) View() string {
 		s.WriteString("\n")
 	}
 
+	// Sync-to-worktrees confirmation modal (W)
+	if v.showSyncWorktreeConfirm {
+		repoCount := 0
+		if v.proj != nil {
+			repoCount = len(v.proj.Repos)
+		}
+		lines := []string{
+			"",
+			fmt.Sprintf("  Sync main checkout of %d repo(s) to worktree HEAD?", repoCount),
+			"  Main dir → detached HEAD at each worktree's last commit.",
+			"",
+			"  y: Yes  n/Esc: Cancel",
+		}
+		s.WriteString(renderModal("Sync Main Dir to Worktrees", lines, modalWidth(v.width)))
+		s.WriteString("\n")
+	}
+
+	// Checkout-all-main confirmation modal (A)
+	if v.showCheckoutAllMainConfirm {
+		repoCount := 0
+		if v.proj != nil {
+			repoCount = len(v.proj.Repos)
+		}
+		lines := []string{
+			"",
+			fmt.Sprintf("  Checkout default branch in all %d repo(s)?", repoCount),
+			"",
+			"  y: Yes  n/Esc: Cancel",
+		}
+		s.WriteString(renderModal("Checkout Main Branch: All Repos", lines, modalWidth(v.width)))
+		s.WriteString("\n")
+	}
+
 	// Checkout by name modal
 	if v.showCheckoutByName {
 		lines := []string{
@@ -845,6 +963,28 @@ func (v *ProjectView) View() string {
 		}
 		s.WriteString("\n")
 	}
+	if v.syncWorktreeResult != "" {
+		for _, line := range strings.Split(v.syncWorktreeResult, "\n") {
+			if strings.HasPrefix(line, "✓") {
+				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
+			} else {
+				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
+			}
+			s.WriteString("\n")
+		}
+		s.WriteString("\n")
+	}
+	if v.checkoutAllMainResult != "" {
+		for _, line := range strings.Split(v.checkoutAllMainResult, "\n") {
+			if strings.HasPrefix(line, "✓") {
+				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
+			} else {
+				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
+			}
+			s.WriteString("\n")
+		}
+		s.WriteString("\n")
+	}
 
 	// Repos header
 	s.WriteString(th.StatsStyle.Render(" Repositories "))
@@ -879,7 +1019,7 @@ func (v *ProjectView) renderFooterHelp() string {
 		return th.Help.Render("Enter: Confirm  Esc: Cancel")
 	}
 
-	return th.Help.Render(" ↑↓ Navigate  Enter Expand  o Open  c Checkout  C Checkout by name  M Checkout main  n Branch  m MR  b Check  / Filter  r Refresh  X Reset All  D Detach All Worktrees")
+	return th.Help.Render(" ↑↓ Navigate  Enter Expand  o Open  c Checkout  C Checkout by name  M Checkout main  n Branch  m MR  b Check  / Filter  r Refresh  X Reset All  D Detach All  W Sync Main→Worktrees  A Checkout Main All")
 }
 
 // ShortHelp returns a contextual short help string.
@@ -887,18 +1027,18 @@ func (v *ProjectView) ShortHelp() string {
 	if v.CapturesInput() {
 		return "Enter: Confirm  Esc: Cancel"
 	}
-	return "↑↓ Navigate  Enter Expand  o Open  c Checkout  C Checkout by name  M Checkout main  n Branch  m MR  b Check  / Filter  r Refresh  X Reset All  D Detach All Worktrees"
+	return "↑↓ Navigate  Enter Expand  o Open  c Checkout  C Checkout by name  M Checkout main  n Branch  m MR  b Check  / Filter  r Refresh  X Reset All  D Detach All  W Sync Main→Worktrees  A Checkout Main All"
 }
 
 // CapturesInput returns true when the view is in an input mode.
 func (v *ProjectView) CapturesInput() bool {
-	return v.showBranchCheck || v.showNewBranch || v.showMRConfirm || v.showResetAllConfirm || v.showCheckoutByName || v.showDetachAllConfirm
+	return v.showBranchCheck || v.showNewBranch || v.showMRConfirm || v.showResetAllConfirm || v.showCheckoutByName || v.showDetachAllConfirm || v.showSyncWorktreeConfirm || v.showCheckoutAllMainConfirm
 }
 
 // CapturesKey returns true for keys this view handles directly.
 func (v *ProjectView) CapturesKey(key string) bool {
 	switch key {
-	case "r", "o", "b", "c", "C", "n", "m", "M", "X", "D", "enter", "/", "j", "k", "up", "down":
+	case "r", "o", "b", "c", "C", "n", "m", "M", "X", "D", "W", "A", "enter", "/", "j", "k", "up", "down":
 		return true
 	}
 	return false
@@ -949,5 +1089,7 @@ func (v *ProjectView) KeyBindings() []components.KeyBinding {
 		{Key: "r", Description: "Refresh all repos"},
 		{Key: "X", Description: "Reset ALL repos to main (destructive)"},
 		{Key: "D", Description: "Checkout all worktrees of all repos as detached HEAD"},
+		{Key: "W", Description: "Sync main dir to worktree HEADs (detached)"},
+		{Key: "A", Description: "Checkout default branch in all repos"},
 	}
 }
