@@ -300,6 +300,10 @@ func (v *OverviewView) View() string {
 		}
 	}
 
+	// Footer help
+	s.WriteString("\n")
+	s.WriteString(theme.Help.Render(v.ShortHelp()))
+
 	return s.String()
 }
 
