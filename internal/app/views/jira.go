@@ -202,6 +202,9 @@ func (v *JiraView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.filter != nil {
 			v.filter.SetHeight(msg.Height)
 		}
+		if v.approvalView != nil {
+			v.approvalView.SetSize(msg.Width, msg.Height)
+		}
 		return v, nil
 
 	case jiraWorkflowDoneMsg:
@@ -244,6 +247,7 @@ func (v *JiraView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if len(msg.actions) > 0 {
 				v.approvalView = NewApprovalView(msg.actions, v.client)
+				v.approvalView.SetSize(v.width, v.height)
 				return v, nil
 			}
 			// No actions produced
