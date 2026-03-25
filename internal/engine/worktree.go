@@ -63,10 +63,11 @@ func (a *Agent) mergeWorktreeBack() string {
 	wtBranch := a.worktreeBranch
 	wtPath := a.worktreePath
 
-	// Auto-commit any uncommitted changes left by the agent
+	// Auto-commit any uncommitted changes left by the agent.
+	// If auto-commit fails (e.g. hook rejection), log the error but still attempt
+	// to merge any commits the agent already made — don't skip the merge entirely.
 	if committed, err := autoCommitWorktree(wtPath, a.ID, a.Task); err != nil {
-		a.appendOutput("error", fmt.Sprintf("Failed to auto-commit worktree changes: %v", err))
-		return "error"
+		a.appendOutput("error", fmt.Sprintf("Warning: auto-commit of remaining changes failed: %v", err))
 	} else if committed {
 		a.appendOutput("system", "Worktree: auto-committed uncommitted changes before merge")
 	}
@@ -244,6 +245,7 @@ func generateCommitMessage(diffStat, task, agentID string) string {
 	if len(msg) >= 2 && msg[0] == '"' && msg[len(msg)-1] == '"' {
 		msg = msg[1 : len(msg)-1]
 	}
+	msg = sanitizeCommitMsg(msg)
 	if msg == "" {
 		return fallback
 	}
@@ -271,10 +273,49 @@ func generateMergeMessage(commitLog, task, agentID string) string {
 	if len(msg) >= 2 && msg[0] == '"' && msg[len(msg)-1] == '"' {
 		msg = msg[1 : len(msg)-1]
 	}
+	msg = sanitizeCommitMsg(msg)
 	if msg == "" {
 		return fallback
 	}
 	return msg
+}
+
+// sanitizeCommitMsg strips patterns that would cause the commit-msg hook to reject
+// the message (markdown headers, bold prefixes, horizontal rules, status emoji).
+// Returns the cleaned first non-empty line so it stays within single-line conventions.
+func sanitizeCommitMsg(msg string) string {
+	// Collapse to the first non-empty line (messages should be single-line)
+	for _, line := range strings.Split(msg, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Strip markdown headers: "## foo" → "foo"
+		if after, ok := strings.CutPrefix(line, "## "); ok {
+			line = strings.TrimSpace(after)
+		}
+		// Strip bold prefixes: "**Foo**: bar" → "Foo: bar"
+		if strings.HasPrefix(line, "**") {
+			line = strings.ReplaceAll(line, "**", "")
+		}
+		// Remove horizontal rule lines
+		if line == "---" {
+			continue
+		}
+		// Remove common status emoji
+		for _, emoji := range []string{"✓", "✅", "❌", "🔧", "🚀", "💥", "⚠️"} {
+			line = strings.ReplaceAll(line, emoji, "")
+		}
+		line = strings.TrimSpace(line)
+		if line != "" {
+			// Truncate to 72 chars
+			if len(line) > 72 {
+				line = line[:69] + "..."
+			}
+			return line
+		}
+	}
+	return ""
 }
 
 // sanitizeBranch makes a string safe for use in git branch names.
