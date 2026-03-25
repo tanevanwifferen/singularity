@@ -580,20 +580,7 @@ func (v *WorkflowDiffView) renderFileEntry(item diffItem, selected bool, width i
 	statusChar := " "
 	statusStyle := th.StatsStyle
 	if item.File != nil {
-		switch item.File.Status {
-		case "A":
-			statusStyle = th.DashboardAccentStyle
-			statusChar = "A"
-		case "M":
-			statusStyle = th.WarningStyle
-			statusChar = "M"
-		case "D":
-			statusStyle = th.DashboardErrorStyle
-			statusChar = "D"
-		case "R":
-			statusStyle = th.InfoStyle
-			statusChar = "R"
-		}
+		statusChar, statusStyle = fileStatusIndicator(item.File.Status, th)
 	}
 
 	// Truncate path
@@ -601,13 +588,7 @@ func (v *WorkflowDiffView) renderFileEntry(item diffItem, selected bool, width i
 	if item.File != nil {
 		path = item.File.NewPath
 	}
-	maxPathLen := width - 25
-	if maxPathLen < 10 {
-		maxPathLen = 10
-	}
-	if len(path) > maxPathLen {
-		path = "..." + path[len(path)-maxPathLen+3:]
-	}
+	path = truncatePath(path, width-25)
 
 	line.WriteString(prefix)
 	line.WriteString(statusStyle.Render(statusChar))
@@ -760,102 +741,7 @@ func (v *WorkflowDiffView) renderDetailPanel(width int) string {
 
 // renderDiffWithGutter renders diff content with line numbers in a gutter.
 func (v *WorkflowDiffView) renderDiffWithGutter(width int) string {
-	th := theme.GetTheme()
-	var s strings.Builder
-
-	gutterWidth := 6
-	diffWidth := width - gutterWidth - 1
-	if diffWidth < 10 {
-		diffWidth = 10
-	}
-
-	headerLines := 12
-	footerLines := 2
-	visibleLines := v.height - headerLines - footerLines
-	if visibleLines < 5 {
-		visibleLines = 5
-	}
-
-	startIdx := v.diffScrollOffset
-	endIdx := startIdx + visibleLines
-	if endIdx > len(v.parsedDiffLines) {
-		endIdx = len(v.parsedDiffLines)
-		startIdx = endIdx - visibleLines
-		if startIdx < 0 {
-			startIdx = 0
-		}
-	}
-
-	for i := startIdx; i < endIdx; i++ {
-		line := v.parsedDiffLines[i]
-		gutter := ""
-		lineStyle := th.Help
-
-		switch line.LineType {
-		case "+":
-			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
-			if line.NewLineNum > 0 {
-				gutter = fmt.Sprintf(" %4d ", line.NewLineNum)
-			} else {
-				gutter = "      "
-			}
-		case "-":
-			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-			if line.OldLineNum > 0 {
-				gutter = fmt.Sprintf(" %4d ", line.OldLineNum)
-			} else {
-				gutter = "      "
-			}
-		case "@":
-			lineStyle = th.InfoStyle
-			gutter = "      "
-		case "H":
-			lineStyle = th.Help
-			gutter = "      "
-		case " ":
-			lineStyle = th.Help
-			if line.NewLineNum > 0 {
-				gutter = fmt.Sprintf(" %4d ", line.NewLineNum)
-			} else if line.OldLineNum > 0 {
-				gutter = fmt.Sprintf(" %4d ", line.OldLineNum)
-			} else {
-				gutter = "      "
-			}
-		default:
-			lineStyle = th.Help
-			gutter = "      "
-		}
-
-		// Dim lines that belong to hunks already incorporated in the base branch
-		if line.AlreadyInBase {
-			lineStyle = th.MutedTextStyle
-		}
-
-		content := line.Content
-		if len(content) > diffWidth-2 {
-			content = content[:diffWidth-5] + "..."
-		}
-
-		prefix := " "
-		if line.LineType == "+" {
-			prefix = "+"
-		} else if line.LineType == "-" {
-			prefix = "-"
-		}
-
-		s.WriteString(th.Help.Render(gutter))
-		s.WriteString(lineStyle.Render(prefix + content))
-		s.WriteString("\n")
-	}
-
-	totalLines := len(v.parsedDiffLines)
-	if totalLines > visibleLines {
-		scrollInfo := fmt.Sprintf(" %d-%d of %d  [PgUp/PgDn scroll, g/G top/bottom]", startIdx+1, endIdx, totalLines)
-		s.WriteString(th.Help.Render(scrollInfo))
-		s.WriteString("\n")
-	}
-
-	return s.String()
+	return renderDiffWithGutter(v.parsedDiffLines, v.diffScrollOffset, width, v.height, 12, 2, true, "[PgUp/PgDn scroll, g/G top/bottom]")
 }
 
 // ShortHelp returns a short help string.

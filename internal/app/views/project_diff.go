@@ -454,25 +454,15 @@ func (v *ProjectDiffView) renderFileEntry(item projectDiffItem, selected bool, w
 	f := item.WorkdirFile
 
 	// Status character: prefer staged, fall back to unstaged
-	statusChar := "?"
-	statusStyle := th.MutedTextStyle
 	status := f.StagedStatus
 	if status == "" || status == "?" {
 		status = f.UnstagedStatus
 	}
-	switch status {
-	case "A":
-		statusStyle = th.DashboardAccentStyle
-		statusChar = "A"
-	case "M":
-		statusStyle = th.WarningStyle
-		statusChar = "M"
-	case "D":
-		statusStyle = th.DashboardErrorStyle
-		statusChar = "D"
-	case "R":
-		statusStyle = th.InfoStyle
-		statusChar = "R"
+	statusChar, statusStyle := fileStatusIndicator(status, th)
+	if statusChar == " " {
+		// Preserve "?" indicator for untracked/unknown statuses
+		statusChar = "?"
+		statusStyle = th.MutedTextStyle
 	}
 
 	// Staged indicator
@@ -483,14 +473,7 @@ func (v *ProjectDiffView) renderFileEntry(item projectDiffItem, selected bool, w
 		stageIndicator = " "
 	}
 
-	path := f.Path
-	maxPathLen := width - 28
-	if maxPathLen < 10 {
-		maxPathLen = 10
-	}
-	if len(path) > maxPathLen {
-		path = "..." + path[len(path)-maxPathLen+3:]
-	}
+	path := truncatePath(f.Path, width-28)
 
 	line.WriteString(prefix)
 	line.WriteString(statusStyle.Render(statusChar))
@@ -571,7 +554,8 @@ func (v *ProjectDiffView) renderDetailPanel(width int) string {
 	// Staged status
 	if f.StagedStatus != "" && f.StagedStatus != " " && f.StagedStatus != "?" {
 		s.WriteString(th.StatsStyle.Render(" Staged: "))
-		s.WriteString(th.DashboardAccentStyle.Render(expandStatus(f.StagedStatus)))
+		stagedLabel, _ := fileStatusLabel(f.StagedStatus, th)
+		s.WriteString(th.DashboardAccentStyle.Render(stagedLabel))
 		if f.StagedAdditions > 0 || f.StagedDeletions > 0 {
 			s.WriteString(th.Help.Render(fmt.Sprintf(" (+%d/-%d)", f.StagedAdditions, f.StagedDeletions)))
 		}
@@ -581,7 +565,8 @@ func (v *ProjectDiffView) renderDetailPanel(width int) string {
 	// Unstaged status
 	if f.UnstagedStatus != "" && f.UnstagedStatus != " " && f.UnstagedStatus != "?" {
 		s.WriteString(th.StatsStyle.Render(" Unstaged: "))
-		s.WriteString(th.WarningStyle.Render(expandStatus(f.UnstagedStatus)))
+		unstagedLabel, _ := fileStatusLabel(f.UnstagedStatus, th)
+		s.WriteString(th.WarningStyle.Render(unstagedLabel))
 		if f.UnstagedAdditions > 0 || f.UnstagedDeletions > 0 {
 			s.WriteString(th.Help.Render(fmt.Sprintf(" (+%d/-%d)", f.UnstagedAdditions, f.UnstagedDeletions)))
 		}
@@ -606,115 +591,7 @@ func (v *ProjectDiffView) renderDetailPanel(width int) string {
 }
 
 func (v *ProjectDiffView) renderDiffWithGutter(width int) string {
-	th := theme.GetTheme()
-	var s strings.Builder
-
-	gutterWidth := 6
-	diffWidth := width - gutterWidth - 1
-	if diffWidth < 10 {
-		diffWidth = 10
-	}
-
-	headerLines := 12
-	footerLines := 2
-	visibleLines := v.height - headerLines - footerLines
-	if visibleLines < 5 {
-		visibleLines = 5
-	}
-
-	startIdx := v.diffScrollOffset
-	endIdx := startIdx + visibleLines
-	if endIdx > len(v.parsedDiffLines) {
-		endIdx = len(v.parsedDiffLines)
-		startIdx = endIdx - visibleLines
-		if startIdx < 0 {
-			startIdx = 0
-		}
-	}
-
-	for i := startIdx; i < endIdx; i++ {
-		line := v.parsedDiffLines[i]
-		gutter := ""
-		lineStyle := th.Help
-
-		switch line.LineType {
-		case "+":
-			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
-			if line.NewLineNum > 0 {
-				gutter = fmt.Sprintf(" %4d ", line.NewLineNum)
-			} else {
-				gutter = "      "
-			}
-		case "-":
-			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-			if line.OldLineNum > 0 {
-				gutter = fmt.Sprintf(" %4d ", line.OldLineNum)
-			} else {
-				gutter = "      "
-			}
-		case "@":
-			lineStyle = th.InfoStyle
-			gutter = "      "
-		case "H":
-			lineStyle = th.Help
-			gutter = "      "
-		case " ":
-			lineStyle = th.Help
-			if line.NewLineNum > 0 {
-				gutter = fmt.Sprintf(" %4d ", line.NewLineNum)
-			} else if line.OldLineNum > 0 {
-				gutter = fmt.Sprintf(" %4d ", line.OldLineNum)
-			} else {
-				gutter = "      "
-			}
-		default:
-			lineStyle = th.Help
-			gutter = "      "
-		}
-
-		content := line.Content
-		if len(content) > diffWidth-2 {
-			content = content[:diffWidth-5] + "..."
-		}
-
-		prefix := " "
-		if line.LineType == "+" {
-			prefix = "+"
-		} else if line.LineType == "-" {
-			prefix = "-"
-		}
-
-		s.WriteString(th.Help.Render(gutter))
-		s.WriteString(lineStyle.Render(prefix + content))
-		s.WriteString("\n")
-	}
-
-	totalLines := len(v.parsedDiffLines)
-	if totalLines > visibleLines {
-		scrollInfo := fmt.Sprintf(" %d-%d of %d  [PgUp/PgDn scroll, g/G top/bottom]", startIdx+1, endIdx, totalLines)
-		s.WriteString(th.Help.Render(scrollInfo))
-		s.WriteString("\n")
-	}
-
-	return s.String()
-}
-
-// expandStatus returns a human-readable status string.
-func expandStatus(s string) string {
-	switch s {
-	case "A":
-		return "Added"
-	case "M":
-		return "Modified"
-	case "D":
-		return "Deleted"
-	case "R":
-		return "Renamed"
-	case "C":
-		return "Copied"
-	default:
-		return s
-	}
+	return renderDiffWithGutter(v.parsedDiffLines, v.diffScrollOffset, width, v.height, 12, 2, false, "[PgUp/PgDn scroll, g/G top/bottom]")
 }
 
 // ShortHelp returns a short help string.

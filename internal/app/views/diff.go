@@ -532,36 +532,10 @@ func (v *DiffView) renderFileList(width int) string {
 		}
 
 		// Status indicator
-		statusChar := " "
-		statusStyle := th.StatsStyle
-
-		switch file.Status {
-		case "A":
-			statusStyle = th.DashboardAccentStyle
-			statusChar = "A"
-		case "M":
-			statusStyle = th.WarningStyle
-			statusChar = "M"
-		case "D":
-			statusStyle = th.DashboardErrorStyle
-			statusChar = "D"
-		case "R":
-			statusStyle = th.InfoStyle
-			statusChar = "R"
-		case "C":
-			statusStyle = th.InfoStyle
-			statusChar = "C"
-		}
+		statusChar, statusStyle := fileStatusIndicator(file.Status, th)
 
 		// Truncate long paths
-		path := file.NewPath
-		maxPathLen := width - 20
-		if maxPathLen < 10 {
-			maxPathLen = 10
-		}
-		if len(path) > maxPathLen {
-			path = "..." + path[len(path)-maxPathLen+3:]
-		}
+		path := truncatePath(file.NewPath, width-20)
 
 		// Additions/deletions
 		additions := ""
@@ -635,25 +609,7 @@ func (v *DiffView) renderDetailPanel(width int) string {
 
 	// Status
 	s.WriteString(th.StatsStyle.Render(" Status: "))
-	statusStr := file.Status
-	statusStyle := th.StatsStyle
-	switch file.Status {
-	case "A":
-		statusStr = "Added"
-		statusStyle = th.DashboardAccentStyle
-	case "M":
-		statusStr = "Modified"
-		statusStyle = th.WarningStyle
-	case "D":
-		statusStr = "Deleted"
-		statusStyle = th.DashboardErrorStyle
-	case "R":
-		statusStr = "Renamed"
-		statusStyle = th.InfoStyle
-	case "C":
-		statusStr = "Copied"
-		statusStyle = th.InfoStyle
-	}
+	statusStr, statusStyle := fileStatusLabel(file.Status, th)
 	s.WriteString(statusStyle.Render(statusStr))
 	s.WriteString("\n")
 
@@ -748,118 +704,13 @@ func (v *DiffView) renderDetailPanel(width int) string {
 	return s.String()
 }
 
-// renderDiffWithGutter renders the diff content with line numbers in a gutter
+// renderDiffWithGutter renders the diff content with line numbers in a gutter.
 func (v *DiffView) renderDiffWithGutter(width int) string {
-	th := theme.GetTheme()
-	var s strings.Builder
-
-	// Gutter width - enough for line numbers and spacing
-	gutterWidth := 6
-	diffWidth := width - gutterWidth - 1
-	if diffWidth < 10 {
-		diffWidth = 10
+	scrollHint := "[Enter to navigate]"
+	if v.diffNavMode {
+		scrollHint = "[j/k scroll, g/G top/bottom]"
 	}
-
-	// Calculate visible range based on scroll offset
-	headerLines := 12 // Lines above diff content in this panel
-	footerLines := 2  // Lines below diff content
-	visibleLines := v.height - headerLines - footerLines
-	if visibleLines < 5 {
-		visibleLines = 5
-	}
-
-	startIdx := v.diffScrollOffset
-	endIdx := startIdx + visibleLines
-	if endIdx > len(v.parsedDiffLines) {
-		endIdx = len(v.parsedDiffLines)
-		startIdx = endIdx - visibleLines
-		if startIdx < 0 {
-			startIdx = 0
-		}
-	}
-
-	// Render visible lines
-	for i := startIdx; i < endIdx; i++ {
-		line := v.parsedDiffLines[i]
-		gutter := ""
-		lineStyle := th.Help
-
-		// Build gutter with line numbers
-		switch line.LineType {
-		case "+":
-			// Addition - green
-			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
-			if line.NewLineNum > 0 {
-				gutter = fmt.Sprintf(" %4d ", line.NewLineNum)
-			} else {
-				gutter = "     "
-			}
-		case "-":
-			// Deletion - red
-			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-			if line.OldLineNum > 0 {
-				gutter = fmt.Sprintf(" %4d ", line.OldLineNum)
-			} else {
-				gutter = "     "
-			}
-		case "@":
-			// Hunk header - blue/info color
-			lineStyle = th.InfoStyle
-			gutter = "      "
-		case "H":
-			// File header
-			lineStyle = th.Help
-			gutter = "      "
-		case " ":
-			// Context line
-			lineStyle = th.Help
-			if line.NewLineNum > 0 {
-				gutter = fmt.Sprintf(" %4d ", line.NewLineNum)
-			} else if line.OldLineNum > 0 {
-				gutter = fmt.Sprintf(" %4d ", line.OldLineNum)
-			} else {
-				gutter = "     "
-			}
-		default:
-			// Other (empty, etc)
-			lineStyle = th.Help
-			gutter = "     "
-		}
-
-		// Format content with gutter
-		content := line.Content
-		if len(content) > diffWidth-2 {
-			content = content[:diffWidth-5] + "..."
-		}
-
-		// Use + prefix for additions, - for deletions to match unified diff style
-		prefix := " "
-		if line.LineType == "+" {
-			prefix = "+"
-		} else if line.LineType == "-" {
-			prefix = "-"
-		}
-
-		s.WriteString(th.Help.Render(gutter))
-		s.WriteString(lineStyle.Render(prefix + content))
-		s.WriteString("\n")
-	}
-
-	// Scroll indicator if needed
-	totalLines := len(v.parsedDiffLines)
-	if totalLines > visibleLines {
-		scrollInfo := fmt.Sprintf(" %d-%d of %d ", startIdx+1, endIdx, totalLines)
-		if v.diffNavMode {
-			s.WriteString(th.Help.Render(scrollInfo))
-			s.WriteString(th.Help.Render(" [j/k scroll, g/G top/bottom]"))
-		} else {
-			s.WriteString(th.Help.Render(scrollInfo))
-			s.WriteString(th.Help.Render(" [Enter to navigate]"))
-		}
-		s.WriteString("\n")
-	}
-
-	return s.String()
+	return renderDiffWithGutter(v.parsedDiffLines, v.diffScrollOffset, width, v.height, 12, 2, false, scrollHint)
 }
 
 // ShortHelp returns a short help string.

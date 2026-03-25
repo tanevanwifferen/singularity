@@ -5,6 +5,9 @@ import (
 	"strings"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
+	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 // renderModal renders content inside a box-drawing border.
@@ -125,3 +128,151 @@ func wrapLine(line string, maxWidth int, contPrefix string) []string {
 
 // DeleteWordEnd is re-exported from components for convenience.
 var DeleteWordEnd = components.DeleteWordEnd
+
+// renderDiffWithGutter renders parsed diff lines with a line-number gutter.
+// scrollOffset is the current scroll position, height is the viewport height,
+// headerLines/footerLines account for chrome above/below the diff content.
+// If dimAlreadyInBase is true, lines with AlreadyInBase are rendered in muted style.
+func renderDiffWithGutter(lines []DiffLine, scrollOffset, width, height, headerLines, footerLines int, dimAlreadyInBase bool, scrollHint string) string {
+	th := theme.GetTheme()
+	var s strings.Builder
+
+	gutterWidth := 6
+	diffWidth := width - gutterWidth - 1
+	if diffWidth < 10 {
+		diffWidth = 10
+	}
+
+	visibleLines := height - headerLines - footerLines
+	if visibleLines < 5 {
+		visibleLines = 5
+	}
+
+	startIdx := scrollOffset
+	endIdx := startIdx + visibleLines
+	if endIdx > len(lines) {
+		endIdx = len(lines)
+		startIdx = endIdx - visibleLines
+		if startIdx < 0 {
+			startIdx = 0
+		}
+	}
+
+	for i := startIdx; i < endIdx; i++ {
+		line := lines[i]
+		gutter := ""
+		lineStyle := th.Help
+
+		switch line.LineType {
+		case "+":
+			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
+			if line.NewLineNum > 0 {
+				gutter = fmt.Sprintf(" %4d ", line.NewLineNum)
+			} else {
+				gutter = "      "
+			}
+		case "-":
+			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+			if line.OldLineNum > 0 {
+				gutter = fmt.Sprintf(" %4d ", line.OldLineNum)
+			} else {
+				gutter = "      "
+			}
+		case "@":
+			lineStyle = th.InfoStyle
+			gutter = "      "
+		case "H":
+			lineStyle = th.Help
+			gutter = "      "
+		case " ":
+			lineStyle = th.Help
+			if line.NewLineNum > 0 {
+				gutter = fmt.Sprintf(" %4d ", line.NewLineNum)
+			} else if line.OldLineNum > 0 {
+				gutter = fmt.Sprintf(" %4d ", line.OldLineNum)
+			} else {
+				gutter = "      "
+			}
+		default:
+			lineStyle = th.Help
+			gutter = "      "
+		}
+
+		if dimAlreadyInBase && line.AlreadyInBase {
+			lineStyle = th.MutedTextStyle
+		}
+
+		content := line.Content
+		if len(content) > diffWidth-2 {
+			content = content[:diffWidth-5] + "..."
+		}
+
+		prefix := " "
+		if line.LineType == "+" {
+			prefix = "+"
+		} else if line.LineType == "-" {
+			prefix = "-"
+		}
+
+		s.WriteString(th.Help.Render(gutter))
+		s.WriteString(lineStyle.Render(prefix + content))
+		s.WriteString("\n")
+	}
+
+	totalLines := len(lines)
+	if totalLines > visibleLines {
+		scrollInfo := fmt.Sprintf(" %d-%d of %d ", startIdx+1, endIdx, totalLines)
+		s.WriteString(th.Help.Render(scrollInfo))
+		s.WriteString(th.Help.Render(scrollHint))
+		s.WriteString("\n")
+	}
+
+	return s.String()
+}
+
+// fileStatusIndicator returns a short status character and corresponding style for a git file status.
+func fileStatusIndicator(status string, th theme.Theme) (char string, style lipgloss.Style) {
+	switch status {
+	case "A":
+		return "A", th.DashboardAccentStyle
+	case "M":
+		return "M", th.WarningStyle
+	case "D":
+		return "D", th.DashboardErrorStyle
+	case "R":
+		return "R", th.InfoStyle
+	case "C":
+		return "C", th.InfoStyle
+	default:
+		return " ", th.StatsStyle
+	}
+}
+
+// fileStatusLabel returns a human-readable label and style for a git file status.
+func fileStatusLabel(status string, th theme.Theme) (label string, style lipgloss.Style) {
+	switch status {
+	case "A":
+		return "Added", th.DashboardAccentStyle
+	case "M":
+		return "Modified", th.WarningStyle
+	case "D":
+		return "Deleted", th.DashboardErrorStyle
+	case "R":
+		return "Renamed", th.InfoStyle
+	case "C":
+		return "Copied", th.InfoStyle
+	default:
+		return status, th.StatsStyle
+	}
+}
+
+// truncatePath shortens a path to fit maxLen, prefixing with "..." if needed.
+func truncatePath(path string, maxLen int) string {
+	if maxLen < 10 {
+		maxLen = 10
+	}
+	if len(path) > maxLen {
+		return "..." + path[len(path)-maxLen+3:]
+	}
+	return path
+}
