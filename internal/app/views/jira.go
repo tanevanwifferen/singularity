@@ -768,7 +768,7 @@ func startJiraWorkflow(issue *jira.Issue, branch string, eng *engine.Engine, pro
 		return jiraWorkflowDoneMsg{err: fmt.Errorf("no repository configured")}
 	}
 	worktreePath := filepath.Join(filepath.Dir(repoPath), branch)
-	startPoint := "origin/" + defaultBranch
+	startPoint := defaultBranch
 	if err := git.CreateWorktree(repoPath, worktreePath, branch, true, startPoint); err != nil {
 		return jiraWorkflowDoneMsg{err: fmt.Errorf("create worktree: %w", err)}
 	}

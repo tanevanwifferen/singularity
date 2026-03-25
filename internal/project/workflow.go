@@ -151,7 +151,7 @@ func (fw *FeatureWorkflow) CreateAllWorktrees() error {
 		go func(wr *WorkflowRepo) {
 			defer wg.Done()
 
-			startPoint := "origin/" + wr.DefaultBranch
+			startPoint := wr.DefaultBranch
 			err := git.CreateWorktree(wr.OriginalPath, wr.WorktreePath, fw.BranchName, true, startPoint)
 
 			fw.mu.Lock()
