@@ -478,7 +478,7 @@ func (v *JiraView) startAIMode(mode string, issue *jira.Issue, focus ...string) 
 			if len(focus) > 0 {
 				focusStr = focus[0]
 			}
-			id, err = jira.RefineTicket(eng, &issueCopy, repoPath, focusStr)
+			id, err = jira.RefineTicket(eng, &issueCopy, repoPath, focusStr, "")
 		case "create":
 			project := cfg.DefaultProject
 			if project == "" {
@@ -487,7 +487,7 @@ func (v *JiraView) startAIMode(mode string, issue *jira.Issue, focus ...string) 
 					project = issueCopy.Key[:idx]
 				}
 			}
-			id, err = jira.CreateStories(eng, &issueCopy, "", project, repoPath)
+			id, err = jira.CreateStories(eng, &issueCopy, "", project, repoPath, "")
 		}
 		return jiraAIStartedMsg{agentID: id, mode: mode, err: err}
 	}
@@ -864,7 +864,7 @@ func (v *JiraView) startAIFromText(text string) tea.Cmd {
 		if eng == nil {
 			return jiraAIStartedMsg{err: fmt.Errorf("agent engine not available"), mode: "create"}
 		}
-		id, err := jira.CreateStories(eng, nil, text, project, repoPath)
+		id, err := jira.CreateStories(eng, nil, text, project, repoPath, "")
 		return jiraAIStartedMsg{agentID: id, mode: "create", err: err}
 	}
 }

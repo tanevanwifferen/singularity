@@ -488,6 +488,12 @@ func (v *ApprovalView) actionIcon(typ string) string {
 	}
 }
 
+// SetSize updates the view dimensions.
+func (v *ApprovalView) SetSize(width, height int) {
+	v.width = width
+	v.height = height
+}
+
 // CapturesInput always returns true since ApprovalView is modal-like.
 func (v *ApprovalView) CapturesInput() bool { return true }
 
