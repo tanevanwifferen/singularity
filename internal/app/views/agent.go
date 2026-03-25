@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -219,6 +220,41 @@ func (v *AgentView) loadAgents() {
 	}
 
 	v.filter.SetItems(v.agents)
+
+	// Reconstruct jiraAgentMeta for agents not already tracked (e.g. after restart).
+	// Refine agents have Summary "Refine: PROJ-123"; create-stories agents have
+	// Summary "Create stories: PROJ-123 ...". The actions file follows the pattern
+	// .jira-actions-{ISSUE_KEY}.json relative to the agent's working directory.
+	for _, info := range v.agents {
+		if _, known := v.jiraAgentMeta[info.ID]; known {
+			continue
+		}
+		var issueKey, mode string
+		if strings.HasPrefix(info.Summary, "Refine: ") {
+			issueKey = strings.TrimPrefix(info.Summary, "Refine: ")
+			mode = "refine"
+		} else if strings.HasPrefix(info.Summary, "Create stories: ") {
+			rest := strings.TrimPrefix(info.Summary, "Create stories: ")
+			// Summary may be "PROJ-123 — description", take just the key part
+			if idx := strings.Index(rest, " "); idx > 0 {
+				issueKey = rest[:idx]
+			} else {
+				issueKey = rest
+			}
+			mode = "create"
+		}
+		if issueKey == "" || info.WorkDir == "" {
+			continue
+		}
+		actionsFile := filepath.Join(info.WorkDir, fmt.Sprintf(".jira-actions-%s.json", issueKey))
+		if _, err := os.Stat(actionsFile); err == nil {
+			v.jiraAgentMeta[info.ID] = &jiraAgentMeta{
+				IssueKey:    issueKey,
+				Mode:        mode,
+				ActionsFile: actionsFile,
+			}
+		}
+	}
 
 	if v.selectedAgent != nil {
 		// Update the selected agent's info from the refreshed list
