@@ -262,8 +262,10 @@ func RetryPipeline(repoPath, branch string) error {
 		url := fmt.Sprintf("%s/projects/%s/pipelines/%d/retry",
 			apiURL, encodeProjectPath(projectPath), pipeline.ID)
 
-		_, err = makeGitLabRequest("POST", url, auth.AuthToken, nil)
-		return err
+		if _, err = makeGitLabRequest("POST", url, auth.AuthToken, nil); err != nil {
+			return fmt.Errorf("retry gitlab pipeline: %w", err)
+		}
+		return nil
 	}
 
 	if auth.IsGitHub() {
@@ -282,8 +284,10 @@ func RetryPipeline(repoPath, branch string) error {
 		url := fmt.Sprintf("%s/repos/%s/%s/actions/runs/%d/rerun",
 			apiURL, owner, repo, pipeline.ID)
 
-		_, err = makeGitHubRequest("POST", url, auth.AuthToken, nil)
-		return err
+		if _, err = makeGitHubRequest("POST", url, auth.AuthToken, nil); err != nil {
+			return fmt.Errorf("retry github pipeline: %w", err)
+		}
+		return nil
 	}
 
 	return fmt.Errorf("unsupported forge type")
@@ -357,14 +361,14 @@ func PipelineStatusColor(status PipelineStatus) string {
 func gitLabAPIGet(url, token string, result interface{}) error {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("gitlab api: create request: %w", err)
 	}
 	req.Header.Set("PRIVATE-TOKEN", token)
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("gitlab api: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -374,7 +378,7 @@ func gitLabAPIGet(url, token string, result interface{}) error {
 func gitHubAPIGet(url, token string, result interface{}) error {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("github api: create request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
@@ -382,7 +386,7 @@ func gitHubAPIGet(url, token string, result interface{}) error {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("github api: %w", err)
 	}
 	defer resp.Body.Close()
 

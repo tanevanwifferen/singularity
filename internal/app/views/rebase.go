@@ -855,80 +855,80 @@ func (v *RebaseView) View() string {
 		s.WriteString(th.Help.Render(" b: Select base branch"))
 	}
 
-	// Execution confirmation modal
+	s.WriteString(v.renderModals())
+
+	// Error display
+	if v.err != nil {
+		s.WriteString("\n")
+		s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf(" Error: %v", v.err)))
+	}
+
+	// Footer
+	s.WriteString("\n")
+	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
+	s.WriteString("\n")
+	s.WriteString(v.renderDynamicHelp())
+
+	return s.String()
+}
+
+// renderModals renders all modal overlays for the rebase view.
+func (v *RebaseView) renderModals() string {
+	th := theme.GetTheme()
+	var s strings.Builder
+
 	if v.showExecConfirm {
-		s.WriteString("\n\n")
-		s.WriteString(th.DashboardAccentStyle.Render(" ┌─────────────────────────────────────────────┐"))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardAccentStyle.Render(" │ Execute interactive rebase?                 │"))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardAccentStyle.Render(fmt.Sprintf(" │ Base: %s → %s                            │", v.baseBranch, v.repo.CurrentBranch)))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardAccentStyle.Render(" │ This will modify your branch history!       │"))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardAccentStyle.Render(" │ Type 'y' to confirm:                         │"))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardAccentStyle.Render(" └─────────────────────────────────────────────┘"))
-	}
-
-	// Abort confirmation modal
-	if v.showAbortConfirm {
-		s.WriteString("\n\n")
-		s.WriteString(th.DashboardErrorStyle.Render(" ┌─────────────────────────────────────────────┐"))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardErrorStyle.Render(" │ Abort current rebase?                        │"))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardErrorStyle.Render(" │ This will discard all rebase changes!          │"))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardErrorStyle.Render(" │ Type 'y' to confirm:                         │"))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardErrorStyle.Render(" └─────────────────────────────────────────────┘"))
-	}
-
-	// Conflict resolution modal
-	if v.showConflictModal {
-		s.WriteString("\n\n")
-		s.WriteString(th.DashboardErrorStyle.Render(" ╔═════════════════════════════════════════════╗"))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardErrorStyle.Render(" ║  ⚠️  CONFLICT DETECTED                       ║"))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardErrorStyle.Render(" ╠═════════════════════════════════════════════╣"))
-		s.WriteString("\n")
-		if len(v.conflictFiles) > 0 {
-			s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf(" ║  Files: %s", v.conflictFiles[0])))
-			for i := 1; i < len(v.conflictFiles) && i < 2; i++ {
-				s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf(", %s", v.conflictFiles[i])))
-			}
-			if len(v.conflictFiles) > 2 {
-				s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf(" +%d more", len(v.conflictFiles)-2)))
-			}
-			s.WriteString(th.DashboardErrorStyle.Render("        ║"))
-			s.WriteString("\n")
+		lines := []string{
+			"",
+			"  Execute interactive rebase?",
+			fmt.Sprintf("  Base: %s → %s", v.baseBranch, v.repo.CurrentBranch),
+			"  This will modify your branch history!",
+			"",
+			"  Type 'y' to confirm:",
 		}
-		s.WriteString(th.DashboardErrorStyle.Render(" ╠═════════════════════════════════════════════╣"))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardErrorStyle.Render(" ║  [c] Continue  - conflict resolved           ║"))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardErrorStyle.Render(" ║  [s] Skip      - skip this commit           ║"))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardErrorStyle.Render(" ║  [x] Abort     - abort entire rebase        ║"))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardErrorStyle.Render(" ╚═════════════════════════════════════════════╝"))
-	}
-
-	// Continue confirmation modal
-	if v.showContinueConfirm {
 		s.WriteString("\n\n")
-		s.WriteString(th.DashboardAccentStyle.Render(" ┌─────────────────────────────────────────────┐"))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardAccentStyle.Render(" │ Continue rebase after resolving conflicts?   │"))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardAccentStyle.Render(" │ Type 'y' to confirm:                         │"))
-		s.WriteString("\n")
-		s.WriteString(th.DashboardAccentStyle.Render(" └─────────────────────────────────────────────┘"))
+		s.WriteString(renderModal("Execute Rebase", lines, modalWidth(v.width)))
 	}
 
-	// Branch selection modal
+	if v.showAbortConfirm {
+		lines := []string{
+			"",
+			"  Abort current rebase?",
+			"  This will discard all rebase changes!",
+			"",
+			"  Type 'y' to confirm:",
+		}
+		s.WriteString("\n\n")
+		s.WriteString(renderModal("Abort Rebase", lines, modalWidth(v.width)))
+	}
+
+	if v.showConflictModal {
+		lines := []string{""}
+		if len(v.conflictFiles) > 0 {
+			fileList := strings.Join(v.conflictFiles, ", ")
+			lines = append(lines, fmt.Sprintf("  Files: %s", fileList))
+		}
+		lines = append(lines,
+			"",
+			"  [c] Continue  - conflict resolved",
+			"  [s] Skip      - skip this commit",
+			"  [x] Abort     - abort entire rebase",
+		)
+		s.WriteString("\n\n")
+		s.WriteString(renderModal("CONFLICT DETECTED", lines, modalWidth(v.width)))
+	}
+
+	if v.showContinueConfirm {
+		lines := []string{
+			"",
+			"  Continue rebase after resolving conflicts?",
+			"",
+			"  Type 'y' to confirm:",
+		}
+		s.WriteString("\n\n")
+		s.WriteString(renderModal("Continue Rebase", lines, modalWidth(v.width)))
+	}
+
 	if v.showBranchSelect {
 		s.WriteString("\n\n")
 		s.WriteString(th.DashboardTitle.Render(" ┌─────────────────────────────────────────────┐"))
@@ -957,27 +957,19 @@ func (v *RebaseView) View() string {
 		s.WriteString(th.Help.Render(" ↑↓: Navigate • Enter: Select • Esc: Cancel"))
 	}
 
-	// Error display
-	if v.err != nil {
-		s.WriteString("\n")
-		s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf(" Error: %v", v.err)))
-	}
-
-	// Footer
-	s.WriteString("\n")
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
-
-	// Dynamic help based on state
-	if v.hasConflict {
-		s.WriteString(th.Help.Render(" c: Continue   s: Skip   x: Abort   Esc: Cancel"))
-	} else if v.executing {
-		s.WriteString(th.Help.Render(" Rebase in progress... (wait for completion)"))
-	} else {
-		s.WriteString(th.Help.Render(" r: Refresh   b: Select base   o: Cycle op   K/J: Move   Enter: Execute   x: Abort "))
-	}
-
 	return s.String()
+}
+
+// renderDynamicHelp returns help text based on current state.
+func (v *RebaseView) renderDynamicHelp() string {
+	th := theme.GetTheme()
+	if v.hasConflict {
+		return th.Help.Render(" c: Continue   s: Skip   x: Abort   Esc: Cancel")
+	}
+	if v.executing {
+		return th.Help.Render(" Rebase in progress... (wait for completion)")
+	}
+	return th.Help.Render(" r: Refresh   b: Select base   o: Cycle op   K/J: Move   Enter: Execute   x: Abort ")
 }
 
 // ShortHelp returns a short help string.

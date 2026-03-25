@@ -41,11 +41,10 @@ type approvalExecDoneMsg struct {
 
 // ApprovalView presents JiraActions for review and execution.
 type ApprovalView struct {
+	viewBase
 	items  []ApprovalItem
 	cursor int
 	client *jira.Client
-	width  int
-	height int
 
 	// Execution state
 	executing    bool
@@ -87,8 +86,7 @@ func (v *ApprovalView) Init() tea.Cmd {
 func (v *ApprovalView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		v.width = msg.Width
-		v.height = msg.Height
+		v.SetSize(msg.Width, msg.Height)
 
 	case approvalExecDoneMsg:
 		v.executing = false

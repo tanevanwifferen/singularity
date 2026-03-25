@@ -172,26 +172,26 @@ func (a *Agent) start() error {
 	if err != nil {
 		a.setState(AgentError)
 		a.Error = fmt.Sprintf("stdin pipe: %v", err)
-		return err
+		return fmt.Errorf("agent %s stdin pipe: %w", a.ID, err)
 	}
 	a.stdout, err = a.cmd.StdoutPipe()
 	if err != nil {
 		a.setState(AgentError)
 		a.Error = fmt.Sprintf("stdout pipe: %v", err)
-		return err
+		return fmt.Errorf("agent %s stdout pipe: %w", a.ID, err)
 	}
 
 	a.stderr, err = a.cmd.StderrPipe()
 	if err != nil {
 		a.setState(AgentError)
 		a.Error = fmt.Sprintf("stderr pipe: %v", err)
-		return err
+		return fmt.Errorf("agent %s stderr pipe: %w", a.ID, err)
 	}
 
 	if err := a.cmd.Start(); err != nil {
 		a.setState(AgentError)
 		a.Error = fmt.Sprintf("start: %v", err)
-		return err
+		return fmt.Errorf("agent %s start: %w", a.ID, err)
 	}
 
 	now := time.Now()
@@ -453,17 +453,18 @@ func (a *Agent) processResultEvent(event map[string]interface{}) {
 		a.appendOutput("result", fmt.Sprintf("Agent %s%s", status, costStr))
 	}
 
-	// Merge worktree back on completion (not error)
+	// Merge worktree back on completion (not error).
+	// Run synchronously — we're already in the streamJSON goroutine, and the
+	// result event is the last meaningful output, so blocking here is fine.
+	// This avoids a race where RemoveAgent could run before the merge finishes.
 	if a.useWorktree && !isError {
-		go func() {
-			mergeResult := a.mergeWorktreeBack()
-			a.mu.Lock()
-			a.MergeResult = mergeResult
-			now := time.Now()
-			a.EndedAt = &now
-			a.State = AgentComplete
-			a.mu.Unlock()
-		}()
+		mergeResult := a.mergeWorktreeBack()
+		a.mu.Lock()
+		a.MergeResult = mergeResult
+		now := time.Now()
+		a.EndedAt = &now
+		a.State = AgentComplete
+		a.mu.Unlock()
 	} else if a.useWorktree && isError {
 		a.appendOutput("system", "Worktree preserved (agent errored) — merge manually or clean up later")
 	}
@@ -649,7 +650,10 @@ func (a *Agent) kill() error {
 		cleanupWorktree(sourceRepoPath, wtPath, wtBranch)
 	}
 
-	return err
+	if err != nil {
+		return fmt.Errorf("kill agent %s: %w", a.ID, err)
+	}
+	return nil
 }
 
 // getOutput returns all output entries, optionally from a given offset

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -28,7 +29,8 @@ type WSClient struct {
 	maxReconnectDelay    time.Duration
 	reconnectAttempts    int
 	maxReconnectAttempts int
-	stopCh               chan struct{}
+	cancel               context.CancelFunc // cancels readLoop and reconnect waits
+	ctx                  context.Context    // derived from cancel; shared by readLoop
 
 	// Event handlers - each view type registers its handler
 	handlers map[string][]WSEventHandler
@@ -57,12 +59,14 @@ type WSEvent struct {
 
 // NewWSClient creates a new WebSocket client
 func NewWSClient(url string) *WSClient {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &WSClient{
 		url:                  url,
 		reconnectDelay:       1 * time.Second,
 		maxReconnectDelay:    30 * time.Second,
 		maxReconnectAttempts: 0, // 0 = unlimited
-		stopCh:               make(chan struct{}),
+		ctx:                  ctx,
+		cancel:               cancel,
 		handlers:             make(map[string][]WSEventHandler),
 		statusSubscribers:    make([]chan WSConnectionStatus, 0),
 	}
@@ -134,7 +138,7 @@ func (c *WSClient) subscribe() {
 
 // Disconnect closes the WebSocket connection
 func (c *WSClient) Disconnect() error {
-	close(c.stopCh)
+	c.cancel() // signals readLoop and reconnect waits to stop
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -152,7 +156,7 @@ func (c *WSClient) Disconnect() error {
 func (c *WSClient) readLoop() {
 	for {
 		select {
-		case <-c.stopCh:
+		case <-c.ctx.Done():
 			return
 		default:
 		}
@@ -259,14 +263,18 @@ func (c *WSClient) handleDisconnect() {
 	// Wait and reconnect
 	timer := time.NewTimer(delay)
 	select {
-	case <-c.stopCh:
+	case <-c.ctx.Done():
 		timer.Stop()
 		return
 	case <-timer.C:
 	}
 
-	// Reset stopCh for new connection
-	c.stopCh = make(chan struct{})
+	// Create a fresh context for the new connection cycle
+	ctx, cancel := context.WithCancel(context.Background())
+	c.mu.Lock()
+	c.ctx = ctx
+	c.cancel = cancel
+	c.mu.Unlock()
 
 	if err := c.Connect(); err != nil {
 		log.Printf("[WS] Reconnect failed: %v", err)
