@@ -251,15 +251,13 @@ func (e *Engine) WaitFor(sessionID string, timeout time.Duration) (AgentState, e
 	}
 }
 
-// Shutdown kills all active agents and cleans up
+// Shutdown kills all agents and cleans up their worktrees.
 func (e *Engine) Shutdown() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	for _, agent := range e.agents {
-		if agent.IsActive() {
-			agent.kill()
-		}
+		agent.kill()
 	}
 	e.agents = make(map[string]*Agent)
 }

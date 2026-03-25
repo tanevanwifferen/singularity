@@ -152,11 +152,10 @@ func cleanupWorktree(repoPath, wtPath, branch string) {
 	pruneCmd := exec.Command("git", "-C", repoPath, "worktree", "prune")
 	pruneCmd.Run()
 
-	// Delete the temporary branch (only if it was merged or has no unique commits)
-	delCmd := exec.Command("git", "-C", repoPath, "branch", "-d", branch)
-	if delCmd.Run() != nil {
-		// -d failed (not merged) — don't force-delete, leave the branch for manual recovery
-	}
+	// Force-delete the temporary branch. Using -D (not -d) ensures cleanup even
+	// for unmerged branches (e.g. agent errored or was killed mid-task).
+	delCmd := exec.Command("git", "-C", repoPath, "branch", "-D", branch)
+	delCmd.Run()
 }
 
 // autoCommitWorktree stages and commits any uncommitted changes in the worktree.

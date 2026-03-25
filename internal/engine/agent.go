@@ -618,8 +618,17 @@ func (a *Agent) softClose() {
 func (a *Agent) kill() error {
 	a.mu.Lock()
 
+	// Capture worktree info before any early returns so cleanup always runs,
+	// even if the process never started (e.g. agent was removed during routing).
+	wtPath := a.worktreePath
+	sourceRepoPath := a.sourceRepoPath
+	wtBranch := a.worktreeBranch
+
 	if a.cmd == nil || a.cmd.Process == nil {
 		a.mu.Unlock()
+		if wtPath != "" {
+			cleanupWorktree(sourceRepoPath, wtPath, wtBranch)
+		}
 		return nil
 	}
 
@@ -637,11 +646,6 @@ func (a *Agent) kill() error {
 	a.appendOutputLocked("system", "Agent killed")
 
 	err := a.cmd.Process.Kill()
-
-	// Capture worktree info before releasing lock
-	wtPath := a.worktreePath
-	sourceRepoPath := a.sourceRepoPath
-	wtBranch := a.worktreeBranch
 
 	a.mu.Unlock()
 
