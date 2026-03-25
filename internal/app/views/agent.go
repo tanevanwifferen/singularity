@@ -965,9 +965,7 @@ func (v *AgentView) View() string {
 
 	// Approval view overlay
 	if v.approvalView != nil {
-		s.WriteString("\n")
-		s.WriteString(v.approvalView.View())
-		return s.String()
+		return v.approvalView.View()
 	}
 
 	// Agent list pane
