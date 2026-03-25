@@ -120,6 +120,8 @@ func (c *Cache) Stats() (hits, misses, size int) {
 
 // HitRate returns the cache hit rate as a percentage
 func (c *Cache) HitRate() float64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	total := c.hits + c.misses
 	if total == 0 {
 		return 0

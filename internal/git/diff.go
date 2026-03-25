@@ -34,7 +34,10 @@ func GetBranchDiff(repoPath, branchA, branchB string) (*BranchDiff, error) {
 
 	// Get name-status for accurate file statuses (A/M/D/R)
 	nameStatusCmd := exec.Command("git", "-C", repoPath, "diff", "--name-status", revRange)
-	nameStatusOut, _ := nameStatusCmd.Output()
+	nameStatusOut, err := nameStatusCmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get branch diff name-status: %w", err)
+	}
 	statusMap := parseNameStatus(string(nameStatusOut))
 
 	// Get numstat for line counts

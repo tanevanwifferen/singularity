@@ -152,7 +152,9 @@ func (m *Manager) runSession(session *Session, task string, timeoutSeconds int) 
 	case <-done:
 		// Completed
 	case <-time.After(time.Duration(timeoutSeconds) * time.Second):
-		cmd.Process.Kill()
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
 		session.mu.Lock()
 		session.State = SessionError
 		session.Error = "timeout"
