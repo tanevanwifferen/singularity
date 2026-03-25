@@ -425,6 +425,13 @@ func (f *Filter[T]) SelectedItem() (T, int) {
 	return zero, -1
 }
 
+// SelectAt moves the cursor to the given index.
+func (f *Filter[T]) SelectAt(idx int) {
+	if f.list != nil {
+		f.list.SelectAt(idx)
+	}
+}
+
 // CursorUp moves the selection up.
 func (f *Filter[T]) CursorUp() {
 	if f.list != nil {
