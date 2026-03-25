@@ -108,6 +108,16 @@ func CheckoutDetached(repoPath string) error {
 	return nil
 }
 
+// GetHEAD returns the full SHA of HEAD in repoPath.
+func GetHEAD(repoPath string) (string, error) {
+	cmd := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("rev-parse HEAD failed: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // CheckoutDetachedAt checks out a specific commit as detached HEAD in repoPath.
 func CheckoutDetachedAt(repoPath, commit string) error {
 	cmd := exec.Command("git", "-C", repoPath, "checkout", "--detach", commit)
