@@ -63,11 +63,21 @@ func (s *Server) handleAgentStart(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// requireSessionID extracts the session_id query parameter, writing a 400 error
+// and returning ("", false) if it is missing.
+func (s *Server) requireSessionID(w http.ResponseWriter, r *http.Request) (string, bool) {
+	id := r.URL.Query().Get("session_id")
+	if id == "" {
+		s.writeError(w, http.StatusBadRequest, "session_id required")
+		return "", false
+	}
+	return id, true
+}
+
 // handleAgentStatus handles GET /api/agent/status?session_id=...
 func (s *Server) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
-	sessionID := r.URL.Query().Get("session_id")
-	if sessionID == "" {
-		s.writeError(w, http.StatusBadRequest, "session_id required")
+	sessionID, ok := s.requireSessionID(w, r)
+	if !ok {
 		return
 	}
 
@@ -95,9 +105,8 @@ func (s *Server) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
 
 // handleAgentOutput handles GET /api/agent/output?session_id=...&offset=0
 func (s *Server) handleAgentOutput(w http.ResponseWriter, r *http.Request) {
-	sessionID := r.URL.Query().Get("session_id")
-	if sessionID == "" {
-		s.writeError(w, http.StatusBadRequest, "session_id required")
+	sessionID, ok := s.requireSessionID(w, r)
+	if !ok {
 		return
 	}
 

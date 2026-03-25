@@ -29,10 +29,18 @@ func (s *Server) handleProjectList(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleProjectLoad handles POST /api/project/load
-func (s *Server) handleProjectLoad(w http.ResponseWriter, r *http.Request) {
+// requireProjectLoader writes a 400 error and returns false when no project config is loaded.
+func (s *Server) requireProjectLoader(w http.ResponseWriter) bool {
 	if s.projectLoader == nil {
 		s.writeError(w, http.StatusBadRequest, "no project config loaded")
+		return false
+	}
+	return true
+}
+
+// handleProjectLoad handles POST /api/project/load
+func (s *Server) handleProjectLoad(w http.ResponseWriter, r *http.Request) {
+	if !s.requireProjectLoader(w) {
 		return
 	}
 
@@ -56,8 +64,7 @@ func (s *Server) handleProjectLoad(w http.ResponseWriter, r *http.Request) {
 
 // handleProjectStatus handles GET /api/project/status?key=<key>
 func (s *Server) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
-	if s.projectLoader == nil {
-		s.writeError(w, http.StatusBadRequest, "no project config loaded")
+	if !s.requireProjectLoader(w) {
 		return
 	}
 
@@ -81,8 +88,7 @@ func (s *Server) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
 
 // handleProjectRefresh handles POST /api/project/refresh
 func (s *Server) handleProjectRefresh(w http.ResponseWriter, r *http.Request) {
-	if s.projectLoader == nil {
-		s.writeError(w, http.StatusBadRequest, "no project config loaded")
+	if !s.requireProjectLoader(w) {
 		return
 	}
 
@@ -116,8 +122,7 @@ func (s *Server) handleProjectRefresh(w http.ResponseWriter, r *http.Request) {
 
 // handleProjectBranchCheck handles POST /api/project/branch/check
 func (s *Server) handleProjectBranchCheck(w http.ResponseWriter, r *http.Request) {
-	if s.projectLoader == nil {
-		s.writeError(w, http.StatusBadRequest, "no project config loaded")
+	if !s.requireProjectLoader(w) {
 		return
 	}
 
@@ -142,8 +147,7 @@ func (s *Server) handleProjectBranchCheck(w http.ResponseWriter, r *http.Request
 
 // handleProjectBranchCompare handles POST /api/project/branch/compare
 func (s *Server) handleProjectBranchCompare(w http.ResponseWriter, r *http.Request) {
-	if s.projectLoader == nil {
-		s.writeError(w, http.StatusBadRequest, "no project config loaded")
+	if !s.requireProjectLoader(w) {
 		return
 	}
 
@@ -169,8 +173,7 @@ func (s *Server) handleProjectBranchCompare(w http.ResponseWriter, r *http.Reque
 // handleProjectContext handles GET /api/project/context?key=<key>
 // Returns a text summary suitable for Claude Code agent context
 func (s *Server) handleProjectContext(w http.ResponseWriter, r *http.Request) {
-	if s.projectLoader == nil {
-		s.writeError(w, http.StatusBadRequest, "no project config loaded")
+	if !s.requireProjectLoader(w) {
 		return
 	}
 

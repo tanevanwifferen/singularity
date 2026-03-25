@@ -385,141 +385,78 @@ type WSProjectUpdateMsg struct {
 	Status string
 }
 
+// wsAgentIDPayload is the payload for agent lifecycle events (started, complete).
+type wsAgentIDPayload struct {
+	AgentID string `json:"agent_id"`
+}
+
+// wsAgentErrorPayload is the payload for agent error events.
+type wsAgentErrorPayload struct {
+	AgentID string `json:"agent_id"`
+	Error   string `json:"error"`
+}
+
+// wsAgentOutputPayload is the payload for agent streaming output events.
+type wsAgentOutputPayload struct {
+	AgentID   string `json:"agent_id"`
+	Output    string `json:"output"`
+	Source    string `json:"source"`
+	Timestamp string `json:"timestamp"`
+}
+
+// wsProjectPayload is the payload for project status update events.
+type wsProjectPayload struct {
+	Status string `json:"status"`
+}
+
+// registerWSHandler wires a typed WebSocket event handler onto client.
+// It unmarshals the JSON payload into T, logs any parse error, and wraps
+// the message returned by makeMsg in a tea.Cmd.
+func registerWSHandler[T any](client *WSClient, name string, makeMsg func(T) tea.Msg) {
+	client.RegisterHandler(name, func(_ string, payload json.RawMessage) tea.Cmd {
+		var data T
+		if err := json.Unmarshal(payload, &data); err != nil {
+			log.Printf("[WS] Failed to parse %s: %v", name, err)
+			return nil
+		}
+		msg := makeMsg(data)
+		return func() tea.Msg { return msg }
+	})
+}
+
 // NewWSViewUpdater creates a WebSocket client with standard view update handlers
 func NewWSViewUpdater(url string, repoPath string) *WSClient {
 	client := NewWSClient(url)
 
-	// Register handler for repo updates
-	client.RegisterHandler("repo_update", func(eventType string, payload json.RawMessage) tea.Cmd {
-		var repo git.RepoInfo
-		if err := json.Unmarshal(payload, &repo); err != nil {
-			log.Printf("[WS] Failed to parse repo_update: %v", err)
-			return nil
-		}
-		return func() tea.Msg {
-			return WSRepoUpdateMsg{Repo: &repo}
-		}
+	registerWSHandler(client, "repo_update", func(repo git.RepoInfo) tea.Msg {
+		return WSRepoUpdateMsg{Repo: &repo}
 	})
-
-	// Register handler for branch updates
-	client.RegisterHandler("branch_update", func(eventType string, payload json.RawMessage) tea.Cmd {
-		var data map[string]string
-		if err := json.Unmarshal(payload, &data); err != nil {
-			log.Printf("[WS] Failed to parse branch_update: %v", err)
-			return nil
-		}
-		branch := data["branch"]
-		return func() tea.Msg {
-			return WSBranchUpdateMsg{Branch: branch}
-		}
+	registerWSHandler(client, "branch_update", func(data map[string]string) tea.Msg {
+		return WSBranchUpdateMsg{Branch: data["branch"]}
 	})
-
-	// Register handler for pipeline updates
-	client.RegisterHandler("pipeline_update", func(eventType string, payload json.RawMessage) tea.Cmd {
-		var data map[string]string
-		if err := json.Unmarshal(payload, &data); err != nil {
-			log.Printf("[WS] Failed to parse pipeline_update: %v", err)
-			return nil
-		}
-		branch := data["branch"]
-		return func() tea.Msg {
-			return WSPipelineUpdateMsg{Branch: branch}
-		}
+	registerWSHandler(client, "pipeline_update", func(data map[string]string) tea.Msg {
+		return WSPipelineUpdateMsg{Branch: data["branch"]}
 	})
-
-	// Register handler for agent output
-	client.RegisterHandler("agent_output", func(eventType string, payload json.RawMessage) tea.Cmd {
-		var data struct {
-			AgentID   string `json:"agent_id"`
-			Output    string `json:"output"`
-			Source    string `json:"source"`
-			Timestamp string `json:"timestamp"`
-		}
-		if err := json.Unmarshal(payload, &data); err != nil {
-			log.Printf("[WS] Failed to parse agent_output: %v", err)
-			return nil
-		}
+	registerWSHandler(client, "agent_output", func(data wsAgentOutputPayload) tea.Msg {
 		ts := time.Now()
 		if data.Timestamp != "" {
 			if t, err := time.Parse(time.RFC3339, data.Timestamp); err == nil {
 				ts = t
 			}
 		}
-		return func() tea.Msg {
-			return WSAgentOutputMsg{
-				AgentID:   data.AgentID,
-				Output:    data.Output,
-				Source:    data.Source,
-				Timestamp: ts,
-			}
-		}
+		return WSAgentOutputMsg{AgentID: data.AgentID, Output: data.Output, Source: data.Source, Timestamp: ts}
 	})
-
-	// Register handler for agent started
-	client.RegisterHandler("agent_started", func(eventType string, payload json.RawMessage) tea.Cmd {
-		var data struct {
-			AgentID string `json:"agent_id"`
-		}
-		if err := json.Unmarshal(payload, &data); err != nil {
-			log.Printf("[WS] Failed to parse agent_started: %v", err)
-			return nil
-		}
-		return func() tea.Msg {
-			return WSAgentEventMsg{
-				AgentID:   data.AgentID,
-				EventType: "agent_started",
-			}
-		}
+	registerWSHandler(client, "agent_started", func(data wsAgentIDPayload) tea.Msg {
+		return WSAgentEventMsg{AgentID: data.AgentID, EventType: "agent_started"}
 	})
-
-	// Register handler for agent complete
-	client.RegisterHandler("agent_complete", func(eventType string, payload json.RawMessage) tea.Cmd {
-		var data struct {
-			AgentID string `json:"agent_id"`
-		}
-		if err := json.Unmarshal(payload, &data); err != nil {
-			log.Printf("[WS] Failed to parse agent_complete: %v", err)
-			return nil
-		}
-		return func() tea.Msg {
-			return WSAgentEventMsg{
-				AgentID:   data.AgentID,
-				EventType: "agent_complete",
-			}
-		}
+	registerWSHandler(client, "agent_complete", func(data wsAgentIDPayload) tea.Msg {
+		return WSAgentEventMsg{AgentID: data.AgentID, EventType: "agent_complete"}
 	})
-
-	// Register handler for agent error
-	client.RegisterHandler("agent_error", func(eventType string, payload json.RawMessage) tea.Cmd {
-		var data struct {
-			AgentID string `json:"agent_id"`
-			Error   string `json:"error"`
-		}
-		if err := json.Unmarshal(payload, &data); err != nil {
-			log.Printf("[WS] Failed to parse agent_error: %v", err)
-			return nil
-		}
-		return func() tea.Msg {
-			return WSAgentEventMsg{
-				AgentID:   data.AgentID,
-				EventType: "agent_error",
-				Error:     data.Error,
-			}
-		}
+	registerWSHandler(client, "agent_error", func(data wsAgentErrorPayload) tea.Msg {
+		return WSAgentEventMsg{AgentID: data.AgentID, EventType: "agent_error", Error: data.Error}
 	})
-
-	// Register handler for project updates
-	client.RegisterHandler("project_update", func(eventType string, payload json.RawMessage) tea.Cmd {
-		var data struct {
-			Status string `json:"status"`
-		}
-		if err := json.Unmarshal(payload, &data); err != nil {
-			log.Printf("[WS] Failed to parse project_update: %v", err)
-			return nil
-		}
-		return func() tea.Msg {
-			return WSProjectUpdateMsg{Status: data.Status}
-		}
+	registerWSHandler(client, "project_update", func(data wsProjectPayload) tea.Msg {
+		return WSProjectUpdateMsg{Status: data.Status}
 	})
 
 	return client

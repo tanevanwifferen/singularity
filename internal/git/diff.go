@@ -199,24 +199,28 @@ func GetUnstagedFilesDiff(repoPath string) (*UnstagedDiff, error) {
 	}, nil
 }
 
-// GetStagedFileDiff returns the actual diff content for a specific staged file
-func GetStagedFileDiff(repoPath, filePath string) (string, error) {
-	cmd := exec.Command("git", "-C", repoPath, "diff", "--cached", "--", filePath)
-	output, err := cmd.Output()
+// getFileDiff returns the diff content for filePath, either staged (--cached) or unstaged.
+func getFileDiff(repoPath, filePath string, staged bool) (string, error) {
+	args := []string{"-C", repoPath, "diff"}
+	if staged {
+		args = append(args, "--cached")
+	}
+	args = append(args, "--", filePath)
+	output, err := exec.Command("git", args...).Output()
 	if err != nil {
-		return "", fmt.Errorf("failed to get staged file diff: %w", err)
+		return "", fmt.Errorf("failed to get file diff: %w", err)
 	}
 	return string(output), nil
 }
 
+// GetStagedFileDiff returns the actual diff content for a specific staged file
+func GetStagedFileDiff(repoPath, filePath string) (string, error) {
+	return getFileDiff(repoPath, filePath, true)
+}
+
 // GetUnstagedFileDiff returns the actual diff content for a specific unstaged file
 func GetUnstagedFileDiff(repoPath, filePath string) (string, error) {
-	cmd := exec.Command("git", "-C", repoPath, "diff", "--", filePath)
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to get unstaged file diff: %w", err)
-	}
-	return string(output), nil
+	return getFileDiff(repoPath, filePath, false)
 }
 
 // parseNumstatOutput parses git diff --numstat output into FileChange slice
