@@ -42,9 +42,10 @@ type approvalExecDoneMsg struct {
 // ApprovalView presents JiraActions for review and execution.
 type ApprovalView struct {
 	viewBase
-	items  []ApprovalItem
-	cursor int
-	client *jira.Client
+	items        []ApprovalItem
+	cursor       int
+	scrollOffset int
+	client       *jira.Client
 
 	// Execution state
 	executing    bool
@@ -119,11 +120,13 @@ func (v *ApprovalView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "j", "down":
 			if v.cursor < len(v.items)-1 {
 				v.cursor++
+				v.ensureCursorVisible()
 			}
 
 		case "k", "up":
 			if v.cursor > 0 {
 				v.cursor--
+				v.ensureCursorVisible()
 			}
 
 		case " ", "tab":
@@ -187,11 +190,53 @@ func (v *ApprovalView) View() string {
 	return sb.String()
 }
 
+// availableItemLines returns the number of lines available for rendering items.
+// Overhead: title(1) + blank(1) + blank(1) + stats(1) + blank(1) + blank(1) + help(1) = 7
+func (v *ApprovalView) availableItemLines() int {
+	if v.height <= 7 {
+		return 10
+	}
+	return v.height - 7
+}
+
+// ensureCursorVisible adjusts scrollOffset so the cursor item is in view.
+func (v *ApprovalView) ensureCursorVisible() {
+	if v.cursor < v.scrollOffset {
+		v.scrollOffset = v.cursor
+		return
+	}
+	t := theme.GetTheme()
+	available := v.availableItemLines()
+	linesUsed := 0
+	for i := v.scrollOffset; i < len(v.items); i++ {
+		if linesUsed >= available {
+			// cursor is not visible yet; scroll forward
+			v.scrollOffset = v.cursor
+			return
+		}
+		if i == v.cursor {
+			return // cursor is visible
+		}
+		linesUsed++ // item line
+		if v.items[i].Expanded {
+			detail := v.renderDetail(v.items[i].Action, t)
+			linesUsed += strings.Count(detail, "\n")
+		}
+	}
+}
+
 // renderItems renders the scrollable checkbox list.
 func (v *ApprovalView) renderItems(t theme.Theme) string {
 	var sb strings.Builder
+	available := v.availableItemLines()
+	linesUsed := 0
 
-	for i, item := range v.items {
+	for i := v.scrollOffset; i < len(v.items); i++ {
+		if linesUsed >= available {
+			break
+		}
+		item := v.items[i]
+
 		cursor := "  "
 		if i == v.cursor {
 			cursor = t.DashboardAccentStyle.Render("> ")
@@ -221,15 +266,26 @@ func (v *ApprovalView) renderItems(t theme.Theme) string {
 			sb.WriteString(t.MutedTextStyle.Render(item.Action.Reason))
 		}
 		sb.WriteString("\n")
+		linesUsed++
 
 		if item.Expanded {
-			sb.WriteString(v.renderDetail(item.Action, t))
+			detail := v.renderDetail(item.Action, t)
+			sb.WriteString(detail)
+			linesUsed += strings.Count(detail, "\n")
 		}
 	}
 
 	count := v.selectedCount()
 	sb.WriteString("\n")
 	sb.WriteString(t.StatsStyle.Render(fmt.Sprintf("%d/%d selected", count, len(v.items))))
+	if len(v.items) > available || v.scrollOffset > 0 {
+		end := v.scrollOffset + available
+		if end > len(v.items) {
+			end = len(v.items)
+		}
+		sb.WriteString("  ")
+		sb.WriteString(t.MutedTextStyle.Render(fmt.Sprintf("[%d-%d of %d]", v.scrollOffset+1, end, len(v.items))))
+	}
 	sb.WriteString("\n")
 
 	return sb.String()
@@ -484,12 +540,6 @@ func (v *ApprovalView) actionIcon(typ string) string {
 	default:
 		return "?"
 	}
-}
-
-// SetSize updates the view dimensions.
-func (v *ApprovalView) SetSize(width, height int) {
-	v.width = width
-	v.height = height
 }
 
 // CapturesInput always returns true since ApprovalView is modal-like.
