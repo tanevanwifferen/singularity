@@ -15,6 +15,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -83,6 +84,10 @@ type AgentView struct {
 	// Message input state (send to running agent stdin)
 	showMessageInput bool
 	messageInput     string
+
+	// Markdown renderer (cached, recreated on width change)
+	mdRenderer      *glamour.TermRenderer
+	mdRendererWidth int
 
 	// Refresh ticker
 	refreshInterval time.Duration
@@ -357,6 +362,23 @@ func (v *AgentView) refreshSelectedAgentOutput() {
 	v.rebuildOutputViewport()
 }
 
+// markdownRenderer returns a cached glamour renderer for the given width,
+// recreating it if the width has changed.
+func (v *AgentView) markdownRenderer(width int) *glamour.TermRenderer {
+	if v.mdRenderer == nil || v.mdRendererWidth != width {
+		r, err := glamour.NewTermRenderer(
+			glamour.WithAutoStyle(),
+			glamour.WithWordWrap(width),
+		)
+		if err != nil {
+			return nil
+		}
+		v.mdRenderer = r
+		v.mdRendererWidth = width
+	}
+	return v.mdRenderer
+}
+
 // rebuildOutputViewport rebuilds the viewport content from output entries.
 func (v *AgentView) rebuildOutputViewport() {
 	th := theme.GetTheme()
@@ -366,6 +388,13 @@ func (v *AgentView) rebuildOutputViewport() {
 	for _, entry := range v.outputEntries {
 		switch entry.Source {
 		case "text":
+			if r := v.markdownRenderer(w); r != nil {
+				if rendered, err := r.Render(entry.Content); err == nil {
+					rendered = strings.TrimRight(rendered, "\n")
+					lines = append(lines, strings.Split(rendered, "\n")...)
+					break
+				}
+			}
 			for _, raw := range strings.Split(entry.Content, "\n") {
 				lines = append(lines, wrapLine(raw, w, "  ")...)
 			}
