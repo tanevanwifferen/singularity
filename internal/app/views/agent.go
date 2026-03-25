@@ -444,6 +444,7 @@ func (v *AgentView) handleNewAgentInput(msg tea.KeyMsg) tea.Cmd {
 		task := v.newAgentTask
 		v.showNewAgent = false
 		v.newAgentTask = ""
+		v.recalcLayout()
 		if task != "" && v.engine != nil {
 			eng := v.engine
 			repoPath := v.repoPath
@@ -460,6 +461,7 @@ func (v *AgentView) handleNewAgentInput(msg tea.KeyMsg) tea.Cmd {
 	case "esc":
 		v.showNewAgent = false
 		v.newAgentTask = ""
+		v.recalcLayout()
 	case "ctrl+w":
 		v.newAgentTask = components.DeleteWordEnd(v.newAgentTask)
 	default:
@@ -552,8 +554,11 @@ func (v *AgentView) handleOutputPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab":
 		v.focus = focusList
 		return v, nil
-	case "esc", "q":
+	case "q":
 		v.deselectAgent()
+		return v, nil
+	case "esc":
+		v.focus = focusList
 		return v, nil
 	case "j", "down":
 		v.outputAutoScroll = false
@@ -627,6 +632,7 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "n":
 		v.showNewAgent = true
 		v.newAgentTask = ""
+		v.recalcLayout()
 		return v, nil
 
 	case "J":
@@ -669,11 +675,13 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return v, nil
 
-	case "d", "esc":
-		if key == "esc" && v.filter.IsActive() {
+	case "esc":
+		if v.filter.IsActive() {
 			v.filter.Update(msg)
-			return v, nil
 		}
+		return v, nil
+
+	case "d":
 		if v.selectedAgent != nil {
 			v.deselectAgent()
 			return v, nil
