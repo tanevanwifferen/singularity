@@ -47,59 +47,9 @@ func GetBranchDiff(repoPath, branchA, branchB string) (*BranchDiff, error) {
 		return nil, fmt.Errorf("failed to get diff stats: %w", err)
 	}
 
-	var files []FileChange
-	totalAdditions := 0
-	totalDeletions := 0
-
-	scanner := bufio.NewScanner(strings.NewReader(string(numstatOut)))
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
-
-		parts := strings.Split(line, "\t")
-		if len(parts) < 3 {
-			continue
-		}
-
-		file := FileChange{}
-		path := parts[2]
-
-		if parts[0] == "-" && parts[1] == "-" {
-			// Binary file
-			file.Status = "M"
-			file.NewPath = path
-			if s, ok := statusMap[path]; ok {
-				file.Status = s
-			}
-			files = append(files, file)
-			continue
-		}
-
-		if parts[0] != "-" {
-			if n, err := strconv.Atoi(parts[0]); err == nil {
-				file.Additions = n
-				totalAdditions += n
-			}
-		}
-		if parts[1] != "-" {
-			if n, err := strconv.Atoi(parts[1]); err == nil {
-				file.Deletions = n
-				totalDeletions += n
-			}
-		}
-
-		file.NewPath = path
-		file.Status = "M"
-		if s, ok := statusMap[path]; ok {
-			file.Status = s
-		}
-		files = append(files, file)
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("failed to read diff output: %w", err)
+	files, totalAdditions, totalDeletions, err := parseNumstatLines(string(numstatOut), statusMap)
+	if err != nil {
+		return nil, err
 	}
 
 	return &BranchDiff{
@@ -223,69 +173,72 @@ func GetUnstagedFileDiff(repoPath, filePath string) (string, error) {
 	return getFileDiff(repoPath, filePath, false)
 }
 
-// parseNumstatOutput parses git diff --numstat output into FileChange slice
-func parseNumstatOutput(output string) (*StagedDiff, error) {
-	var files []FileChange
-	totalAdditions := 0
-	totalDeletions := 0
-
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+// parseNumstatLines parses git numstat output (tab-separated additions, deletions, path)
+// into a slice of FileChange with accumulated totals. An optional statusMap can provide
+// per-file status codes (A/M/D/R); files not found in the map default to "M".
+func parseNumstatLines(output string, statusMap map[string]string) (files []FileChange, totalAdds, totalDels int, err error) {
+	scanner := bufio.NewScanner(strings.NewReader(output))
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
 			continue
 		}
-
-		// Parse numstat format: "\t\t" for binary files, "additions\tdeletions\tpath" otherwise
 		parts := strings.Split(line, "\t")
 		if len(parts) < 3 {
 			continue
 		}
 
-		file := FileChange{}
+		file := FileChange{NewPath: parts[2]}
 
-		// Handle binary files (shown as -\t-\tfilename)
 		if parts[0] == "-" && parts[1] == "-" {
-			file.Status = "M" // Binary modified
-			file.NewPath = parts[2]
+			// Binary file
+			file.Status = "M"
+			if statusMap != nil {
+				if s, ok := statusMap[parts[2]]; ok {
+					file.Status = s
+				}
+			}
 			files = append(files, file)
 			continue
 		}
 
-		// Parse additions
 		if parts[0] != "-" {
-			additions, err := strconv.Atoi(parts[0])
-			if err != nil {
-				continue
+			if n, err := strconv.Atoi(parts[0]); err == nil {
+				file.Additions = n
+				totalAdds += n
 			}
-			file.Additions = additions
-			totalAdditions += additions
 		}
-
-		// Parse deletions
 		if parts[1] != "-" {
-			deletions, err := strconv.Atoi(parts[1])
-			if err != nil {
-				continue
+			if n, err := strconv.Atoi(parts[1]); err == nil {
+				file.Deletions = n
+				totalDels += n
 			}
-			file.Deletions = deletions
-			totalDeletions += deletions
 		}
 
-		file.NewPath = parts[2]
-		file.Status = "M" // Default to modified
-
+		file.Status = "M"
+		if statusMap != nil {
+			if s, ok := statusMap[parts[2]]; ok {
+				file.Status = s
+			}
+		}
 		files = append(files, file)
 	}
-
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("failed to read diff output: %w", err)
+		return nil, 0, 0, fmt.Errorf("failed to read numstat output: %w", err)
 	}
+	return files, totalAdds, totalDels, nil
+}
 
+// parseNumstatOutput parses git diff --numstat output into a StagedDiff.
+func parseNumstatOutput(output string) (*StagedDiff, error) {
+	files, totalAdds, totalDels, err := parseNumstatLines(output, nil)
+	if err != nil {
+		return nil, err
+	}
 	return &StagedDiff{
 		FilesChanged:   len(files),
-		TotalAdditions: totalAdditions,
-		TotalDeletions: totalDeletions,
+		TotalAdditions: totalAdds,
+		TotalDeletions: totalDels,
 		Files:          files,
 	}, nil
 }
@@ -602,46 +555,19 @@ func GetCommitFiles(repoPath, hash string) ([]FileChange, error) {
 		return files, nil
 	}
 
+	// Build a normalized status map for parseNumstatLines
+	normalizedStatusMap := make(map[string]string, len(statusMap))
+	for path, status := range statusMap {
+		normalizedStatusMap[path] = normalizeStatus(status)
+	}
+
 	// Parse numstat and merge with status info
-	var files []FileChange
-	numstatScanner := bufio.NewScanner(strings.NewReader(string(numstatOutput)))
-	seenPaths := make(map[string]bool)
-	for numstatScanner.Scan() {
-		line := numstatScanner.Text()
-		if line == "" {
-			continue
-		}
-		parts := strings.Split(line, "\t")
-		if len(parts) < 3 {
-			continue
-		}
+	files, _, _, _ := parseNumstatLines(string(numstatOutput), normalizedStatusMap)
 
-		fc := FileChange{
-			NewPath: parts[2],
-		}
-
-		// Parse additions
-		if parts[0] != "-" {
-			if n, err := strconv.Atoi(parts[0]); err == nil {
-				fc.Additions = n
-			}
-		}
-		// Parse deletions
-		if parts[1] != "-" {
-			if n, err := strconv.Atoi(parts[1]); err == nil {
-				fc.Deletions = n
-			}
-		}
-
-		// Look up status
-		if status, ok := statusMap[fc.NewPath]; ok {
-			fc.Status = normalizeStatus(status)
-		} else {
-			fc.Status = "M"
-		}
-
-		files = append(files, fc)
-		seenPaths[fc.NewPath] = true
+	// Track which paths appeared in numstat output
+	seenPaths := make(map[string]bool, len(files))
+	for _, f := range files {
+		seenPaths[f.NewPath] = true
 	}
 
 	// Add any files from status that were not in numstat (e.g. renames)
