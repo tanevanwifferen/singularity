@@ -814,17 +814,22 @@ func (v *WorkflowsView) handleDetachWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 		}
 		var results []string
 		for _, wr := range wf.Repos {
-			if !wr.WorktreeCreated || wr.WorktreePath == "" {
+			if !wr.WorktreeCreated || wr.WorktreePath == "" || wr.OriginalPath == "" {
 				continue
 			}
-			if err := git.CheckoutDetached(wr.WorktreePath); err != nil {
+			sha, err := git.GetHEAD(wr.WorktreePath)
+			if err != nil {
+				results = append(results, fmt.Sprintf("✗ %s: %v", wr.RepoName, err))
+				continue
+			}
+			if err := git.CheckoutDetachedAt(wr.OriginalPath, sha); err != nil {
 				results = append(results, fmt.Sprintf("✗ %s: %v", wr.RepoName, err))
 			} else {
-				results = append(results, fmt.Sprintf("✓ %s: detached", wr.RepoName))
+				results = append(results, fmt.Sprintf("✓ %s: main→%s", wr.RepoName, sha[:7]))
 			}
 		}
 		if len(results) == 0 {
-			v.detachWorkflowResult = "⊘ No active worktrees to detach"
+			v.detachWorkflowResult = "⊘ No active worktrees to sync"
 		} else {
 			v.detachWorkflowResult = strings.Join(results, "  ")
 		}
@@ -1259,11 +1264,12 @@ func (v *WorkflowsView) renderModals() string {
 			lines := []string{
 				"",
 				fmt.Sprintf("  Branch: %s", th.InfoStyle.Render(wf.BranchName)),
-				fmt.Sprintf("  Checkout %d worktree(s) as detached HEAD?", len(wf.Repos)),
+				fmt.Sprintf("  Checkout main dir of %d repo(s) as detached HEAD", len(wf.Repos)),
+				"  at each worktree's current HEAD commit?",
 				"",
 				"  y: Confirm  n/Esc: Cancel",
 			}
-			s.WriteString(renderModal("Detach Workflow Worktrees", lines, modalWidth(v.width)))
+			s.WriteString(renderModal("Sync Main Dir to Workflow", lines, modalWidth(v.width)))
 			s.WriteString("\n")
 		}
 	}
@@ -1576,7 +1582,7 @@ func (v *WorkflowsView) KeyBindings() []components.KeyBinding {
 		{Key: "p", Description: "Push all repos in selected workflow"},
 		{Key: "M", Description: "Create MRs/PRs for all pushed repos"},
 		{Key: "D", Description: "Cleanup selected workflow (remove worktrees)"},
-		{Key: "H", Description: "Detach HEAD in all worktrees of selected workflow"},
+		{Key: "H", Description: "Sync main dir repos to worktree HEADs (detached)"},
 		{Key: "I", Description: "Import workflows from existing worktrees"},
 		{Key: "↑/k", Description: "Select previous workflow"},
 		{Key: "↓/j", Description: "Select next workflow"},
