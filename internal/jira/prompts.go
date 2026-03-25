@@ -268,6 +268,99 @@ func buildRefineProposalWithContextPrompt(issue *Issue, existingActions []JiraAc
 	return b.String()
 }
 
+// ReviewTickets launches an agent that explores the codebase and produces a
+// big-picture review of multiple Jira tickets. The agent writes proposed actions
+// to the specified actionsFile (or ".jira-actions.json" if empty).
+func ReviewTickets(eng *engine.Engine, issues []Issue, repoPath string, instruction string, actionsFile string) (string, error) {
+	if actionsFile == "" {
+		actionsFile = ".jira-actions.json"
+	}
+	prompt := buildReviewPrompt(issues, repoPath, instruction, actionsFile)
+	return eng.StartAgent(repoPath, prompt, engine.AgentOptions{
+		Model:        "sonnet",
+		MaxTurns:     20,
+		AllowedTools: []string{"Read", "Grep", "Glob", "Bash"},
+		Summary:      fmt.Sprintf("Review: %d tickets", len(issues)),
+	})
+}
+
+// buildReviewPrompt constructs the system prompt for the multi-ticket review agent.
+func buildReviewPrompt(issues []Issue, repoPath string, instruction string, actionsFile string) string {
+	var b strings.Builder
+
+	b.WriteString("You are reviewing multiple Jira tickets together to provide a big-picture analysis.\n\n")
+
+	b.WriteString("## Tickets\n\n")
+	for i, issue := range issues {
+		fmt.Fprintf(&b, "### Ticket %d\n\n", i+1)
+		fmt.Fprintf(&b, "Key:         %s\n", issue.Key)
+		fmt.Fprintf(&b, "Summary:     %s\n", issue.Summary)
+		fmt.Fprintf(&b, "Type:        %s\n", issue.Type)
+		fmt.Fprintf(&b, "Priority:    %s\n", issue.Priority)
+		fmt.Fprintf(&b, "Status:      %s\n", issue.Status)
+		if len(issue.Labels) > 0 {
+			fmt.Fprintf(&b, "Labels:      %s\n", strings.Join(issue.Labels, ", "))
+		}
+		b.WriteString("\n#### Description\n\n")
+		if issue.Description != "" {
+			b.WriteString(issue.Description)
+		} else {
+			b.WriteString("(no description provided)")
+		}
+		b.WriteString("\n\n")
+	}
+
+	fmt.Fprintf(&b, "## Repository\n\nPath: %s\n\n", repoPath)
+
+	if instruction != "" {
+		b.WriteString("## Custom Instructions\n\n")
+		fmt.Fprintf(&b, "The user wants you to pay special attention to the following:\n\n> %s\n\n", instruction)
+		b.WriteString("Prioritize this when analyzing the tickets and producing your review.\n\n")
+	}
+
+	b.WriteString("## Your Task\n\n")
+	b.WriteString("Explore the codebase thoroughly and produce a big-picture review covering:\n\n")
+	b.WriteString("1. **Relationships**: How the tickets relate to each other — overlaps, conflicts, and dependencies.\n")
+	b.WriteString("2. **Implementation order**: Suggested order to implement these tickets.\n")
+	b.WriteString("3. **Shared code areas**: Files and modules that multiple tickets touch.\n")
+	b.WriteString("4. **Risks and gaps**: Contradictions between tickets, missing requirements, or potential issues.\n")
+	b.WriteString("5. **Scope recommendations**: Whether any tickets should be merged, split, or re-scoped.\n\n")
+	b.WriteString("Read relevant files, grep for types, functions, and patterns mentioned in the tickets.\n")
+	b.WriteString("Ground your analysis in the actual codebase.\n\n")
+
+	// Derive project key from first issue
+	projectKey := ""
+	if len(issues) > 0 {
+		projectKey = issues[0].Key
+		if idx := strings.Index(issues[0].Key, "-"); idx > 0 {
+			projectKey = issues[0].Key[:idx]
+		}
+	}
+
+	b.WriteString("## Output\n\n")
+	fmt.Fprintf(&b, "Write your proposed actions to `%s` in the current directory.\n", actionsFile)
+	b.WriteString("Use the Bash tool:\n\n")
+	fmt.Fprintf(&b, "```\ncat > %s << 'ACTIONS_EOF'\n[\n  ...\n]\nACTIONS_EOF\n```\n\n", actionsFile)
+	b.WriteString("The file must be a JSON array of action objects. Supported types:\n\n")
+
+	b.WriteString("**Add a comment with review findings:**\n")
+	b.WriteString("```json\n{\"type\": \"comment\", \"issue_key\": \"ISSUE-KEY\", \"body\": \"review findings...\", \"reason\": \"why\"}\n```\n\n")
+
+	b.WriteString("**Update a ticket description for clarity:**\n")
+	b.WriteString("```json\n{\"type\": \"update_field\", \"issue_key\": \"ISSUE-KEY\", \"fields\": {\"description\": \"improved description...\"}, \"reason\": \"why\"}\n```\n\n")
+
+	if projectKey != "" {
+		b.WriteString("**Create new tickets if needed:**\n")
+		fmt.Fprintf(&b, "```json\n{\"type\": \"create_issue\", \"project\": \"%s\", \"issue_type\": \"Task\", \"summary\": \"...\", \"description\": \"...\", \"priority\": \"Medium\", \"reason\": \"why\", \"order\": 1, \"depends_on_order\": []}\n```\n\n", projectKey)
+	}
+
+	b.WriteString("At minimum, add a `comment` action on each ticket with your review findings.\n")
+	b.WriteString("Optionally add `update_field` actions if descriptions need clarification.\n")
+	b.WriteString("Do not leave the file empty.\n")
+
+	return b.String()
+}
+
 // summarize returns a short label for the agent summary line.
 func summarize(issue *Issue, rawText string) string {
 	if issue != nil {
