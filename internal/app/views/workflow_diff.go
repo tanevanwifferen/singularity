@@ -57,6 +57,7 @@ type hunkStats struct {
 
 // WorkflowDiffView shows all git changes for a workflow, grouped by repo.
 type WorkflowDiffView struct {
+	diffNavHelper
 	workflow *project.FeatureWorkflow
 	width    int
 	height   int
@@ -68,15 +69,8 @@ type WorkflowDiffView struct {
 	repoDiffs map[string]*repoDiffResult
 
 	// Flattened navigation list
-	items       []diffItem
-	selectedIdx int
-
-	// File diff content (shown automatically when navigating)
-	showDiff         bool
-	currentDiff      string
-	parsedDiffLines  []DiffLine
-	diffScrollOffset int
-	diffHunkStats    hunkStats
+	items         []diffItem
+	diffHunkStats hunkStats
 }
 
 // NewWorkflowDiffView creates a new workflow diff view.
@@ -313,19 +307,8 @@ func (v *WorkflowDiffView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // moveCursor moves the selection by delta and auto-loads the diff for the new file.
 func (v *WorkflowDiffView) moveCursor(delta int) {
-	if len(v.items) == 0 {
-		return
-	}
-
-	newIdx := v.selectedIdx + delta
-	// Allow landing on repo headers for visual context
-	if newIdx < 0 {
-		newIdx = 0
-	}
-	if newIdx >= len(v.items) {
-		newIdx = len(v.items) - 1
-	}
-	if newIdx == v.selectedIdx {
+	newIdx := clampIndex(v.selectedIdx+delta, len(v.items))
+	if newIdx < 0 || newIdx == v.selectedIdx {
 		return
 	}
 	v.selectedIdx = newIdx
@@ -339,12 +322,9 @@ func (v *WorkflowDiffView) moveCursor(delta int) {
 	}
 }
 
-// closeDiff resets diff panel state.
+// closeDiff resets diff panel state, including workflow-specific hunk stats.
 func (v *WorkflowDiffView) closeDiff() {
-	v.showDiff = false
-	v.currentDiff = ""
-	v.parsedDiffLines = nil
-	v.diffScrollOffset = 0
+	v.diffNavHelper.closeDiff()
 	v.diffHunkStats = hunkStats{}
 }
 

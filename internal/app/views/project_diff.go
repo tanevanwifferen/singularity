@@ -44,6 +44,7 @@ type projectDiffItem struct {
 
 // ProjectDiffView shows uncommitted changes across all repos in the project.
 type ProjectDiffView struct {
+	diffNavHelper
 	proj    *project.Project
 	width   int
 	height  int
@@ -53,13 +54,7 @@ type ProjectDiffView struct {
 	repoOrder []string
 	repoDiffs map[string]*repoWorkdirResult
 
-	items       []projectDiffItem
-	selectedIdx int
-
-	showDiff         bool
-	currentDiff      string
-	parsedDiffLines  []DiffLine
-	diffScrollOffset int
+	items []projectDiffItem
 }
 
 // NewProjectDiffView creates a new project diff view.
@@ -241,17 +236,8 @@ func (v *ProjectDiffView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (v *ProjectDiffView) moveCursor(delta int) {
-	if len(v.items) == 0 {
-		return
-	}
-	newIdx := v.selectedIdx + delta
-	if newIdx < 0 {
-		newIdx = 0
-	}
-	if newIdx >= len(v.items) {
-		newIdx = len(v.items) - 1
-	}
-	if newIdx == v.selectedIdx {
+	newIdx := clampIndex(v.selectedIdx+delta, len(v.items))
+	if newIdx < 0 || newIdx == v.selectedIdx {
 		return
 	}
 	v.selectedIdx = newIdx
@@ -259,9 +245,7 @@ func (v *ProjectDiffView) moveCursor(delta int) {
 	if !v.items[v.selectedIdx].IsRepoHeader {
 		v.loadSelectedFileDiff()
 	} else {
-		v.showDiff = false
-		v.currentDiff = ""
-		v.parsedDiffLines = nil
+		v.closeDiff()
 	}
 }
 
