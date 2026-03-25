@@ -179,13 +179,10 @@ func (v *AgentView) SetJiraConfig(cfg config.JiraConfig) {
 // Init initializes the agent view.
 func (v *AgentView) Init() tea.Cmd {
 	v.loading = true
-	return tea.Batch(
-		func() tea.Msg {
-			v.loadAgents()
-			return RefreshDoneMsg{}
-		},
-		v.streamTickCmd(),
-	)
+	return func() tea.Msg {
+		v.loadAgents()
+		return RefreshDoneMsg{}
+	}
 }
 
 // streamTickCmd returns a tea.Cmd that sends a StreamTickMsg after the refresh interval.
@@ -193,6 +190,19 @@ func (v *AgentView) streamTickCmd() tea.Cmd {
 	return tea.Tick(v.refreshInterval, func(t time.Time) tea.Msg {
 		return StreamTickMsg{}
 	})
+}
+
+// AgentTickCmd loads the latest agents and returns the next tick command.
+// Called by the app-level update loop so the tick survives view switches.
+func (v *AgentView) AgentTickCmd() tea.Cmd {
+	v.loadAgents()
+	return v.streamTickCmd()
+}
+
+// AgentTickStart returns the initial tick command without loading agents.
+// Used by the app-level Init to seed the tick chain.
+func (v *AgentView) AgentTickStart() tea.Cmd {
+	return v.streamTickCmd()
 }
 
 // loadAgents loads the current list of agents from the engine.
@@ -511,8 +521,9 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case StreamTickMsg:
-		v.loadAgents()
-		return v, v.streamTickCmd()
+		// loadAgents and rescheduling handled by app-level AgentTickCmd.
+		// This case is kept so stale in-flight ticks (started before the
+		// app-level loop took over) don't produce spurious no-ops.
 	}
 
 	return v, nil
