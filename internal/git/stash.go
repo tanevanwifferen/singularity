@@ -214,12 +214,13 @@ func GetWorktrees(repoPath string) ([]Worktree, error) {
 
 // CreateWorktree creates a new worktree.
 // When createBranch is true and startPoint is non-empty, the new branch is based on startPoint
-// (e.g. "origin/main") instead of HEAD.
+// (e.g. "origin/main") instead of HEAD. --no-track prevents git from inheriting the remote
+// tracking branch from the start point, so pushes go to origin/<new-branch> not origin/main.
 func CreateWorktree(repoPath, worktreePath, branch string, createBranch bool, startPoint string) error {
 	args := []string{"-C", repoPath, "worktree", "add"}
 
 	if createBranch {
-		args = append(args, "-b", branch, worktreePath)
+		args = append(args, "--no-track", "-b", branch, worktreePath)
 		if startPoint != "" {
 			args = append(args, startPoint)
 		}
