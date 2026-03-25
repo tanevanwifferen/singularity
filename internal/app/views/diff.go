@@ -490,23 +490,7 @@ func (v *DiffView) renderFileList(width int) string {
 	}
 
 	// Calculate visible range
-	visibleLines := v.height - 10 // Account for header, footer, summary
-	if visibleLines < 1 {
-		visibleLines = 1
-	}
-
-	startIdx := v.selectedIdx - visibleLines/2
-	if startIdx < 0 {
-		startIdx = 0
-	}
-	endIdx := startIdx + visibleLines
-	if endIdx > len(v.files) {
-		endIdx = len(v.files)
-		startIdx = endIdx - visibleLines
-		if startIdx < 0 {
-			startIdx = 0
-		}
-	}
+	startIdx, endIdx := calcViewport(v.height, 10, v.selectedIdx, len(v.files))
 
 	// Render files
 	for i := startIdx; i < endIdx && i < len(v.files); i++ {
@@ -548,7 +532,7 @@ func (v *DiffView) renderFileList(width int) string {
 	}
 
 	// Show scroll indicator if needed
-	if len(v.files) > visibleLines {
+	if endIdx-startIdx < len(v.files) {
 		scrollInfo := fmt.Sprintf(" %d-%d of %d ", startIdx+1, endIdx, len(v.files))
 		s.WriteString(th.Help.Render(scrollInfo))
 	}

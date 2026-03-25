@@ -353,23 +353,7 @@ func (v *ProjectDiffView) renderItemList(width int) string {
 	}
 	s.WriteString("\n")
 
-	visibleLines := v.height - 10
-	if visibleLines < 5 {
-		visibleLines = 5
-	}
-
-	startIdx := v.selectedIdx - visibleLines/2
-	if startIdx < 0 {
-		startIdx = 0
-	}
-	endIdx := startIdx + visibleLines
-	if endIdx > len(v.items) {
-		endIdx = len(v.items)
-		startIdx = endIdx - visibleLines
-		if startIdx < 0 {
-			startIdx = 0
-		}
-	}
+	startIdx, endIdx := calcViewport(v.height, 10, v.selectedIdx, len(v.items))
 
 	for i := startIdx; i < endIdx && i < len(v.items); i++ {
 		item := v.items[i]
@@ -382,7 +366,7 @@ func (v *ProjectDiffView) renderItemList(width int) string {
 		s.WriteString("\n")
 	}
 
-	if len(v.items) > visibleLines {
+	if endIdx-startIdx < len(v.items) {
 		s.WriteString(th.Help.Render(fmt.Sprintf(" %d-%d of %d ", startIdx+1, endIdx, len(v.items))))
 	}
 

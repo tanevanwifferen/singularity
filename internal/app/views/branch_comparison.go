@@ -296,22 +296,7 @@ func (v *BranchComparisonView) renderLeftPanel(width int) string {
 	}
 
 	// Calculate visible range
-	visibleLines := v.height - 6 // Account for header, footer
-	startIdx := 0
-	endIdx := len(v.branches)
-	if endIdx > visibleLines {
-		// Scroll selection into view
-		if v.selectedIdx >= endIdx {
-			startIdx = endIdx - visibleLines
-		} else if v.selectedIdx < startIdx {
-			startIdx = v.selectedIdx
-		}
-		endIdx = startIdx + visibleLines
-		if endIdx > len(v.branches) {
-			endIdx = len(v.branches)
-			startIdx = endIdx - visibleLines
-		}
-	}
+	startIdx, endIdx := calcViewport(v.height, 6, v.selectedIdx, len(v.branches))
 
 	// Render branches
 	for i := startIdx; i < endIdx && i < len(v.branches); i++ {
@@ -341,7 +326,7 @@ func (v *BranchComparisonView) renderLeftPanel(width int) string {
 	}
 
 	// Show count if not all visible
-	if len(v.branches) > visibleLines {
+	if endIdx-startIdx < len(v.branches) {
 		s.WriteString(th.Help.Render(fmt.Sprintf(" Showing %d of %d", endIdx-startIdx, len(v.branches))))
 	}
 

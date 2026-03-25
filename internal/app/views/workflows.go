@@ -665,7 +665,7 @@ func (v *WorkflowsView) handleWorkflowStartInput(msg tea.KeyMsg) tea.Cmd {
 			v.workflowBranchName = v.workflowBranchName[:len(v.workflowBranchName)-1]
 		}
 	case "ctrl+w":
-		v.workflowBranchName = DeleteWordEnd(v.workflowBranchName)
+		v.workflowBranchName = components.DeleteWordEnd(v.workflowBranchName)
 	default:
 		if msg.Paste && len(msg.Runes) > 0 {
 			v.workflowBranchName += string(msg.Runes)
@@ -699,7 +699,7 @@ func (v *WorkflowsView) handleAgentPromptInput(msg tea.KeyMsg) tea.Cmd {
 			v.agentPromptText = v.agentPromptText[:len(v.agentPromptText)-1]
 		}
 	case "ctrl+w":
-		v.agentPromptText = DeleteWordEnd(v.agentPromptText)
+		v.agentPromptText = components.DeleteWordEnd(v.agentPromptText)
 	default:
 		if msg.Paste && len(msg.Runes) > 0 {
 			v.agentPromptText += string(msg.Runes)
@@ -1065,32 +1065,54 @@ func (v *WorkflowsView) View() string {
 		return s.String()
 	}
 
-	// Jira workflow confirm modal
+	// Jira workflow confirm modal — returns early (full overlay)
 	if v.jiraConfirmIssue != nil {
-		issue := v.jiraConfirmIssue
-		branch := issueToBranchName(issue)
-		input := v.jiraExtraMsg + "█"
-		lines := []string{
-			"",
-			fmt.Sprintf("  Ticket: %s — %s", th.DashboardAccentStyle.Render(issue.Key), issue.Summary),
-			fmt.Sprintf("  Branch: %s", th.MutedTextStyle.Render(branch)),
-			"",
-			"  Custom instructions (optional):",
-			"  " + input,
-			"",
-		}
-		if wf := v.currentWorkflow(); wf != nil {
-			lines = append(lines,
-				fmt.Sprintf("  e: Use selected workflow (%s)", th.MutedTextStyle.Render(wf.BranchName)),
-			)
-		}
-		lines = append(lines, "  Enter: New worktrees  Esc: Cancel")
-		s.WriteString(renderModal("Start Workflow from Jira", lines, modalWidth(v.width)))
-		s.WriteString("\n")
+		s.WriteString(v.renderJiraConfirmModal())
 		return s.String()
 	}
 
-	// Workflow start modal
+	s.WriteString(v.renderModals())
+	s.WriteString(v.renderFlashMessages())
+	s.WriteString(v.renderWorkflowList())
+
+	// Footer
+	s.WriteString("\n")
+	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
+	s.WriteString("\n")
+	s.WriteString(v.renderFooterHelp())
+
+	return s.String()
+}
+
+// renderJiraConfirmModal renders the Jira ticket confirmation overlay.
+func (v *WorkflowsView) renderJiraConfirmModal() string {
+	th := theme.GetTheme()
+	issue := v.jiraConfirmIssue
+	branch := issueToBranchName(issue)
+	input := v.jiraExtraMsg + "█"
+	lines := []string{
+		"",
+		fmt.Sprintf("  Ticket: %s — %s", th.DashboardAccentStyle.Render(issue.Key), issue.Summary),
+		fmt.Sprintf("  Branch: %s", th.MutedTextStyle.Render(branch)),
+		"",
+		"  Custom instructions (optional):",
+		"  " + input,
+		"",
+	}
+	if wf := v.currentWorkflow(); wf != nil {
+		lines = append(lines,
+			fmt.Sprintf("  e: Use selected workflow (%s)", th.MutedTextStyle.Render(wf.BranchName)),
+		)
+	}
+	lines = append(lines, "  Enter: New worktrees  Esc: Cancel")
+	return renderModal("Start Workflow from Jira", lines, modalWidth(v.width)) + "\n"
+}
+
+// renderModals renders all modal overlays for the workflows view.
+func (v *WorkflowsView) renderModals() string {
+	th := theme.GetTheme()
+	var s strings.Builder
+
 	if v.showWorkflowStart {
 		lines := []string{
 			"",
@@ -1105,7 +1127,6 @@ func (v *WorkflowsView) View() string {
 		s.WriteString("\n")
 	}
 
-	// Agent prompt modal
 	if v.showAgentPrompt {
 		wf := v.currentWorkflow()
 		wfName := ""
@@ -1129,10 +1150,8 @@ func (v *WorkflowsView) View() string {
 		s.WriteString("\n")
 	}
 
-	// Workflow cleanup confirmation
 	if v.showWorkflowCleanup {
-		wf := v.currentWorkflow()
-		if wf != nil {
+		if wf := v.currentWorkflow(); wf != nil {
 			lines := []string{
 				"",
 				fmt.Sprintf("  Branch: %s", th.InfoStyle.Render(wf.BranchName)),
@@ -1146,10 +1165,8 @@ func (v *WorkflowsView) View() string {
 		}
 	}
 
-	// Batch push confirmation
 	if v.showPushConfirm {
-		wf := v.currentWorkflow()
-		if wf != nil {
+		if wf := v.currentWorkflow(); wf != nil {
 			lines := []string{
 				"",
 				fmt.Sprintf("  Branch: %s", th.InfoStyle.Render(wf.BranchName)),
@@ -1164,10 +1181,8 @@ func (v *WorkflowsView) View() string {
 		}
 	}
 
-	// Batch MR creation confirmation
 	if v.showBatchMRConfirm {
-		wf := v.currentWorkflow()
-		if wf != nil {
+		if wf := v.currentWorkflow(); wf != nil {
 			st := wf.Status()
 			lines := []string{
 				"",
@@ -1181,7 +1196,6 @@ func (v *WorkflowsView) View() string {
 		}
 	}
 
-	// MR summary panel
 	if v.showMRSummary && len(v.mrSummaryLines) > 0 {
 		lines := []string{""}
 		lines = append(lines, v.mrSummaryLines...)
@@ -1190,7 +1204,12 @@ func (v *WorkflowsView) View() string {
 		s.WriteString("\n")
 	}
 
-	// Flash messages
+	return s.String()
+}
+
+// renderFlashMessages renders transient status messages.
+func (v *WorkflowsView) renderFlashMessages() string {
+	th := theme.GetTheme()
 	flashMsg := v.workflowStatusMsg
 	if flashMsg == "" {
 		flashMsg = v.pushResults
@@ -1198,66 +1217,67 @@ func (v *WorkflowsView) View() string {
 	if flashMsg == "" {
 		flashMsg = v.mrResults
 	}
-	if flashMsg != "" {
-		for _, line := range strings.Split(flashMsg, "\n") {
-			if strings.Contains(line, "Next:") {
-				s.WriteString(th.MutedTextStyle.Render(" " + line))
-			} else if strings.Contains(line, "✗") || strings.Contains(line, "failed") || strings.Contains(line, "error") {
-				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
-			} else {
-				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
-			}
-			s.WriteString("\n")
+	if flashMsg == "" {
+		return ""
+	}
+
+	var s strings.Builder
+	for _, line := range strings.Split(flashMsg, "\n") {
+		if strings.Contains(line, "Next:") {
+			s.WriteString(th.MutedTextStyle.Render(" " + line))
+		} else if strings.Contains(line, "✗") || strings.Contains(line, "failed") || strings.Contains(line, "error") {
+			s.WriteString(th.DashboardErrorStyle.Render(" " + line))
+		} else {
+			s.WriteString(th.DashboardAccentStyle.Render(" " + line))
 		}
 		s.WriteString("\n")
 	}
+	s.WriteString("\n")
+	return s.String()
+}
 
-	// Workflow list
+// renderWorkflowList renders the list of active workflows.
+func (v *WorkflowsView) renderWorkflowList() string {
+	th := theme.GetTheme()
+	var s strings.Builder
+
 	if len(v.workflows) == 0 {
 		s.WriteString(th.MutedTextStyle.Render(" No feature workflows active."))
 		s.WriteString("\n\n")
 		s.WriteString(th.MutedTextStyle.Render(" Press 'w' to start a new workflow, or 'I' to import existing worktrees."))
 		s.WriteString("\n")
-	} else {
-		s.WriteString(th.StatsStyle.Render(fmt.Sprintf(" %d workflow(s)", len(v.workflows))))
-		s.WriteString("\n")
-		s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-		s.WriteString("\n")
-
-		// Render each workflow
-		for i, wf := range v.workflows {
-			selected := i == v.selectedWorkflow
-			s.WriteString(v.renderWorkflowItem(wf, i, selected))
-			s.WriteString("\n")
-
-			// Next-step hint for selected workflow
-			if selected {
-				st := wf.Status()
-				if st.State == project.WorkflowActive {
-					var hint string
-					switch {
-					case st.MRsCreated > 0:
-						hint = "    next: D to cleanup worktrees once merged"
-					case st.Pushed > 0:
-						hint = "    next: M to create merge requests"
-					default:
-						hint = "    next: p to push branches, a to spawn agent"
-					}
-					s.WriteString(th.MutedTextStyle.Render(hint))
-					s.WriteString("\n")
-				}
-
-				// Repo detail for selected workflow
-				s.WriteString(v.renderRepoDetail(wf))
-			}
-		}
+		return s.String()
 	}
 
-	// Footer
+	s.WriteString(th.StatsStyle.Render(fmt.Sprintf(" %d workflow(s)", len(v.workflows))))
 	s.WriteString("\n")
 	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
 	s.WriteString("\n")
-	s.WriteString(v.renderFooterHelp())
+
+	for i, wf := range v.workflows {
+		selected := i == v.selectedWorkflow
+		s.WriteString(v.renderWorkflowItem(wf, i, selected))
+		s.WriteString("\n")
+
+		if selected {
+			st := wf.Status()
+			if st.State == project.WorkflowActive {
+				var hint string
+				switch {
+				case st.MRsCreated > 0:
+					hint = "    next: D to cleanup worktrees once merged"
+				case st.Pushed > 0:
+					hint = "    next: M to create merge requests"
+				default:
+					hint = "    next: p to push branches, a to spawn agent"
+				}
+				s.WriteString(th.MutedTextStyle.Render(hint))
+				s.WriteString("\n")
+			}
+
+			s.WriteString(v.renderRepoDetail(wf))
+		}
+	}
 
 	return s.String()
 }

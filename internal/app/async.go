@@ -68,6 +68,7 @@ type AsyncOperation struct {
 	Done      chan struct{}
 	mu        sync.RWMutex
 	cancelled bool
+	closed    bool // guards against double-close of Done channel
 }
 
 // AsyncManager manages async operations with cancellation and debouncing.
@@ -147,7 +148,10 @@ func (m *AsyncManager) CompleteOperation(id string) {
 	defer m.mu.Unlock()
 
 	if op, exists := m.operations[id]; exists {
-		close(op.Done)
+		if !op.closed {
+			op.closed = true
+			close(op.Done)
+		}
 		delete(m.operations, id)
 	}
 }
@@ -166,8 +170,10 @@ func (m *AsyncManager) CancelOperation(id string) {
 			}
 		}
 		op.mu.Unlock()
-		// Remove from tracking after cancellation
-		close(op.Done)
+		if !op.closed {
+			op.closed = true
+			close(op.Done)
+		}
 		delete(m.operations, id)
 	}
 }
@@ -186,8 +192,10 @@ func (m *AsyncManager) CancelAll() {
 			}
 		}
 		op.mu.Unlock()
-		// Remove from tracking after cancellation
-		close(op.Done)
+		if !op.closed {
+			op.closed = true
+			close(op.Done)
+		}
 		delete(m.operations, id)
 	}
 }

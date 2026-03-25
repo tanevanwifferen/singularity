@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	"github.com/charmbracelet/lipgloss"
@@ -125,9 +124,6 @@ func wrapLine(line string, maxWidth int, contPrefix string) []string {
 	}
 	return wrapped
 }
-
-// DeleteWordEnd is re-exported from components for convenience.
-var DeleteWordEnd = components.DeleteWordEnd
 
 // renderDiffWithGutter renders parsed diff lines with a line-number gutter.
 // scrollOffset is the current scroll position, height is the viewport height,
@@ -264,6 +260,30 @@ func fileStatusLabel(status string, th theme.Theme) (label string, style lipglos
 	default:
 		return status, th.StatsStyle
 	}
+}
+
+// calcViewport computes the visible window [start, end) for a centered-on-cursor
+// list view. viewHeight is the total view height, chrome is the lines consumed by
+// headers/footers, cursor is the focused index, total is len(items).
+func calcViewport(viewHeight, chrome, cursor, total int) (start, end int) {
+	visible := viewHeight - chrome
+	if visible < 1 {
+		visible = 1
+	}
+
+	start = cursor - visible/2
+	if start < 0 {
+		start = 0
+	}
+	end = start + visible
+	if end > total {
+		end = total
+		start = end - visible
+		if start < 0 {
+			start = 0
+		}
+	}
+	return start, end
 }
 
 // truncatePath shortens a path to fit maxLen, prefixing with "..." if needed.

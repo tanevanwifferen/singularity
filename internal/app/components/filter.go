@@ -17,8 +17,8 @@ type FilterStyles struct {
 	MatchHighlight lipgloss.Style
 }
 
-// DefaultFilterStyles returns default styles for the filter input.
-func DefaultFilterStyles() FilterStyles {
+// defaultFilterStyles returns default styles for the filter input.
+func defaultFilterStyles() FilterStyles {
 	return FilterStyles{
 		Input: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("250")).
@@ -83,7 +83,7 @@ func NewFilter[T any](items []T, renderer ItemRenderer[T]) *Filter[T] {
 		sourceItems:    items,
 		filteredItems:  items,
 		sourceRenderer: renderer,
-		Styles:         DefaultFilterStyles(),
+		Styles:         defaultFilterStyles(),
 		filterCursor:   0,
 		active:         false,
 		height:         20,
