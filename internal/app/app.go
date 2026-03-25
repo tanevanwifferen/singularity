@@ -491,7 +491,12 @@ func (m Model) Init() tea.Cmd {
 	if m.router == nil {
 		return nil
 	}
-	return m.router.Init()
+	cmds := []tea.Cmd{m.router.Init()}
+	// Start the agent-status tick at the app level so it survives view switches.
+	if av := m.getAgentView(); av != nil {
+		cmds = append(cmds, av.AgentTickStart())
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update handles messages and updates the model
@@ -550,6 +555,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.layout.SetSize(msg.Width, msg.Height)
 		vw, vh := m.layout.AvailableViewDimensions()
 		m.router.NotifySize(vw, vh)
+		return m, nil
+	case views.StreamTickMsg:
+		// Handle at the app level so the tick chain survives view switches.
+		if av := m.getAgentView(); av != nil {
+			return m, av.AgentTickCmd()
+		}
 		return m, nil
 	case WSConnectionMsg, WSRepoUpdateMsg, WSBranchUpdateMsg, WSPipelineUpdateMsg,
 		WSAgentOutputMsg, WSAgentEventMsg, WSProjectUpdateMsg:
@@ -696,14 +707,18 @@ func (m Model) handleAppWSMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.router != nil {
 			m.router.SwitchTo("Agents")
 		}
+		if av := m.getAgentView(); av != nil {
+			av.AgentTickCmd() // load immediately; tick chain reschedules itself
+		}
 		return m, nil
 	case WSAgentEventMsg:
 		if m.router != nil {
 			m.router.SwitchTo("Agents")
 		}
-		return m, func() tea.Msg {
-			return views.RefreshMsg{}
+		if av := m.getAgentView(); av != nil {
+			av.AgentTickCmd() // load immediately; tick chain reschedules itself
 		}
+		return m, nil
 	case WSProjectUpdateMsg:
 		m.statusMsg = fmt.Sprintf("Project updated: %s", msg.Status)
 		return m, nil
