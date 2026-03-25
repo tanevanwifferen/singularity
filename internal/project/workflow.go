@@ -321,18 +321,25 @@ func (fw *FeatureWorkflow) PushAll() error {
 				return
 			}
 
-			if status.Upstream != "" {
-				// Has upstream: only push if there are commits ahead
+			base := wr.DefaultBranch
+			if base == "" {
+				base = "main"
+			}
+
+			// Treat upstream as absent if it points to the default branch — this
+			// happens when a worktree was created from origin/<default> and git
+			// auto-set the tracking branch.  In that case we must push the feature
+			// branch to its own remote ref, not to the default branch.
+			upstreamIsDefault := status.Upstream == "origin/"+base
+			if status.Upstream != "" && !upstreamIsDefault {
+				// Has a proper feature-branch upstream: only push if ahead
 				if status.Ahead == 0 {
 					return // nothing to push
 				}
 				_, err = git.Push(wr.WorktreePath, false)
 			} else {
-				// No upstream: check if branch has commits vs default branch
-				base := wr.DefaultBranch
-				if base == "" {
-					base = "main"
-				}
+				// No upstream (or upstream is just the default branch): check
+				// commits vs default and push to a new remote feature branch.
 				ahead, _, cmpErr := git.CompareBranchesSimple(wr.WorktreePath, base, "HEAD")
 				if cmpErr != nil || ahead == 0 {
 					return // nothing to push
