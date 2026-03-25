@@ -238,10 +238,7 @@ func (s *Server) handleBranchCompare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path := req.RepoPath
-	if path == "" {
-		path = s.repoPath
-	}
+	path := s.resolveRepoPath(req.RepoPath)
 
 	comparison, err := git.CompareBranches(path, req.BranchA, req.BranchB)
 	if err != nil {
@@ -260,10 +257,7 @@ func (s *Server) handleBranchDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path := req.RepoPath
-	if path == "" {
-		path = s.repoPath
-	}
+	path := s.resolveRepoPath(req.RepoPath)
 
 	diff, err := git.GetBranchDiff(path, req.BranchA, req.BranchB)
 	if err != nil {
@@ -282,10 +276,7 @@ func (s *Server) handleCommitMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path := req.RepoPath
-	if path == "" {
-		path = s.repoPath
-	}
+	path := s.resolveRepoPath(req.RepoPath)
 
 	msg, err := git.GenerateCommitMessage(path)
 	if err != nil {
@@ -304,10 +295,7 @@ func (s *Server) handleMRCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path := req.RepoPath
-	if path == "" {
-		path = s.repoPath
-	}
+	path := s.resolveRepoPath(req.RepoPath)
 
 	mr, err := git.CreateMR(path, req.SourceBranch, req.TargetBranch, req.Title, req.Description, req.Reviewers)
 	if err != nil {
@@ -459,6 +447,14 @@ func (s *Server) BroadcastBranchUpdate(branch string) {
 }
 
 // Helper methods
+
+// resolveRepoPath returns reqPath when non-empty, otherwise the server's default repo path.
+func (s *Server) resolveRepoPath(reqPath string) string {
+	if reqPath != "" {
+		return reqPath
+	}
+	return s.repoPath
+}
 
 func (s *Server) writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")

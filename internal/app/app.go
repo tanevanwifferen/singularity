@@ -43,7 +43,11 @@ type Model struct {
 // New creates a new app model
 func New() *Model {
 	m := &Model{layout: NewLayout()}
-	m.cfg, _ = config.LoadDefaultConfig()
+	cfg, err := config.LoadDefaultConfig()
+	if err != nil {
+		m.errorMsg = fmt.Sprintf("config load: %v", err)
+	}
+	m.cfg = cfg
 	return m
 }
 
