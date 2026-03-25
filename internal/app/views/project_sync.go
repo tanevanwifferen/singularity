@@ -12,7 +12,6 @@ import (
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // projectSyncRepoResult carries the result of a sync operation for one repo.
@@ -62,8 +61,7 @@ type ProjectSyncView struct {
 	currentOp SyncOperation
 
 	// Output log
-	outputLog    []logEntry
-	scrollOffset int
+	syncLogHelper
 
 	// Confirmation
 	confirmOp      SyncOperation
@@ -71,13 +69,19 @@ type ProjectSyncView struct {
 	confirmMessage string
 }
 
+// syncMaxLines returns the maximum number of visible log lines for ProjectSyncView.
+func (v *ProjectSyncView) syncMaxLines() int {
+	statusLines := len(v.repoStatuses) + 3
+	return v.height - statusLines - 22
+}
+
 // NewProjectSyncView creates a new project sync view.
 func NewProjectSyncView(proj *project.Project) *ProjectSyncView {
 	return &ProjectSyncView{
-		proj:      proj,
-		width:     80,
-		height:    24,
-		outputLog: make([]logEntry, 0),
+		proj:          proj,
+		width:         80,
+		height:        24,
+		syncLogHelper: syncLogHelper{outputLog: make([]logEntry, 0)},
 	}
 }
 
@@ -144,7 +148,7 @@ func (v *ProjectSyncView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if r.err != "" {
 				v.addLog(r.op, "error", fmt.Sprintf("[%s] %s", r.repoName, r.err))
 			} else {
-				v.addLog(r.op, "success", fmt.Sprintf("[%s] %s", r.repoName, v.opDoneLabel(r.op)))
+				v.addLog(r.op, "success", fmt.Sprintf("[%s] %s", r.repoName, opDoneLabel(r.op)))
 			}
 			if r.output != "" {
 				v.addLog(r.op, "output", fmt.Sprintf("[%s] %s", r.repoName, r.output))
@@ -198,13 +202,13 @@ func (v *ProjectSyncView) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (v *ProjectSyncView) handleConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "y", "Y":
-		op := v.confirmOp
+	op, confirmed, dismissed := handleSyncConfirm(msg.String(), v.confirmOp)
+	if confirmed {
 		v.showConfirm = false
 		v.confirmOp = SyncOpNone
 		return v, v.startBatchOp(op)
-	case "n", "N", "esc":
+	}
+	if dismissed {
 		v.showConfirm = false
 		v.confirmOp = SyncOpNone
 	}
@@ -510,152 +514,27 @@ func (v *ProjectSyncView) renderLegend(s *strings.Builder, th theme.Theme) {
 }
 
 func (v *ProjectSyncView) renderLog(s *strings.Builder, th theme.Theme) {
-	if len(v.outputLog) == 0 {
-		return
-	}
-
-	s.WriteString(th.StatsStyle.Render(" Output Log "))
-	s.WriteString("\n")
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
-
-	// Calculate visible lines - account for repo status section.
-	// Fixed overhead beyond statusLines: 2 header + 1 blank + 1 legend + 1 blank
-	// + 2 executing + 2 log header/sep + 1 scroll indicator + 1 blank + 10 keybindings = 22.
-	statusLines := len(v.repoStatuses) + 3 // header + separator + repos + trailing blank
-	maxLines := v.height - statusLines - 22
-	if maxLines < 5 {
-		maxLines = 5
-	}
-
-	start := v.scrollOffset
-	if start > len(v.outputLog) {
-		start = len(v.outputLog)
-	}
-	end := start + maxLines
-	if end > len(v.outputLog) {
-		end = len(v.outputLog)
-	}
-
-	for _, entry := range v.outputLog[start:end] {
-		ts := entry.timestamp.Format("15:04:05")
-		var style lipgloss.Style
-		switch entry.kind {
-		case "success":
-			style = th.DashboardAccentStyle
-		case "error":
-			style = th.DashboardErrorStyle
-		default:
-			style = th.StatsStyle
-		}
-
-		prefix := ""
-		switch entry.kind {
-		case "success":
-			prefix = "✓"
-		case "error":
-			prefix = "✗"
-		case "info":
-			prefix = "→"
-		case "output":
-			prefix = " "
-		}
-
-		line := fmt.Sprintf(" %s %s %s",
-			lipgloss.NewStyle().Foreground(th.Info).Render(ts),
-			prefix,
-			style.Render(entry.message))
-		s.WriteString(line)
-		s.WriteString("\n")
-	}
-
-	if len(v.outputLog) > maxLines {
-		s.WriteString(th.Help.Render(fmt.Sprintf(" [%d-%d of %d] j/k to scroll ", start+1, end, len(v.outputLog))))
-		s.WriteString("\n")
-	}
+	v.syncLogHelper.renderSyncLog(s, th, v.syncMaxLines())
 }
 
 func (v *ProjectSyncView) renderKeybindings(s *strings.Builder, th theme.Theme) {
-	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(th.Accent)
-	descStyle := lipgloss.NewStyle().Foreground(th.SecondaryText)
-	sepStyle := lipgloss.NewStyle().Foreground(th.Border)
-
-	s.WriteString(th.StatsStyle.Render(" Keybindings "))
-	s.WriteString("\n")
-	s.WriteString(sepStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
-
-	for _, kb := range v.KeyBindings() {
-		s.WriteString(fmt.Sprintf(" %s  %s\n",
-			keyStyle.Width(6).Render(kb.Key),
-			descStyle.Render(kb.Description)))
-	}
+	renderSyncKeybindings(s, th, v.KeyBindings())
 }
 
 func (v *ProjectSyncView) addLog(op SyncOperation, kind, message string) {
-	lines := strings.Split(message, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		v.outputLog = append(v.outputLog, logEntry{
-			timestamp: time.Now(),
-			op:        op,
-			kind:      kind,
-			message:   line,
-		})
-	}
-	v.scrollToBottom()
-}
-
-func (v *ProjectSyncView) opDoneLabel(op SyncOperation) string {
-	switch op {
-	case SyncOpFetch:
-		return "Fetch complete"
-	case SyncOpPull:
-		return "Pull complete"
-	case SyncOpPush:
-		return "Push complete"
-	case SyncOpForcePush:
-		return "Force push complete"
-	case SyncOpRebase:
-		return "Rebase complete"
-	case SyncOpSync:
-		return "Sync complete"
-	default:
-		return "Done"
-	}
+	v.syncLogHelper.addLog(op, kind, message, v.syncMaxLines())
 }
 
 func (v *ProjectSyncView) scrollDown() {
-	statusLines := len(v.repoStatuses) + 3
-	maxLines := v.height - statusLines - 22
-	if maxLines < 5 {
-		maxLines = 5
-	}
-	if v.scrollOffset < len(v.outputLog)-maxLines {
-		v.scrollOffset++
-	}
+	v.syncLogHelper.scrollDown(v.syncMaxLines())
 }
 
 func (v *ProjectSyncView) scrollUp() {
-	if v.scrollOffset > 0 {
-		v.scrollOffset--
-	}
+	v.syncLogHelper.scrollUp()
 }
 
 func (v *ProjectSyncView) scrollToBottom() {
-	statusLines := len(v.repoStatuses) + 3
-	maxLines := v.height - statusLines - 22
-	if maxLines < 5 {
-		maxLines = 5
-	}
-	if len(v.outputLog) > maxLines {
-		v.scrollOffset = len(v.outputLog) - maxLines
-	} else {
-		v.scrollOffset = 0
-	}
+	v.syncLogHelper.scrollToBottom(v.syncMaxLines())
 }
 
 // CapturesInput returns true when a confirmation dialog is shown.

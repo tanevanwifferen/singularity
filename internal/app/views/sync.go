@@ -10,7 +10,6 @@ import (
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // SyncOperation identifies which remote operation is running.
@@ -86,8 +85,7 @@ type SyncView struct {
 	err       error
 
 	// Output log
-	outputLog    []logEntry
-	scrollOffset int
+	syncLogHelper
 
 	// Confirmation
 	confirmOp      SyncOperation
@@ -95,21 +93,19 @@ type SyncView struct {
 	confirmMessage string
 }
 
-type logEntry struct {
-	timestamp time.Time
-	op        SyncOperation
-	kind      string // "info", "success", "error", "output"
-	message   string
-}
-
 // NewSyncView creates a new sync view.
 func NewSyncView(repoPath string) *SyncView {
 	return &SyncView{
-		repoPath:  repoPath,
-		width:     80,
-		height:    24,
-		outputLog: make([]logEntry, 0),
+		repoPath:      repoPath,
+		width:         80,
+		height:        24,
+		syncLogHelper: syncLogHelper{outputLog: make([]logEntry, 0)},
 	}
+}
+
+// syncMaxLines returns the maximum number of visible log lines for SyncView.
+func (v *SyncView) syncMaxLines() int {
+	return v.height - 27
 }
 
 // SetRepoPath updates the repository path for this view.
@@ -155,7 +151,7 @@ func (v *SyncView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case syncSuccessMsg:
 		v.executing = false
 		v.currentOp = SyncOpNone
-		v.addLog(msg.op, "success", v.opDoneLabel(msg.op))
+		v.addLog(msg.op, "success", opDoneLabel(msg.op))
 		if msg.output != "" {
 			v.addLog(msg.op, "output", msg.output)
 		}
@@ -229,13 +225,13 @@ func (v *SyncView) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (v *SyncView) handleConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "y", "Y":
-		op := v.confirmOp
+	op, confirmed, dismissed := handleSyncConfirm(msg.String(), v.confirmOp)
+	if confirmed {
 		v.showConfirm = false
 		v.confirmOp = SyncOpNone
 		return v, v.startOp(op)
-	case "n", "N", "esc":
+	}
+	if dismissed {
 		v.showConfirm = false
 		v.confirmOp = SyncOpNone
 	}
@@ -479,157 +475,27 @@ func (v *SyncView) renderStatus(s *strings.Builder, th theme.Theme) {
 }
 
 func (v *SyncView) renderLog(s *strings.Builder, th theme.Theme) {
-	if len(v.outputLog) == 0 {
-		return
-	}
-
-	s.WriteString(th.StatsStyle.Render(" Output Log "))
-	s.WriteString("\n")
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
-
-	// Calculate visible lines.
-	// Fixed overhead: 2 header + 6 status + 1 blank + 2 executing + 2 log header/sep
-	// + 1 scroll indicator + 1 blank + 10 keybindings = 27 lines worst-case.
-	maxLines := v.height - 27
-	if maxLines < 5 {
-		maxLines = 5
-	}
-
-	start := v.scrollOffset
-	if start > len(v.outputLog) {
-		start = len(v.outputLog)
-	}
-	end := start + maxLines
-	if end > len(v.outputLog) {
-		end = len(v.outputLog)
-	}
-
-	for _, entry := range v.outputLog[start:end] {
-		ts := entry.timestamp.Format("15:04:05")
-		var style lipgloss.Style
-		switch entry.kind {
-		case "success":
-			style = th.DashboardAccentStyle
-		case "error":
-			style = th.DashboardErrorStyle
-		case "info":
-			style = th.StatsStyle
-		case "output":
-			style = th.StatsStyle
-		default:
-			style = th.StatsStyle
-		}
-
-		prefix := ""
-		switch entry.kind {
-		case "success":
-			prefix = "✓"
-		case "error":
-			prefix = "✗"
-		case "info":
-			prefix = "→"
-		case "output":
-			prefix = " "
-		}
-
-		line := fmt.Sprintf(" %s %s %s",
-			lipgloss.NewStyle().Foreground(th.Info).Render(ts),
-			prefix,
-			style.Render(entry.message))
-		s.WriteString(line)
-		s.WriteString("\n")
-	}
-
-	// Scroll indicator
-	if len(v.outputLog) > maxLines {
-		s.WriteString(th.Help.Render(fmt.Sprintf(" [%d-%d of %d] j/k to scroll ", start+1, end, len(v.outputLog))))
-		s.WriteString("\n")
-	}
+	v.syncLogHelper.renderSyncLog(s, th, v.syncMaxLines())
 }
 
 func (v *SyncView) renderKeybindings(s *strings.Builder, th theme.Theme) {
-	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(th.Accent)
-	descStyle := lipgloss.NewStyle().Foreground(th.SecondaryText)
-	sepStyle := lipgloss.NewStyle().Foreground(th.Border)
-
-	s.WriteString(th.StatsStyle.Render(" Keybindings "))
-	s.WriteString("\n")
-	s.WriteString(sepStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
-
-	for _, kb := range v.KeyBindings() {
-		s.WriteString(fmt.Sprintf(" %s  %s\n",
-			keyStyle.Width(6).Render(kb.Key),
-			descStyle.Render(kb.Description)))
-	}
+	renderSyncKeybindings(s, th, v.KeyBindings())
 }
 
 func (v *SyncView) addLog(op SyncOperation, kind, message string) {
-	// Split multiline output into separate entries
-	lines := strings.Split(message, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		v.outputLog = append(v.outputLog, logEntry{
-			timestamp: time.Now(),
-			op:        op,
-			kind:      kind,
-			message:   line,
-		})
-	}
-	v.scrollToBottom()
-}
-
-func (v *SyncView) opDoneLabel(op SyncOperation) string {
-	switch op {
-	case SyncOpFetch:
-		return "Fetch complete"
-	case SyncOpPull:
-		return "Pull complete"
-	case SyncOpPush:
-		return "Push complete"
-	case SyncOpForcePush:
-		return "Force push complete"
-	case SyncOpRebase:
-		return "Rebase complete"
-	case SyncOpSync:
-		return "Sync complete (fetch + rebase + push)"
-	case SyncOpSetUpstream:
-		return "Upstream set and pushed"
-	default:
-		return "Done"
-	}
+	v.syncLogHelper.addLog(op, kind, message, v.syncMaxLines())
 }
 
 func (v *SyncView) scrollDown() {
-	maxLines := v.height - 27
-	if maxLines < 5 {
-		maxLines = 5
-	}
-	if v.scrollOffset < len(v.outputLog)-maxLines {
-		v.scrollOffset++
-	}
+	v.syncLogHelper.scrollDown(v.syncMaxLines())
 }
 
 func (v *SyncView) scrollUp() {
-	if v.scrollOffset > 0 {
-		v.scrollOffset--
-	}
+	v.syncLogHelper.scrollUp()
 }
 
 func (v *SyncView) scrollToBottom() {
-	maxLines := v.height - 27
-	if maxLines < 5 {
-		maxLines = 5
-	}
-	if len(v.outputLog) > maxLines {
-		v.scrollOffset = len(v.outputLog) - maxLines
-	} else {
-		v.scrollOffset = 0
-	}
+	v.syncLogHelper.scrollToBottom(v.syncMaxLines())
 }
 
 // CapturesInput returns true when a confirmation dialog is shown.
