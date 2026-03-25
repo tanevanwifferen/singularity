@@ -357,6 +357,14 @@ func (l *List[T]) Len() int {
 	return len(l.Items)
 }
 
+// SelectAt moves the cursor to the given index.
+func (l *List[T]) SelectAt(idx int) {
+	if idx >= 0 && idx < len(l.Items) {
+		l.Cursor = idx
+		l.ensureCursorVisible()
+	}
+}
+
 // CursorUp moves the cursor up by one position.
 func (l *List[T]) CursorUp() {
 	if l.Cursor > 0 {
