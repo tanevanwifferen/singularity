@@ -508,6 +508,16 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return v, nil
 			}
 
+		case "i":
+			if v.selectedAgent != nil &&
+				(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting || v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentKilled) {
+				v.showMessageInput = true
+				v.messageInput = ""
+				v.focus = focusInput
+				v.recalcLayout()
+			}
+			return v, nil
+
 		case "d", "esc":
 			if key == "esc" && v.filter.IsActive() {
 				v.filter.Update(msg)
