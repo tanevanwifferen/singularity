@@ -211,7 +211,7 @@ func (m *AsyncManager) ActiveOperations() int {
 
 // StartDebounce starts or resets a debouncer for the given key.
 // The provided action will be called after the debounce delay if no new requests come in.
-// Returns true if the action was immediately executed (no debounce), false if debounced.
+// Always returns false; the action is always debounced, never immediately executed.
 func (m *AsyncManager) StartDebounce(key string, delay time.Duration, action func()) bool {
 	m.debMu.Lock()
 	defer m.debMu.Unlock()

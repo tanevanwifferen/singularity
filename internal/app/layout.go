@@ -268,7 +268,7 @@ func (l *Layout) Render(router *Router, repoInfo *git.RepoInfo, activeViewConten
 // stripAnsi strips ANSI escape codes from a string.
 // This is used to calculate actual display width.
 func stripAnsi(s string) string {
-	result := ""
+	var b strings.Builder
 	inEscape := false
 	for _, c := range s {
 		if c == '\x1b' {
@@ -281,7 +281,7 @@ func stripAnsi(s string) string {
 			}
 			continue
 		}
-		result += string(c)
+		b.WriteRune(c)
 	}
-	return result
+	return b.String()
 }
