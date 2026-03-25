@@ -193,6 +193,38 @@ func TestFormatConventionalCommitNil(t *testing.T) {
 	}
 }
 
+func TestCommitMsgCacheKey(t *testing.T) {
+	key1 := commitMsgCacheKey("diff content A")
+	key2 := commitMsgCacheKey("diff content B")
+	key3 := commitMsgCacheKey("diff content A")
+
+	if key1 == key2 {
+		t.Error("different diffs should produce different cache keys")
+	}
+	if key1 != key3 {
+		t.Error("same diff should produce the same cache key")
+	}
+	if !strings.HasPrefix(key1, "commitmsg:") {
+		t.Errorf("cache key should have 'commitmsg:' prefix, got %q", key1)
+	}
+}
+
+func TestIsValidCommitType(t *testing.T) {
+	valid := []string{"feat", "fix", "docs", "style", "refactor", "test", "chore", "perf", "ci", "build"}
+	for _, v := range valid {
+		if !isValidCommitType(v) {
+			t.Errorf("isValidCommitType(%q) = false, want true", v)
+		}
+	}
+
+	invalid := []string{"", "feature", "bugfix", "update", "FEAT", "Fix"}
+	for _, v := range invalid {
+		if isValidCommitType(v) {
+			t.Errorf("isValidCommitType(%q) = true, want false", v)
+		}
+	}
+}
+
 func TestSuggestCommitMessage(t *testing.T) {
 	tmpDir := setupTestRepo(t)
 	defer os.RemoveAll(tmpDir)

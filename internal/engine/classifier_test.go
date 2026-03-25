@@ -6,11 +6,13 @@ import (
 
 func TestParseClassification(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     string
-		wantCat   PromptCategory
-		wantModel string
-		wantErr   bool
+		name        string
+		input       string
+		wantCat     PromptCategory
+		wantModel   string
+		wantEffort  string
+		wantSummary string
+		wantErr     bool
 	}{
 		{
 			name:      "clean planning response",
@@ -52,6 +54,33 @@ func TestParseClassification(t *testing.T) {
 			input:   "",
 			wantErr: true,
 		},
+		{
+			name:    "malformed json content",
+			input:   "{not: valid}",
+			wantErr: true,
+		},
+		{
+			name:       "effort field high",
+			input:      `{"category": "implementation", "effort": "high", "reason": "complex task", "summary": "refactor auth"}`,
+			wantCat:    CategoryImplementation,
+			wantModel:  "sonnet",
+			wantEffort: "high",
+		},
+		{
+			name:       "invalid effort defaults to medium",
+			input:      `{"category": "planning", "effort": "extreme", "reason": "design", "summary": "plan infra"}`,
+			wantCat:    CategoryPlanning,
+			wantModel:  "opus",
+			wantEffort: "medium",
+		},
+		{
+			name:        "summary field populated",
+			input:       `{"category": "implementation", "effort": "low", "reason": "tiny fix", "summary": "fix typo in README"}`,
+			wantCat:     CategoryImplementation,
+			wantModel:   "sonnet",
+			wantEffort:  "low",
+			wantSummary: "fix typo in README",
+		},
 	}
 
 	for _, tt := range tests {
@@ -71,6 +100,12 @@ func TestParseClassification(t *testing.T) {
 			}
 			if result.Model != tt.wantModel {
 				t.Errorf("model: got %q, want %q", result.Model, tt.wantModel)
+			}
+			if tt.wantEffort != "" && result.Effort != tt.wantEffort {
+				t.Errorf("effort: got %q, want %q", result.Effort, tt.wantEffort)
+			}
+			if tt.wantSummary != "" && result.Summary != tt.wantSummary {
+				t.Errorf("summary: got %q, want %q", result.Summary, tt.wantSummary)
 			}
 		})
 	}

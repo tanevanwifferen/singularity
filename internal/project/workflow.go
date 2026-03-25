@@ -93,6 +93,18 @@ type WorkflowStatus struct {
 	HasAgent         bool          `json:"has_agent"`
 }
 
+// countRepoErrors returns the number of repos that have a non-empty error string.
+// Callers must hold fw.mu or operate on a stable snapshot.
+func countRepoErrors(repos map[string]*WorkflowRepo) int {
+	count := 0
+	for _, wr := range repos {
+		if wr.Error != "" {
+			count++
+		}
+	}
+	return count
+}
+
 // sanitizeBranchForPath replaces characters that are problematic in filesystem paths
 func sanitizeBranchForPath(branch string) string {
 	return strings.ReplaceAll(branch, "/", "-")
@@ -156,12 +168,7 @@ func (fw *FeatureWorkflow) CreateAllWorktrees() error {
 	defer fw.mu.Unlock()
 
 	// Check if any repo had errors
-	var errCount int
-	for _, wr := range fw.Repos {
-		if wr.Error != "" {
-			errCount++
-		}
-	}
+	errCount := countRepoErrors(fw.Repos)
 
 	if errCount == len(fw.Repos) {
 		fw.Error = "all worktree creations failed"
@@ -347,12 +354,7 @@ func (fw *FeatureWorkflow) PushAll() error {
 	defer fw.mu.Unlock()
 	fw.State = WorkflowActive
 
-	var errCount int
-	for _, wr := range fw.Repos {
-		if wr.Error != "" {
-			errCount++
-		}
-	}
+	errCount := countRepoErrors(fw.Repos)
 	if errCount > 0 {
 		return fmt.Errorf("%d of %d pushes failed", errCount, len(fw.Repos))
 	}
@@ -399,12 +401,7 @@ func (fw *FeatureWorkflow) CreateAllMRs() error {
 	defer fw.mu.Unlock()
 	fw.State = WorkflowActive
 
-	var errCount int
-	for _, wr := range fw.Repos {
-		if wr.Error != "" {
-			errCount++
-		}
-	}
+	errCount := countRepoErrors(fw.Repos)
 	if errCount > 0 {
 		return fmt.Errorf("%d MR creations failed", errCount)
 	}

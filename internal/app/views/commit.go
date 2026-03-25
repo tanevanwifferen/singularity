@@ -14,8 +14,8 @@ import (
 	"github.com/charmbracelet/bubbletea"
 )
 
-// StagedFile represents a file in the staging area
-type StagedFile struct {
+// FileStatus represents a file with staged or unstaged changes.
+type FileStatus struct {
 	Path       string
 	Additions  int
 	Deletions  int
@@ -47,8 +47,8 @@ type CommitView struct {
 	successMsg string
 
 	// Staged and unstaged files
-	stagedFiles   []StagedFile
-	unstagedFiles []StagedFile
+	stagedFiles   []FileStatus
+	unstagedFiles []FileStatus
 
 	// Navigation state
 	activeSection int // 0 = staged, 1 = unstaged
@@ -123,23 +123,26 @@ func (v *CommitView) loadFiles() {
 	v.loading = false
 }
 
-// getStagedFiles returns files that are staged for commit.
-func (v *CommitView) getStagedFiles() ([]StagedFile, error) {
-	var files []StagedFile
+// parseDiffFiles runs git diff --name-status and --numstat for either staged
+// (cached) or unstaged files and returns the combined list.
+func parseDiffFiles(repoPath string, staged bool) ([]FileStatus, error) {
+	var extraFlags []string
+	if staged {
+		extraFlags = []string{"--cached"}
+	}
 
-	// Get staged files with status using git diff --cached --name-status
-	cmd := exec.Command("git", "-C", v.repoPath, "diff", "--cached", "--name-status")
-	output, err := cmd.Output()
+	// name-status pass
+	nameStatusArgs := append([]string{"-C", repoPath, "diff", "--name-status"}, extraFlags...)
+	nameStatusOut, err := exec.Command("git", nameStatusArgs...).Output()
 	if err != nil {
-		// No staged files is not an error
-		if strings.Contains(err.Error(), "exit status 1") && len(output) == 0 {
-			return files, nil
+		if strings.Contains(err.Error(), "exit status 1") && len(nameStatusOut) == 0 {
+			return nil, nil // no changes is not an error
 		}
 		return nil, err
 	}
 
 	statusMap := make(map[string]string)
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	scanner := bufio.NewScanner(strings.NewReader(string(nameStatusOut)))
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
@@ -152,15 +155,15 @@ func (v *CommitView) getStagedFiles() ([]StagedFile, error) {
 		statusMap[parts[1]] = parts[0]
 	}
 
-	// Get numstat for additions/deletions
-	numstatCmd := exec.Command("git", "-C", v.repoPath, "diff", "--cached", "--numstat")
-	numstatOutput, err := numstatCmd.Output()
+	// numstat pass
+	numstatArgs := append([]string{"-C", repoPath, "diff", "--numstat"}, extraFlags...)
+	numstatOut, err := exec.Command("git", numstatArgs...).Output()
 	if err != nil {
 		return nil, err
 	}
 
 	numstatMap := make(map[string]struct{ additions, deletions int })
-	scanner = bufio.NewScanner(strings.NewReader(string(numstatOutput)))
+	scanner = bufio.NewScanner(strings.NewReader(string(numstatOut)))
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
@@ -171,9 +174,7 @@ func (v *CommitView) getStagedFiles() ([]StagedFile, error) {
 			continue
 		}
 		path := parts[2]
-
-		additions := 0
-		deletions := 0
+		additions, deletions := 0, 0
 		if parts[0] != "-" {
 			additions, _ = strconv.Atoi(parts[0])
 		}
@@ -184,105 +185,34 @@ func (v *CommitView) getStagedFiles() ([]StagedFile, error) {
 	}
 
 	// Build file list
+	files := make([]FileStatus, 0, len(statusMap))
 	for path, status := range statusMap {
-		sf := StagedFile{Path: path}
+		f := FileStatus{Path: path}
 		if nums, ok := numstatMap[path]; ok {
-			sf.Additions = nums.additions
-			sf.Deletions = nums.deletions
+			f.Additions = nums.additions
+			f.Deletions = nums.deletions
 		}
 		switch status {
 		case "A":
-			sf.IsNew = true
+			f.IsNew = true
 		case "D":
-			sf.IsDeleted = true
+			f.IsDeleted = true
 		case "M", "R", "C":
-			sf.IsModified = true
+			f.IsModified = true
 		}
-		files = append(files, sf)
+		files = append(files, f)
 	}
-
 	return files, nil
 }
 
+// getStagedFiles returns files that are staged for commit.
+func (v *CommitView) getStagedFiles() ([]FileStatus, error) {
+	return parseDiffFiles(v.repoPath, true)
+}
+
 // getUnstagedFiles returns files that have unstaged changes.
-func (v *CommitView) getUnstagedFiles() ([]StagedFile, error) {
-	var files []StagedFile
-
-	// Get unstaged files with status
-	cmd := exec.Command("git", "-C", v.repoPath, "diff", "--name-status")
-	output, err := cmd.Output()
-	if err != nil {
-		// No unstaged files
-		if strings.Contains(err.Error(), "exit status 1") && len(output) == 0 {
-			return files, nil
-		}
-		return nil, err
-	}
-
-	statusMap := make(map[string]string)
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, "\t", 2)
-		if len(parts) < 2 {
-			continue
-		}
-		statusMap[parts[1]] = parts[0]
-	}
-
-	// Get numstat for additions/deletions
-	numstatCmd := exec.Command("git", "-C", v.repoPath, "diff", "--numstat")
-	numstatOutput, err := numstatCmd.Output()
-	if err != nil {
-		return nil, err
-	}
-
-	numstatMap := make(map[string]struct{ additions, deletions int })
-	scanner = bufio.NewScanner(strings.NewReader(string(numstatOutput)))
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
-		parts := strings.Split(line, "\t")
-		if len(parts) < 3 {
-			continue
-		}
-		path := parts[2]
-
-		additions := 0
-		deletions := 0
-		if parts[0] != "-" {
-			additions, _ = strconv.Atoi(parts[0])
-		}
-		if parts[1] != "-" {
-			deletions, _ = strconv.Atoi(parts[1])
-		}
-		numstatMap[path] = struct{ additions, deletions int }{additions, deletions}
-	}
-
-	// Build file list
-	for path, status := range statusMap {
-		sf := StagedFile{Path: path}
-		if nums, ok := numstatMap[path]; ok {
-			sf.Additions = nums.additions
-			sf.Deletions = nums.deletions
-		}
-		switch status {
-		case "A":
-			sf.IsNew = true
-		case "D":
-			sf.IsDeleted = true
-		case "M", "R", "C":
-			sf.IsModified = true
-		}
-		files = append(files, sf)
-	}
-
-	return files, nil
+func (v *CommitView) getUnstagedFiles() ([]FileStatus, error) {
+	return parseDiffFiles(v.repoPath, false)
 }
 
 // stageFile stages a single file.

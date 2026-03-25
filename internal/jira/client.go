@@ -89,6 +89,49 @@ func (c *Client) GetMyIssues(projectKey string) (*SearchResult, error) {
 	return c.SearchIssues(jql, 50)
 }
 
+// doRequest executes an HTTP request and returns the response body and status code.
+// It handles transport-level errors and reads the full body. Status-code checking
+// is left to callers so each method can accept different success codes.
+func (c *Client) doRequest(method, path string, body io.Reader) ([]byte, int, error) {
+	req, err := http.NewRequest(method, c.baseURL+path, body)
+	if err != nil {
+		return nil, 0, fmt.Errorf("jira: failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", c.authHeader)
+	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("jira: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("jira: failed to read response: %w", err)
+	}
+	return respBody, resp.StatusCode, nil
+}
+
+// statusError converts a non-success HTTP status into the canonical Jira error.
+func statusError(code int, body []byte) error {
+	switch code {
+	case http.StatusTooManyRequests:
+		return fmt.Errorf("jira: rate limited (429) — retry after a moment")
+	case http.StatusUnauthorized:
+		return fmt.Errorf("jira: authentication failed — check email/token")
+	case http.StatusForbidden:
+		return fmt.Errorf("jira: forbidden — insufficient permissions")
+	case http.StatusNotFound:
+		return fmt.Errorf("jira: resource not found")
+	default:
+		return fmt.Errorf("jira: unexpected status %d: %s", code, string(body))
+	}
+}
+
 // post performs a POST request with a JSON body and returns the response body.
 func (c *Client) post(path string, payload interface{}) ([]byte, error) {
 	data, err := json.Marshal(payload)
@@ -96,39 +139,14 @@ func (c *Client) post(path string, payload interface{}) ([]byte, error) {
 		return nil, fmt.Errorf("jira: failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, c.baseURL+path, bytes.NewReader(data))
+	body, code, err := c.doRequest(http.MethodPost, path, bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("jira: failed to create request: %w", err)
+		return nil, err
 	}
-	req.Header.Set("Authorization", c.authHeader)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("jira: request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("jira: failed to read response: %w", err)
-	}
-
-	switch resp.StatusCode {
-	case http.StatusOK, http.StatusCreated:
+	if code == http.StatusOK || code == http.StatusCreated {
 		return body, nil
-	case http.StatusTooManyRequests:
-		return nil, fmt.Errorf("jira: rate limited (429) — retry after a moment")
-	case http.StatusUnauthorized:
-		return nil, fmt.Errorf("jira: authentication failed — check email/token")
-	case http.StatusForbidden:
-		return nil, fmt.Errorf("jira: forbidden — insufficient permissions")
-	case http.StatusNotFound:
-		return nil, fmt.Errorf("jira: resource not found")
-	default:
-		return nil, fmt.Errorf("jira: unexpected status %d: %s", resp.StatusCode, string(body))
 	}
+	return nil, statusError(code, body)
 }
 
 // put performs a PUT request with a JSON body and returns the response body.
@@ -138,39 +156,14 @@ func (c *Client) put(path string, payload interface{}) ([]byte, error) {
 		return nil, fmt.Errorf("jira: failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPut, c.baseURL+path, bytes.NewReader(data))
+	body, code, err := c.doRequest(http.MethodPut, path, bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("jira: failed to create request: %w", err)
+		return nil, err
 	}
-	req.Header.Set("Authorization", c.authHeader)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("jira: request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("jira: failed to read response: %w", err)
-	}
-
-	switch resp.StatusCode {
-	case http.StatusOK, http.StatusNoContent:
+	if code == http.StatusOK || code == http.StatusNoContent {
 		return body, nil
-	case http.StatusTooManyRequests:
-		return nil, fmt.Errorf("jira: rate limited (429) — retry after a moment")
-	case http.StatusUnauthorized:
-		return nil, fmt.Errorf("jira: authentication failed — check email/token")
-	case http.StatusForbidden:
-		return nil, fmt.Errorf("jira: forbidden — insufficient permissions")
-	case http.StatusNotFound:
-		return nil, fmt.Errorf("jira: resource not found")
-	default:
-		return nil, fmt.Errorf("jira: unexpected status %d: %s", resp.StatusCode, string(body))
 	}
+	return nil, statusError(code, body)
 }
 
 // UpdateFields updates arbitrary fields on an issue via PUT /rest/api/2/issue/{key}.
@@ -229,36 +222,12 @@ func (c *Client) LinkIssues(inwardKey, outwardKey, linkType string) error {
 
 // get performs a GET request and returns the response body.
 func (c *Client) get(path string) ([]byte, error) {
-	req, err := http.NewRequest(http.MethodGet, c.baseURL+path, nil)
+	body, code, err := c.doRequest(http.MethodGet, path, nil)
 	if err != nil {
-		return nil, fmt.Errorf("jira: failed to create request: %w", err)
+		return nil, err
 	}
-	req.Header.Set("Authorization", c.authHeader)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("jira: request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("jira: failed to read response: %w", err)
-	}
-
-	switch resp.StatusCode {
-	case http.StatusOK:
+	if code == http.StatusOK {
 		return body, nil
-	case http.StatusTooManyRequests:
-		return nil, fmt.Errorf("jira: rate limited (429) — retry after a moment")
-	case http.StatusUnauthorized:
-		return nil, fmt.Errorf("jira: authentication failed — check email/token")
-	case http.StatusForbidden:
-		return nil, fmt.Errorf("jira: forbidden — insufficient permissions")
-	case http.StatusNotFound:
-		return nil, fmt.Errorf("jira: resource not found")
-	default:
-		return nil, fmt.Errorf("jira: unexpected status %d: %s", resp.StatusCode, string(body))
 	}
+	return nil, statusError(code, body)
 }
