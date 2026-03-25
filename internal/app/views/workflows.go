@@ -1132,7 +1132,7 @@ func (v *WorkflowsView) renderModals() string {
 			"",
 			"  The agent will work across all repo worktrees.",
 			"",
-			"  Enter: Spawn  Esc: Cancel",
+			"  Enter: Spawn  Ctrl+Enter: Newline  Esc: Cancel",
 		}
 		s.WriteString(renderModal("Spawn Agent", lines, modalWidth(v.width)))
 		s.WriteString("\n")
