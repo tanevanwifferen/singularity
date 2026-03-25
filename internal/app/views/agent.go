@@ -25,6 +25,11 @@ type jiraAgentMeta struct {
 	ActionsFile string // path to the actions JSON file
 }
 
+// savedProposalID returns the synthetic agent ID for a saved proposal by issue key.
+func savedProposalID(issueKey string) string {
+	return "saved:" + issueKey
+}
+
 // AgentInfo holds agent summary info for display
 type AgentInfo struct {
 	ID          string
@@ -91,11 +96,12 @@ type AgentView struct {
 	jiraConfirmMode  string      // "implement" (default), "refine", or "create"
 
 	// Jira refine/create agent tracking
-	jiraCfg       config.JiraConfig
-	jiraClient    *jira.Client
-	jiraAgentMeta map[string]*jiraAgentMeta // agentID -> metadata
-	approvalView  *ApprovalView
-	approvalAgent string // agentID of the agent whose approval is shown
+	jiraCfg        config.JiraConfig
+	jiraClient     *jira.Client
+	jiraAgentMeta  map[string]*jiraAgentMeta // agentID -> metadata
+	savedProposals []string                  // issue keys for orphaned .jira-actions-*.json files
+	approvalView   *ApprovalView
+	approvalAgent  string // agentID of the agent whose approval is shown
 }
 
 // NewAgentView creates a new agent console view.
@@ -219,8 +225,6 @@ func (v *AgentView) loadAgents() {
 		v.agents = append(v.agents, info)
 	}
 
-	v.filter.SetItems(v.agents)
-
 	// Reconstruct jiraAgentMeta for agents not already tracked (e.g. after restart).
 	// Refine agents have Summary "Refine: PROJ-123"; create-stories agents have
 	// Summary "Create stories: PROJ-123 ...". The actions file follows the pattern
@@ -230,8 +234,14 @@ func (v *AgentView) loadAgents() {
 			continue
 		}
 		var issueKey, mode string
-		if strings.HasPrefix(info.Summary, "Refine: ") {
-			issueKey = strings.TrimPrefix(info.Summary, "Refine: ")
+		if strings.HasPrefix(info.Summary, "Refine: ") || strings.HasPrefix(info.Summary, "Refine proposal: ") {
+			rest := info.Summary
+			if strings.HasPrefix(rest, "Refine proposal: ") {
+				rest = strings.TrimPrefix(rest, "Refine proposal: ")
+			} else {
+				rest = strings.TrimPrefix(rest, "Refine: ")
+			}
+			issueKey = rest
 			mode = "refine"
 		} else if strings.HasPrefix(info.Summary, "Create stories: ") {
 			rest := strings.TrimPrefix(info.Summary, "Create stories: ")
@@ -255,6 +265,57 @@ func (v *AgentView) loadAgents() {
 			}
 		}
 	}
+
+	// Scan repo for orphaned .jira-actions-*.json files (saved proposals from prior sessions).
+	// These are proposals whose agent is no longer in the engine pool.
+	if v.jiraAgentMeta != nil && v.repoPath != "" {
+		// Build the set of issue keys already covered by live (real) agents.
+		// Exclude synthetic saved-proposal entries so they don't mask themselves on refresh.
+		liveKeys := make(map[string]bool)
+		for agentID, meta := range v.jiraAgentMeta {
+			if !strings.HasPrefix(agentID, "saved:") {
+				liveKeys[meta.IssueKey] = true
+			}
+		}
+		// Remove stale synthetic entries from prior scans before re-populating.
+		for agentID := range v.jiraAgentMeta {
+			if strings.HasPrefix(agentID, "saved:") {
+				delete(v.jiraAgentMeta, agentID)
+			}
+		}
+		v.savedProposals = nil
+		if entries, err := os.ReadDir(v.repoPath); err == nil {
+			for _, entry := range entries {
+				name := entry.Name()
+				if !strings.HasPrefix(name, ".jira-actions-") || !strings.HasSuffix(name, ".json") {
+					continue
+				}
+				issueKey := strings.TrimSuffix(strings.TrimPrefix(name, ".jira-actions-"), ".json")
+				if issueKey == "" || liveKeys[issueKey] {
+					continue
+				}
+				actionsFile := filepath.Join(v.repoPath, name)
+				actions, err := jira.ParseJiraActions(actionsFile)
+				if err != nil || len(actions) == 0 {
+					continue
+				}
+				syntheticID := savedProposalID(issueKey)
+				v.savedProposals = append(v.savedProposals, issueKey)
+				v.jiraAgentMeta[syntheticID] = &jiraAgentMeta{
+					IssueKey:    issueKey,
+					Mode:        "refine",
+					ActionsFile: actionsFile,
+				}
+				v.agents = append(v.agents, AgentInfo{
+					ID:      syntheticID,
+					State:   engine.AgentComplete,
+					Summary: fmt.Sprintf("Saved proposal: %s (%d actions)", issueKey, len(actions)),
+				})
+			}
+		}
+	}
+
+	v.filter.SetItems(v.agents)
 
 	if v.selectedAgent != nil {
 		// Update the selected agent's info from the refreshed list
@@ -728,7 +789,19 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if v.engine != nil {
 			if item, idx := v.filter.SelectedItem(); idx >= 0 {
 				if item.State != engine.AgentRunning && item.State != engine.AgentStarting {
-					v.engine.RemoveAgent(item.ID)
+					if strings.HasPrefix(item.ID, "saved:") {
+						// Synthetic saved-proposal entry: remove from tracking, don't touch engine
+						issueKey := strings.TrimPrefix(item.ID, "saved:")
+						delete(v.jiraAgentMeta, item.ID)
+						for i, k := range v.savedProposals {
+							if k == issueKey {
+								v.savedProposals = append(v.savedProposals[:i], v.savedProposals[i+1:]...)
+								break
+							}
+						}
+					} else {
+						v.engine.RemoveAgent(item.ID)
+					}
 					if v.selectedAgent != nil && v.selectedAgent.ID == item.ID {
 						v.deselectAgent()
 					}
@@ -776,6 +849,17 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						v.approvalView.SetSize(v.width, v.height)
 						v.approvalAgent = v.selectedAgent.ID
 					}
+				}
+			}
+		}
+		return v, nil
+
+	case "R":
+		// Re-run agent on saved proposal with Jira ticket context
+		if v.selectedAgent != nil && v.jiraAgentMeta != nil && v.jiraClient != nil && v.engine != nil {
+			if meta, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
+				if v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentError || v.selectedAgent.State == engine.AgentKilled {
+					return v, v.startRefineProposalFromSaved(meta)
 				}
 			}
 		}
@@ -920,7 +1004,16 @@ func (v *AgentView) View() string {
 		if v.jiraPicker.IsAvailable() {
 			jiraHint = "  J:jira"
 		}
-		s.WriteString(th.Help.Render("n:new  K:kill  enter:view  d:close  c:clear  r:refresh" + jiraHint))
+		// Show extra hints when a saved proposal or completed Jira agent is selected
+		proposalHint := ""
+		if v.selectedAgent != nil && v.jiraAgentMeta != nil {
+			if _, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
+				if v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentError || v.selectedAgent.State == engine.AgentKilled {
+					proposalHint = "  a:review  R:re-run"
+				}
+			}
+		}
+		s.WriteString(th.Help.Render("n:new  K:kill  enter:view  d:close  c:clear  r:refresh" + jiraHint + proposalHint))
 	}
 	s.WriteString("\n")
 
@@ -1298,6 +1391,46 @@ func (v *AgentView) startCreateFromJira(issue *jira.Issue) tea.Cmd {
 			}
 		}
 		return AgentCreatedMsg{ID: id, Err: err}
+	}
+}
+
+// startRefineProposalFromSaved starts a new agent that refines an existing proposal
+// using the live Jira ticket as context. It fetches the ticket, reads the saved
+// actions file, then launches RefineProposalWithContext.
+func (v *AgentView) startRefineProposalFromSaved(meta *jiraAgentMeta) tea.Cmd {
+	if meta == nil || v.jiraClient == nil || v.engine == nil {
+		return nil
+	}
+	client := v.jiraClient
+	eng := v.engine
+	repoPath := v.repoPath
+	issueKey := meta.IssueKey
+	actionsFile := meta.ActionsFile
+
+	return func() tea.Msg {
+		issue, err := client.GetIssue(issueKey)
+		if err != nil {
+			return AgentCreatedMsg{Err: fmt.Errorf("fetching %s: %w", issueKey, err)}
+		}
+		existingActions, err := jira.ParseJiraActions(actionsFile)
+		if err != nil {
+			return AgentCreatedMsg{Err: fmt.Errorf("reading proposal: %w", err)}
+		}
+		// Write to the same file so the proposal is updated in place
+		relFile := fmt.Sprintf(".jira-actions-%s.json", issueKey)
+		id, err := jira.RefineProposalWithContext(eng, issue, existingActions, repoPath, relFile)
+		if err != nil {
+			return AgentCreatedMsg{Err: err}
+		}
+		return AgentCreatedMsg{
+			ID:  id,
+			Err: nil,
+			jiraMeta: &jiraAgentMeta{
+				IssueKey:    issueKey,
+				Mode:        "refine",
+				ActionsFile: filepath.Join(repoPath, relFile),
+			},
+		}
 	}
 }
 
