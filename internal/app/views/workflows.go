@@ -53,6 +53,10 @@ type WorkflowsView struct {
 	// Workflow cleanup confirmation
 	showWorkflowCleanup bool
 
+	// Detach all worktrees for selected workflow
+	showDetachWorkflowConfirm bool
+	detachWorkflowResult      string
+
 	// Flash messages
 	workflowStatusMsg string
 	pushResults       string
@@ -278,6 +282,7 @@ func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cm
 	v.workflowStatusMsg = ""
 	v.pushResults = ""
 	v.mrResults = ""
+	v.detachWorkflowResult = ""
 
 	// Handle Jira picker
 	if v.jiraPicker.IsOpen() {
@@ -300,6 +305,10 @@ func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cm
 	}
 
 	// Handle workflow cleanup confirmation
+	if v.showDetachWorkflowConfirm {
+		return v, v.handleDetachWorkflowConfirm(msg)
+	}
+
 	if v.showWorkflowCleanup {
 		return v, v.handleCleanupConfirm(msg)
 	}
@@ -348,6 +357,11 @@ func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cm
 		wf := v.currentWorkflow()
 		if wf != nil {
 			v.showWorkflowCleanup = true
+		}
+	case "H":
+		wf := v.currentWorkflow()
+		if wf != nil {
+			v.showDetachWorkflowConfirm = true
 		}
 	case "a":
 		v.handleStartAgent()
@@ -790,6 +804,36 @@ func (v *WorkflowsView) handleCleanupConfirm(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+func (v *WorkflowsView) handleDetachWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "y", "enter":
+		wf := v.currentWorkflow()
+		v.showDetachWorkflowConfirm = false
+		if wf == nil {
+			return nil
+		}
+		var results []string
+		for _, wr := range wf.Repos {
+			if !wr.WorktreeCreated || wr.WorktreePath == "" {
+				continue
+			}
+			if err := git.CheckoutDetached(wr.WorktreePath); err != nil {
+				results = append(results, fmt.Sprintf("✗ %s: %v", wr.RepoName, err))
+			} else {
+				results = append(results, fmt.Sprintf("✓ %s: detached", wr.RepoName))
+			}
+		}
+		if len(results) == 0 {
+			v.detachWorkflowResult = "⊘ No active worktrees to detach"
+		} else {
+			v.detachWorkflowResult = strings.Join(results, "  ")
+		}
+	case "n", "esc":
+		v.showDetachWorkflowConfirm = false
+	}
+	return nil
+}
+
 func (v *WorkflowsView) handlePushConfirm(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "y":
@@ -1210,6 +1254,29 @@ func (v *WorkflowsView) renderModals() string {
 		s.WriteString("\n")
 	}
 
+	if v.showDetachWorkflowConfirm {
+		if wf := v.currentWorkflow(); wf != nil {
+			lines := []string{
+				"",
+				fmt.Sprintf("  Branch: %s", th.InfoStyle.Render(wf.BranchName)),
+				fmt.Sprintf("  Checkout %d worktree(s) as detached HEAD?", len(wf.Repos)),
+				"",
+				"  y: Confirm  n/Esc: Cancel",
+			}
+			s.WriteString(renderModal("Detach Workflow Worktrees", lines, modalWidth(v.width)))
+			s.WriteString("\n")
+		}
+	}
+
+	if v.detachWorkflowResult != "" {
+		if strings.HasPrefix(v.detachWorkflowResult, "✗") {
+			s.WriteString(th.DashboardErrorStyle.Render(" " + v.detachWorkflowResult))
+		} else {
+			s.WriteString(th.DashboardAccentStyle.Render(" " + v.detachWorkflowResult))
+		}
+		s.WriteString("\n")
+	}
+
 	if v.showWorkflowCleanup {
 		if wf := v.currentWorkflow(); wf != nil {
 			lines := []string{
@@ -1440,7 +1507,7 @@ func (v *WorkflowsView) renderFooterHelp() string {
 		jiraHint = "  J Jira"
 	}
 	if len(v.workflows) > 0 {
-		return th.Help.Render(" w New" + jiraHint + "  a Agent  d Diff  p Push  M MRs  D Cleanup  I Import  ↑↓ Select  r Refresh")
+		return th.Help.Render(" w New" + jiraHint + "  a Agent  d Diff  p Push  M MRs  D Cleanup  H Detach  I Import  ↑↓ Select  r Refresh")
 	}
 	return th.Help.Render(" w New Workflow  I Import  r Refresh" + jiraHint)
 }
@@ -1460,7 +1527,7 @@ func (v *WorkflowsView) ShortHelp() string {
 		if v.jiraPicker.IsAvailable() {
 			jiraHint = "  J Jira ticket"
 		}
-		return fmt.Sprintf("Workflow: %s  w New%s  a Agent  d Diff  p Push  M MRs  D Cleanup  I Import", wfLabel, jiraHint)
+		return fmt.Sprintf("Workflow: %s  w New%s  a Agent  d Diff  p Push  M MRs  D Cleanup  H Detach  I Import", wfLabel, jiraHint)
 	}
 	jiraHint := ""
 	if v.jiraPicker.IsAvailable() {
@@ -1473,13 +1540,14 @@ func (v *WorkflowsView) ShortHelp() string {
 func (v *WorkflowsView) CapturesInput() bool {
 	return v.showWorkflowStart || v.showWorkflowCleanup || v.showAgentPrompt ||
 		v.showPushConfirm || v.showBatchMRConfirm || v.showMRSummary ||
+		v.showDetachWorkflowConfirm ||
 		v.jiraPicker.IsOpen() || v.jiraConfirmIssue != nil
 }
 
 // CapturesKey returns true for keys this view handles directly.
 func (v *WorkflowsView) CapturesKey(key string) bool {
 	switch key {
-	case "r", "w", "a", "p", "d", "D", "I", "M", "J", "j", "k", "up", "down", "/":
+	case "r", "w", "a", "p", "d", "D", "H", "I", "M", "J", "j", "k", "up", "down", "/":
 		return true
 	}
 	return false
@@ -1508,6 +1576,7 @@ func (v *WorkflowsView) KeyBindings() []components.KeyBinding {
 		{Key: "p", Description: "Push all repos in selected workflow"},
 		{Key: "M", Description: "Create MRs/PRs for all pushed repos"},
 		{Key: "D", Description: "Cleanup selected workflow (remove worktrees)"},
+		{Key: "H", Description: "Detach HEAD in all worktrees of selected workflow"},
 		{Key: "I", Description: "Import workflows from existing worktrees"},
 		{Key: "↑/k", Description: "Select previous workflow"},
 		{Key: "↓/j", Description: "Select next workflow"},
