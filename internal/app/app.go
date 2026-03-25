@@ -194,34 +194,29 @@ func (m *Model) loadRepo() {
 	m.initRouter()
 }
 
-// initRouter initializes the view router with available views.
-func (m *Model) initRouter() {
-	// Create the overview view as the first view (landing page)
-	// Top-level views get F-key shortcuts; git operations live in a "g" submenu
-	overview := views.NewOverviewView(m.repoPath)
-	router := NewRouter(overview, "Overview")
-	router.viewKeys["Overview"] = "f1"
-	router.keyToView["f1"] = "Overview"
+// registerCommonViews registers views shared between single-repo and project modes.
+// It registers: Branches, Commit, Log, Agents, Config, and the git operations submenu
+// views (Sync, BranchCompare, Stashes, Rebase, Worktrees, Pipeline, CreatePR).
+// Returns the AgentView for post-init wiring.
+func (m *Model) registerCommonViews(router *Router, repoPath string, startFKey int) *views.AgentView {
+	fkey := func(n int) string { return fmt.Sprintf("f%d", n) }
 
-	branchesView := views.NewBranchesView(m.repoPath)
-	router.Register("Branches", branchesView, "f2")
+	branchesView := views.NewBranchesView(repoPath)
+	router.Register("Branches", branchesView, fkey(startFKey))
 
-	commitView := views.NewCommitView(m.repoPath)
-	router.Register("Commit", commitView, "f3")
+	commitView := views.NewCommitView(repoPath)
+	router.Register("Commit", commitView, fkey(startFKey+1))
 
-	logView := views.NewLogView(m.repoPath)
-	router.Register("Log", logView, "f4")
+	logView := views.NewLogView(repoPath)
+	router.Register("Log", logView, fkey(startFKey+2))
 
 	// Register agent console view
-	if m.engine == nil {
-		m.engine = engine.New(10)
-	}
 	var contextFiles []string
 	if m.proj != nil {
 		contextFiles = m.proj.ContextFiles
 	}
-	agentView := views.NewAgentView(m.repoPath, m.engine, contextFiles)
-	router.Register("Agents", agentView, "f5")
+	agentView := views.NewAgentView(repoPath, m.engine, contextFiles)
+	router.Register("Agents", agentView, fkey(startFKey+3))
 	if m.cfg != nil {
 		agentView.SetJiraConfig(m.cfg.Jira)
 	}
@@ -229,32 +224,50 @@ func (m *Model) initRouter() {
 	// Config / settings view
 	if m.cfg != nil {
 		configView := views.NewConfigView(m.cfg)
-		router.Register("Config", configView, "f6")
+		router.Register("Config", configView, fkey(startFKey+4))
 	}
 
-	// Git operations submenu (accessible via "g" key)
-	syncView := views.NewSyncView(m.repoPath)
+	// Git operations submenu views (no F-key shortcut)
+	syncView := views.NewSyncView(repoPath)
 	router.Register("Sync", syncView)
 
-	branchCompareView := views.NewBranchComparisonView(m.repoPath)
+	branchCompareView := views.NewBranchComparisonView(repoPath)
 	router.Register("BranchCompare", branchCompareView)
 
-	stashView := views.NewStashView(m.repoPath)
+	stashView := views.NewStashView(repoPath)
 	router.Register("Stashes", stashView)
 
-	rebaseView := views.NewRebaseView(m.repoPath)
+	rebaseView := views.NewRebaseView(repoPath)
 	router.Register("Rebase", rebaseView)
 
-	worktreeView := views.NewWorktreeView(m.repoPath)
+	worktreeView := views.NewWorktreeView(repoPath)
 	worktreeView.SetEngine(m.engine)
 	router.Register("Worktrees", worktreeView)
 
-	pipelineView := views.NewPipelineView(m.repoPath)
+	pipelineView := views.NewPipelineView(repoPath)
 	router.Register("Pipeline", pipelineView)
 
-	prView := views.NewPRView(m.repoPath)
+	prView := views.NewPRView(repoPath)
 	router.Register("CreatePR", prView)
 
+	return agentView
+}
+
+// initRouter initializes the view router with available views.
+func (m *Model) initRouter() {
+	// Create the overview view as the first view (landing page)
+	overview := views.NewOverviewView(m.repoPath)
+	router := NewRouter(overview, "Overview")
+	router.viewKeys["Overview"] = "f1"
+	router.keyToView["f1"] = "Overview"
+
+	if m.engine == nil {
+		m.engine = engine.New(10)
+	}
+
+	m.registerCommonViews(router, m.repoPath, 2)
+
+	// Build git submenu items
 	gitItems := []components.SubmenuItem{
 		{Key: "s", Label: "Sync (push/pull/fetch)", ViewName: "Sync"},
 		{Key: "b", Label: "Branch Compare", ViewName: "BranchCompare"},
@@ -325,7 +338,6 @@ func (m *Model) initProjectRouter() {
 		m.proj = proj
 	}
 
-	// Create engine if not already set (same pattern as initRouter)
 	if m.engine == nil {
 		m.engine = engine.New(10)
 	}
@@ -334,7 +346,6 @@ func (m *Model) initProjectRouter() {
 	projectView := views.NewProjectView(m.proj)
 
 	router := NewRouter(projectView, "Project")
-	// Add F1 shortcut for the project view
 	router.viewKeys["Project"] = "f1"
 	router.keyToView["f1"] = "Project"
 
@@ -364,63 +375,17 @@ func (m *Model) initProjectRouter() {
 		m.repoInfo = repoInfo
 	}
 
-	// Register single-repo views that are also useful in project mode
-	branchesView := views.NewBranchesView(defaultRepoPath)
-	router.Register("Branches", branchesView, "f3")
+	// Register shared single-repo views (F3-F7, after Workflows at F2)
+	m.registerCommonViews(router, defaultRepoPath, 3)
 
-	commitView := views.NewCommitView(defaultRepoPath)
-	router.Register("Commit", commitView, "f4")
-
-	logView := views.NewLogView(defaultRepoPath)
-	router.Register("Log", logView, "f5")
-
-	// Register agent console view (shared engine so agents spawned from
-	// WorkflowsView are visible in the AgentView)
-	var contextFiles []string
-	if m.proj != nil {
-		contextFiles = m.proj.ContextFiles
-	}
-	agentView := views.NewAgentView(defaultRepoPath, m.engine, contextFiles)
-	router.Register("Agents", agentView, "f6")
-	if m.cfg != nil {
-		agentView.SetJiraConfig(m.cfg.Jira)
-	}
-
-	// Config / settings view
-	if m.cfg != nil {
-		configView := views.NewConfigView(m.cfg)
-		router.Register("Config", configView, "f7")
-	}
-
-	// Git operations submenu (accessible via "g" key)
+	// Project-specific submenu views
 	projectSyncView := views.NewProjectSyncView(m.proj)
 	router.Register("ProjectSync", projectSyncView)
 
 	projectDiffView := views.NewProjectDiffView(m.proj)
 	router.Register("ProjectDiff", projectDiffView)
 
-	syncView := views.NewSyncView(defaultRepoPath)
-	router.Register("Sync", syncView)
-
-	branchCompareView := views.NewBranchComparisonView(defaultRepoPath)
-	router.Register("BranchCompare", branchCompareView)
-
-	stashView := views.NewStashView(defaultRepoPath)
-	router.Register("Stashes", stashView)
-
-	rebaseView := views.NewRebaseView(defaultRepoPath)
-	router.Register("Rebase", rebaseView)
-
-	worktreeView := views.NewWorktreeView(defaultRepoPath)
-	worktreeView.SetEngine(m.engine)
-	router.Register("Worktrees", worktreeView)
-
-	pipelineView := views.NewPipelineView(defaultRepoPath)
-	router.Register("Pipeline", pipelineView)
-
-	prView := views.NewPRView(defaultRepoPath)
-	router.Register("CreatePR", prView)
-
+	// Build git submenu items (project-specific items first, then shared)
 	projGitItems := []components.SubmenuItem{
 		{Key: "a", Label: "Sync All Repos", ViewName: "ProjectSync"},
 		{Key: "d", Label: "Project Diff (open changes)", ViewName: "ProjectDiff"},
