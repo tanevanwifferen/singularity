@@ -119,14 +119,20 @@ type JiraView struct {
 	showFocusInput bool
 	focusInput     string
 	focusIssue     *jira.Issue
+
+	// Multi-select for batch review
+	selectedIssues  map[string]bool // issue keys that are toggled
+	showReviewInput bool
+	reviewInput     string
 }
 
 // NewJiraView creates a new Jira issues view.
 func NewJiraView(cfg config.JiraConfig) *JiraView {
 	v := &JiraView{
-		viewBase: viewBase{width: 80, height: 24},
-		cfg:      cfg,
-		client:   jira.NewClient(cfg.BaseURL, cfg.Email, cfg.APIToken),
+		viewBase:       viewBase{width: 80, height: 24},
+		cfg:            cfg,
+		client:         jira.NewClient(cfg.BaseURL, cfg.Email, cfg.APIToken),
+		selectedIssues: make(map[string]bool),
 	}
 	v.filter = components.NewFilter([]jira.Issue{}, v.renderIssueItem)
 	v.filter.SetHeight(v.height)
@@ -141,7 +147,7 @@ func (v *JiraView) SetProject(proj *project.Project) { v.proj = proj }
 
 // CapturesInput reports whether the view is consuming all keyboard input.
 func (v *JiraView) CapturesInput() bool {
-	return v.searchMode || v.showTextInput || v.showFocusInput || v.showWorkflowConfirm || v.aiMode != "" || v.approvalView != nil
+	return v.searchMode || v.showTextInput || v.showFocusInput || v.showReviewInput || v.showWorkflowConfirm || v.aiMode != "" || v.approvalView != nil
 }
 
 // Init loads issues on first display.
@@ -263,6 +269,7 @@ func (v *JiraView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.aiMode = ""
 		v.aiAgentID = ""
 		v.aiOutputEntries = nil
+		v.selectedIssues = make(map[string]bool)
 		if msg.Executed {
 			v.workflowStatusMsg = "Actions executed successfully"
 			if msg.Err != nil {
@@ -330,6 +337,11 @@ func (v *JiraView) handleJiraKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return v, v.handleFocusInput(msg)
 	}
 
+	// Review instruction input
+	if v.showReviewInput {
+		return v, v.handleReviewInput(msg)
+	}
+
 	// Text input for create mode
 	if v.showTextInput {
 		return v, v.handleTextInput(msg)
@@ -386,6 +398,25 @@ func (v *JiraView) handleJiraKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if v.filter.IsActive() {
 			v.filter.Update(msg)
 		}
+		return v, nil
+
+	case " ":
+		if item, idx := v.filter.SelectedItem(); idx >= 0 {
+			if v.selectedIssues[item.Key] {
+				delete(v.selectedIssues, item.Key)
+			} else {
+				v.selectedIssues[item.Key] = true
+			}
+		}
+		return v, nil
+
+	case "b":
+		if len(v.selectedIssues) < 2 {
+			v.workflowStatusMsg = "Select 2+ tickets with Space first"
+			return v, nil
+		}
+		v.showReviewInput = true
+		v.reviewInput = ""
 		return v, nil
 
 	case "/":
@@ -447,6 +478,40 @@ func (v *JiraView) handleFocusInput(msg tea.KeyMsg) tea.Cmd {
 			r := msg.Runes[0]
 			if r >= 32 {
 				v.focusInput += string(r)
+			}
+		}
+	}
+	return nil
+}
+
+// handleReviewInput handles keyboard input for the review instruction prompt.
+func (v *JiraView) handleReviewInput(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "enter":
+		instruction := strings.TrimSpace(v.reviewInput)
+		v.showReviewInput = false
+		v.reviewInput = ""
+		return v.startMultiReview(instruction)
+
+	case "esc":
+		v.showReviewInput = false
+		v.reviewInput = ""
+
+	case "ctrl+w":
+		v.reviewInput = components.DeleteWordEnd(v.reviewInput)
+
+	case "backspace":
+		if len(v.reviewInput) > 0 {
+			v.reviewInput = v.reviewInput[:len(v.reviewInput)-1]
+		}
+
+	default:
+		if msg.Paste && len(msg.Runes) > 0 {
+			v.reviewInput += string(msg.Runes)
+		} else if len(msg.Runes) == 1 {
+			r := msg.Runes[0]
+			if r >= 32 {
+				v.reviewInput += string(r)
 			}
 		}
 	}
@@ -873,6 +938,37 @@ func (v *JiraView) startAIFromText(text string) tea.Cmd {
 	}
 }
 
+// startMultiReview launches a big-picture review of the selected tickets.
+func (v *JiraView) startMultiReview(instruction string) tea.Cmd {
+	v.aiMode = "review"
+	v.aiAgentID = ""
+	v.aiOutputEntries = nil
+	v.aiOutputOffset = 0
+	v.approvalView = nil
+
+	eng := v.eng
+	repoPath := v.repoPath
+	if repoPath == "" && v.proj != nil && len(v.proj.Repos) > 0 {
+		repoPath = v.proj.Repos[0].Path
+	}
+
+	// Collect selected issues
+	var selected []jira.Issue
+	for _, issue := range v.issues {
+		if v.selectedIssues[issue.Key] {
+			selected = append(selected, issue)
+		}
+	}
+
+	return func() tea.Msg {
+		if eng == nil {
+			return jiraAIStartedMsg{err: fmt.Errorf("agent engine not available"), mode: "review"}
+		}
+		id, err := jira.ReviewTickets(eng, selected, repoPath, instruction, "")
+		return jiraAIStartedMsg{agentID: id, mode: "review", err: err}
+	}
+}
+
 // View renders the Jira issues view.
 func (v *JiraView) View() string {
 	th := theme.GetTheme()
@@ -894,6 +990,8 @@ func (v *JiraView) View() string {
 		modeLabel := "Refining"
 		if v.aiMode == "create" {
 			modeLabel = "Creating stories"
+		} else if v.aiMode == "review" {
+			modeLabel = "Reviewing tickets"
 		}
 		s.WriteString(th.InfoStyle.Render(fmt.Sprintf(" %s... (Esc to cancel)", modeLabel)))
 		s.WriteString("\n\n")
@@ -955,6 +1053,16 @@ func (v *JiraView) View() string {
 		s.WriteString("\n\n")
 	}
 
+	// Review instruction input
+	if v.showReviewInput {
+		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" Review %d Tickets ", len(v.selectedIssues))))
+		s.WriteString("\n")
+		s.WriteString(fmt.Sprintf(" > %s█", v.reviewInput))
+		s.WriteString("\n")
+		s.WriteString(th.Help.Render(" Custom instructions (optional) · Enter: start review · Esc: cancel "))
+		s.WriteString("\n\n")
+	}
+
 	// Text input for create mode
 	if v.showTextInput {
 		s.WriteString(th.DashboardTitle.Render(" Create Stories from Text "))
@@ -984,7 +1092,7 @@ func (v *JiraView) View() string {
 	if v.filter.IsActive() {
 		s.WriteString(v.filter.View())
 	} else {
-		s.WriteString(th.Help.Render(" / to filter • s: search • R: refresh • r: refine • c: create • Enter: detail • ↑↓: navigate "))
+		s.WriteString(th.Help.Render(" / to filter • s: search • R: refresh • r: refine • c: create • Space: select • b: review • Enter: detail • ↑↓: navigate"))
 		s.WriteString("\n\n")
 		s.WriteString(v.filter.View())
 	}
@@ -1005,7 +1113,7 @@ func (v *JiraView) View() string {
 	s.WriteString("\n")
 	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
 	s.WriteString("\n")
-	s.WriteString(th.Help.Render(" R: Refresh   s: Search   /: Filter   ↑↓: Navigate   Enter: Detail   w: Workflow   r: Refine   c: Create "))
+	s.WriteString(th.Help.Render(" R: Refresh   s: Search   /: Filter   ↑↓: Navigate   Enter: Detail   w: Workflow   r: Refine   c: Create   Space: Select   b: Review"))
 
 	return s.String()
 }
@@ -1150,6 +1258,13 @@ func (v *JiraView) renderIssueItem(issue jira.Issue, index int, selected bool) s
 		prefix = " >"
 		keyStyle = th.SelectedBranchStyle
 	}
+	if v.selectedIssues[issue.Key] {
+		if selected {
+			prefix = "▸●"
+		} else {
+			prefix = " ●"
+		}
+	}
 
 	var line strings.Builder
 	line.WriteString(keyStyle.Render(fmt.Sprintf("%s%-12s", prefix, issue.Key)))
@@ -1207,7 +1322,7 @@ func statusStyle(status string, th theme.Theme) lipgloss.Style {
 
 // ShortHelp returns a short help string.
 func (v *JiraView) ShortHelp() string {
-	return "R: Refresh  s: Search  /: Filter  r: Refine  c: Create  w: Workflow"
+	return "R: Refresh  s: Search  /: Filter  r: Refine  c: Create  w: Workflow  Space: Select  b: Review"
 }
 
 // SetSize updates the view dimensions and resizes the filter.
@@ -1230,6 +1345,8 @@ func (v *JiraView) KeyBindings() []components.KeyBinding {
 		{Key: "↑/k", Description: "Navigate up"},
 		{Key: "↓/j", Description: "Navigate down"},
 		{Key: "Enter", Description: "Show issue detail"},
+		{Key: "Space", Description: "Toggle select for review"},
+		{Key: "b", Description: "Big-picture review of selected tickets"},
 		{Key: "Esc", Description: "Back / clear filter"},
 	}
 }
