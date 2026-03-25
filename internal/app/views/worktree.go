@@ -51,6 +51,10 @@ type WorktreeView struct {
 	branches         []git.BranchInfo
 	branchFilter     *components.Filter[git.BranchInfo]
 	showBranchPicker bool
+
+	// Detach all worktrees state
+	showDetachAllConfirm bool
+	detachAllResult      string
 }
 
 // NewWorktreeView creates a new worktree view.
@@ -114,7 +118,14 @@ func (v *WorktreeView) loadData() {
 func (v *WorktreeView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Clear flash result on any key
+		if v.detachAllResult != "" {
+			v.detachAllResult = ""
+		}
 		// Handle modal states first
+		if v.showDetachAllConfirm {
+			return v, v.handleDetachAllConfirm(msg)
+		}
 		if v.showRebaseConfirm {
 			return v, v.handleRebaseConfirm(msg)
 		}
@@ -181,6 +192,9 @@ func (v *WorktreeView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "p":
 			// Show prune confirmation
 			v.showPruneConfirm = true
+		case "D":
+			// Show detach-all confirmation
+			v.showDetachAllConfirm = true
 		case "a":
 			// Start agent to merge this worktree branch into main
 			if item, idx := v.filter.SelectedItem(); idx >= 0 && item.Branch != "" {
@@ -281,6 +295,29 @@ func (v *WorktreeView) handlePruneConfirm(msg tea.KeyMsg) tea.Cmd {
 		v.showPruneConfirm = false
 	case "n", "esc":
 		v.showPruneConfirm = false
+	}
+	return nil
+}
+
+// handleDetachAllConfirm handles key events during detach-all confirmation.
+func (v *WorktreeView) handleDetachAllConfirm(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "y", "enter":
+		v.showDetachAllConfirm = false
+		var errs []string
+		for _, wt := range v.worktrees {
+			if err := git.CheckoutDetached(wt.Path); err != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", filepath.Base(wt.Path), err))
+			}
+		}
+		if len(errs) > 0 {
+			v.detachAllResult = fmt.Sprintf("✗ %s", strings.Join(errs, "; "))
+		} else {
+			v.detachAllResult = fmt.Sprintf("✓ Detached %d worktree(s)", len(v.worktrees))
+		}
+		v.loadData()
+	case "n", "esc":
+		v.showDetachAllConfirm = false
 	}
 	return nil
 }
@@ -603,9 +640,32 @@ func (v *WorktreeView) View() string {
 		s.WriteString(v.filter.View())
 	} else {
 		// Show filter hint first line
-		s.WriteString(th.Help.Render(" Press / to search • ↑/k: Select • Enter: Navigate • n: Create • d: Remove • a: Merge (agent) • R: Rebase to main (agent) • m: Create MR • p: Prune "))
+		s.WriteString(th.Help.Render(" Press / to search • ↑/k: Select • Enter: Navigate • n: Create • d: Remove • a: Merge (agent) • R: Rebase (agent) • m: MR • p: Prune • D: Detach All "))
 		s.WriteString("\n\n")
 		s.WriteString(v.filter.View())
+	}
+
+	// Detach all confirmation modal
+	if v.showDetachAllConfirm {
+		s.WriteString("\n\n")
+		s.WriteString(th.DashboardTitle.Render(" ┌─────────────────────────────────────────────┐"))
+		s.WriteString("\n")
+		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" │ Checkout all %d worktree(s) as detached HEAD? │", len(v.worktrees))))
+		s.WriteString("\n")
+		s.WriteString(th.DashboardTitle.Render(" │                        (y/n)              │"))
+		s.WriteString("\n")
+		s.WriteString(th.DashboardTitle.Render(" └─────────────────────────────────────────────┘"))
+	}
+
+	// Detach all result flash
+	if v.detachAllResult != "" {
+		s.WriteString("\n")
+		if strings.HasPrefix(v.detachAllResult, "✓") {
+			s.WriteString(th.DashboardAccentStyle.Render(" " + v.detachAllResult))
+		} else {
+			s.WriteString(th.DashboardErrorStyle.Render(" " + v.detachAllResult))
+		}
+		s.WriteString("\n")
 	}
 
 	// Rebase to main confirmation modal
@@ -692,14 +752,17 @@ func (v *WorktreeView) View() string {
 	s.WriteString("\n")
 	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
 	s.WriteString("\n")
-	s.WriteString(th.Help.Render(" r: Refresh   /: Search   ↑↓: Navigate   Enter: Navigate   n: Create   d: Remove   a: Merge (agent)   R: Rebase to main (agent)   m: Create MR   p: Prune "))
+	s.WriteString(th.Help.Render(" r: Refresh   /: Search   ↑↓: Navigate   Enter: Navigate   n: Create   d: Remove   a: Merge (agent)   R: Rebase (agent)   m: Create MR   p: Prune   D: Detach All "))
 
 	return s.String()
 }
 
 // ShortHelp returns a short help string.
 func (v *WorktreeView) ShortHelp() string {
-	return "/: Search  ↑↓: Navigate  Enter: Navigate  n: Create  d: Remove  a: Merge (agent)  R: Rebase to main (agent)  m: Create MR  p: Prune"
+	if v.showDetachAllConfirm {
+		return "y: Confirm  n/Esc: Cancel"
+	}
+	return "/: Search  ↑↓: Navigate  Enter: Navigate  n: Create  d: Remove  a: Merge (agent)  R: Rebase (agent)  m: Create MR  p: Prune  D: Detach All"
 }
 
 // fitStr pads or truncates s to exactly n runes.
@@ -744,6 +807,7 @@ func (v *WorktreeView) KeyBindings() []components.KeyBinding {
 		{Key: "R", Description: "Rebase branch to main using AI agent"},
 		{Key: "m", Description: "Create MR/PR for this worktree branch"},
 		{Key: "p", Description: "Prune stale worktrees"},
+		{Key: "D", Description: "Checkout all worktrees as detached HEAD"},
 		{Key: "Esc", Description: "Clear filter / Cancel"},
 		{Key: "1", Description: "Switch to Overview"},
 		{Key: "2", Description: "Switch to Branches"},
