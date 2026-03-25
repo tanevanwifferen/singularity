@@ -1329,32 +1329,6 @@ func (v *LogView) renderDetailDiffPanel(width int) string {
 	return s.String()
 }
 
-// wordWrap wraps text to the specified width
-func wordWrap(text string, width int) []string {
-	words := strings.Fields(text)
-	var lines []string
-	var currentLine strings.Builder
-
-	for _, word := range words {
-		if currentLine.Len()+len(word)+1 > width {
-			if currentLine.Len() > 0 {
-				lines = append(lines, currentLine.String())
-				currentLine.Reset()
-			}
-		}
-		if currentLine.Len() > 0 {
-			currentLine.WriteString(" ")
-		}
-		currentLine.WriteString(word)
-	}
-
-	if currentLine.Len() > 0 {
-		lines = append(lines, currentLine.String())
-	}
-
-	return lines
-}
-
 // ShortHelp returns a short help string.
 func (v *LogView) ShortHelp() string {
 	if v.showDetail {

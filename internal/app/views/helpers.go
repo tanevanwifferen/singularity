@@ -66,5 +66,62 @@ func wrapText(text string, width int) []string {
 	return lines
 }
 
+// wordWrap wraps text to the specified width, breaking at word boundaries.
+func wordWrap(text string, width int) []string {
+	words := strings.Fields(text)
+	var lines []string
+	var currentLine strings.Builder
+
+	for _, word := range words {
+		if currentLine.Len()+len(word)+1 > width {
+			if currentLine.Len() > 0 {
+				lines = append(lines, currentLine.String())
+				currentLine.Reset()
+			}
+		}
+		if currentLine.Len() > 0 {
+			currentLine.WriteString(" ")
+		}
+		currentLine.WriteString(word)
+	}
+
+	if currentLine.Len() > 0 {
+		lines = append(lines, currentLine.String())
+	}
+
+	return lines
+}
+
+// wrapLine wraps a line to fit within maxWidth, preserving a prefix on continuation lines.
+func wrapLine(line string, maxWidth int, contPrefix string) []string {
+	if maxWidth <= 0 || len(line) <= maxWidth {
+		return []string{line}
+	}
+	var wrapped []string
+	for len(line) > 0 {
+		cut := maxWidth
+		if len(wrapped) > 0 {
+			cut = maxWidth - len(contPrefix)
+			if cut <= 0 {
+				cut = maxWidth
+			}
+		}
+		if cut >= len(line) {
+			if len(wrapped) > 0 {
+				line = contPrefix + line
+			}
+			wrapped = append(wrapped, line)
+			break
+		}
+		chunk := line[:cut]
+		if len(wrapped) > 0 {
+			chunk = contPrefix + chunk
+		}
+		wrapped = append(wrapped, chunk)
+		line = line[cut:]
+	}
+	return wrapped
+}
+
 // DeleteWordEnd is re-exported from components for convenience.
 var DeleteWordEnd = components.DeleteWordEnd
