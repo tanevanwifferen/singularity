@@ -34,8 +34,8 @@ type RebaseView struct {
 	baseBranch string
 
 	// Modal states
-	showExecConfirm     bool
-	showAbortConfirm    bool
+	execConfirm         components.ConfirmPrompt
+	abortConfirm        components.ConfirmPrompt
 	showConflictModal   bool
 	showContinueConfirm bool
 
@@ -108,11 +108,11 @@ func (v *RebaseView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.showBranchSelect {
 			return v, v.handleBranchSelect(msg)
 		}
-		if v.showExecConfirm {
-			return v, v.handleExecConfirm(msg)
+		if handled, cmd := v.execConfirm.HandleKey(msg); handled {
+			return v, cmd
 		}
-		if v.showAbortConfirm {
-			return v, v.handleAbortConfirm(msg)
+		if handled, cmd := v.abortConfirm.HandleKey(msg); handled {
+			return v, cmd
 		}
 		if v.showConflictModal {
 			return v, v.handleConflictModal(msg)
@@ -152,13 +152,17 @@ func (v *RebaseView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			// Show exec confirmation
 			if len(v.commits) > 0 && !v.executing {
-				v.showExecConfirm = true
+				v.execConfirm.Show("Execute Rebase",
+					fmt.Sprintf("Execute interactive rebase?\nBase: %s -> %s\nThis will modify your branch history!", v.baseBranch, v.repo.CurrentBranch),
+					func() tea.Cmd { return v.executeRebase() })
 			}
 
 		case "x":
 			// Abort any in-progress rebase
 			if v.isRebaseInProgress() {
-				v.showAbortConfirm = true
+				v.abortConfirm.Show("Abort Rebase",
+					"Abort current rebase?\nThis will discard all rebase changes!",
+					func() tea.Cmd { return v.abortRebase() })
 			}
 
 		case "c":
@@ -257,30 +261,6 @@ func (v *RebaseView) handleBranchSelect(msg tea.KeyMsg) tea.Cmd {
 		if v.branchCursor < len(v.branches)-1 {
 			v.branchCursor++
 		}
-	}
-	return nil
-}
-
-// handleExecConfirm handles key events during execution confirmation.
-func (v *RebaseView) handleExecConfirm(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
-	case "y", "enter":
-		v.showExecConfirm = false
-		return v.executeRebase()
-	case "n", "esc":
-		v.showExecConfirm = false
-	}
-	return nil
-}
-
-// handleAbortConfirm handles key events during abort confirmation.
-func (v *RebaseView) handleAbortConfirm(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
-	case "y", "enter":
-		v.showAbortConfirm = false
-		return v.abortRebase()
-	case "n", "esc":
-		v.showAbortConfirm = false
 	}
 	return nil
 }
@@ -806,8 +786,7 @@ func (v *RebaseView) View() string {
 
 		// Right column - Todo list preview
 		s.WriteString("\n")
-		s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-		s.WriteString("\n")
+		s.WriteString(renderSeparator())
 		s.WriteString(v.renderTodoList())
 
 		// Operation legend
@@ -850,8 +829,7 @@ func (v *RebaseView) View() string {
 		// No commits yet
 		s.WriteString(th.MutedTextStyle.Render(" Select a base branch to see commits.\n"))
 		s.WriteString(th.MutedTextStyle.Render(" Use [b] to select base branch.\n\n"))
-		s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-		s.WriteString("\n")
+		s.WriteString(renderSeparator())
 		s.WriteString(th.Help.Render(" b: Select base branch"))
 	}
 
@@ -865,8 +843,7 @@ func (v *RebaseView) View() string {
 
 	// Footer
 	s.WriteString("\n")
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 	s.WriteString(v.renderDynamicHelp())
 
 	return s.String()
@@ -877,29 +854,14 @@ func (v *RebaseView) renderModals() string {
 	th := theme.GetTheme()
 	var s strings.Builder
 
-	if v.showExecConfirm {
-		lines := []string{
-			"",
-			"  Execute interactive rebase?",
-			fmt.Sprintf("  Base: %s → %s", v.baseBranch, v.repo.CurrentBranch),
-			"  This will modify your branch history!",
-			"",
-			"  Type 'y' to confirm:",
-		}
+	if v.execConfirm.Visible {
 		s.WriteString("\n\n")
-		s.WriteString(renderModal("Execute Rebase", lines, modalWidth(v.width)))
+		s.WriteString(v.execConfirm.Render(modalWidth(v.width)))
 	}
 
-	if v.showAbortConfirm {
-		lines := []string{
-			"",
-			"  Abort current rebase?",
-			"  This will discard all rebase changes!",
-			"",
-			"  Type 'y' to confirm:",
-		}
+	if v.abortConfirm.Visible {
 		s.WriteString("\n\n")
-		s.WriteString(renderModal("Abort Rebase", lines, modalWidth(v.width)))
+		s.WriteString(v.abortConfirm.Render(modalWidth(v.width)))
 	}
 
 	if v.showConflictModal {

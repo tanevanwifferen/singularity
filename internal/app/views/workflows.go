@@ -45,13 +45,12 @@ type WorkflowsView struct {
 	filter           *components.Filter[*project.FeatureWorkflow]
 
 	// Workflow start modal
-	showWorkflowStart        bool
-	workflowBranchName       string
-	workflowBranchNameCursor int
-	workflowBaseDir          string
+	showWorkflowStart   bool
+	workflowBranchInput components.TextInput
+	workflowBaseDir     string
 
 	// Workflow cleanup confirmation
-	showWorkflowCleanup bool
+	cleanupConfirm components.ConfirmPrompt
 
 	// Detach all worktrees for selected workflow
 	showDetachWorkflowConfirm bool
@@ -63,29 +62,27 @@ type WorkflowsView struct {
 	mrResults         string
 
 	// Batch push state
-	showPushConfirm bool
-	pushableRepos   []string // repos with commits to push (computed async)
+	pushConfirm   components.ConfirmPrompt
+	pushableRepos []string // repos with commits to push (computed async)
 
 	// Batch MR creation state
-	showBatchMRConfirm bool
-	showMRSummary      bool
-	mrSummaryLines     []string
+	batchMRConfirm components.ConfirmPrompt
+	showMRSummary  bool
+	mrSummaryLines []string
 
 	// Agent orchestration
-	engine            *engine.Engine
-	showAgentPrompt   bool
-	agentPromptText   string
-	agentPromptCursor int
+	engine           *engine.Engine
+	showAgentPrompt  bool
+	agentPromptInput components.TextInput
 
 	// Auto-refresh tick for live agent status
 	workflowTicking   bool
 	workflowAgentSnap *engine.AgentSnapshot
 
 	// Jira ticket picker
-	jiraPicker         *JiraPickerState
-	jiraConfirmIssue   *jira.Issue // issue pending workflow-start confirmation
-	jiraExtraMsg       string      // optional extra instructions for the agent
-	jiraExtraMsgCursor int
+	jiraPicker       *JiraPickerState
+	jiraConfirmIssue *jira.Issue          // issue pending workflow-start confirmation
+	jiraExtraInput   components.TextInput // optional extra instructions for the agent
 
 	// Drill-down diff view
 	workflowDiffView *WorkflowDiffView
@@ -309,13 +306,13 @@ func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cm
 		return v, v.handleDetachWorkflowConfirm(msg)
 	}
 
-	if v.showWorkflowCleanup {
-		return v, v.handleCleanupConfirm(msg)
+	if handled, cmd := v.cleanupConfirm.HandleKey(msg); handled {
+		return v, cmd
 	}
 
 	// Handle batch push confirmation
-	if v.showPushConfirm {
-		return v, v.handlePushConfirm(msg)
+	if handled, cmd := v.pushConfirm.HandleKey(msg); handled {
+		return v, cmd
 	}
 
 	// Handle MR summary panel
@@ -324,8 +321,8 @@ func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cm
 	}
 
 	// Handle batch MR creation confirmation
-	if v.showBatchMRConfirm {
-		return v, v.handleBatchMRConfirm(msg)
+	if handled, cmd := v.batchMRConfirm.HandleKey(msg); handled {
+		return v, cmd
 	}
 
 	// If filter is active, let it handle keys
@@ -345,8 +342,7 @@ func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cm
 		)
 	case "w":
 		v.showWorkflowStart = true
-		v.workflowBranchName = ""
-		v.workflowBranchNameCursor = 0
+		v.workflowBranchInput.Clear()
 
 	case "J":
 		// Open Jira ticket picker to create a workflow from a ticket
@@ -356,7 +352,18 @@ func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cm
 	case "D":
 		wf := v.currentWorkflow()
 		if wf != nil {
-			v.showWorkflowCleanup = true
+			v.cleanupConfirm.Show("Remove Worktrees",
+				fmt.Sprintf("Branch: %s\nThis will remove all worktrees and delete\nthe '%s' branch from all repos.", wf.BranchName, wf.BranchName),
+				func() tea.Cmd {
+					wf := v.currentWorkflow()
+					if wf == nil {
+						return nil
+					}
+					return func() tea.Msg {
+						wf.RemoveAllWorktrees()
+						return RefreshDoneMsg{}
+					}
+				})
 		}
 	case "H":
 		wf := v.currentWorkflow()
@@ -433,7 +440,20 @@ func (v *WorkflowsView) handleWorkflowsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			v.pushableRepos = msg.repos
 			sort.Strings(v.pushableRepos)
-			v.showPushConfirm = true
+			v.pushConfirm.ShowWithCancel("Push All Repos",
+				fmt.Sprintf("Push %d repo(s) to remote?", len(v.pushableRepos)),
+				func() tea.Cmd {
+					wf := v.currentWorkflow()
+					v.pushableRepos = nil
+					if wf == nil {
+						return nil
+					}
+					return func() tea.Msg {
+						wf.PushAll()
+						return pushDoneMsg{}
+					}
+				},
+				func() { v.pushableRepos = nil })
 		}
 
 	case pushDoneMsg:
@@ -504,56 +524,24 @@ func (v *WorkflowsView) handleJiraWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
 		issue := v.jiraConfirmIssue
-		extraMsg := v.jiraExtraMsg
+		extraMsg := v.jiraExtraInput.Value
 		v.jiraConfirmIssue = nil
-		v.jiraExtraMsg = ""
-		v.jiraExtraMsgCursor = 0
+		v.jiraExtraInput.Clear()
 		return v.startWorkflowFromJira(issue, extraMsg)
 	case "e":
 		wf := v.currentWorkflow()
 		if wf != nil {
 			issue := v.jiraConfirmIssue
-			extraMsg := v.jiraExtraMsg
+			extraMsg := v.jiraExtraInput.Value
 			v.jiraConfirmIssue = nil
-			v.jiraExtraMsg = ""
-			v.jiraExtraMsgCursor = 0
+			v.jiraExtraInput.Clear()
 			return v.startWorkflowFromJiraOnExisting(issue, wf, extraMsg)
 		}
 	case "esc":
 		v.jiraConfirmIssue = nil
-		v.jiraExtraMsg = ""
-		v.jiraExtraMsgCursor = 0
-	case "left", "ctrl+b":
-		if v.jiraExtraMsgCursor > 0 {
-			v.jiraExtraMsgCursor--
-		}
-	case "right", "ctrl+f":
-		if v.jiraExtraMsgCursor < len(v.jiraExtraMsg) {
-			v.jiraExtraMsgCursor++
-		}
-	case "home", "ctrl+a":
-		v.jiraExtraMsgCursor = 0
-	case "end", "ctrl+e":
-		v.jiraExtraMsgCursor = len(v.jiraExtraMsg)
-	case "ctrl+w":
-		v.jiraExtraMsg, v.jiraExtraMsgCursor = components.DeleteWord(v.jiraExtraMsg, v.jiraExtraMsgCursor)
-	case "backspace":
-		if v.jiraExtraMsgCursor > 0 {
-			v.jiraExtraMsg = v.jiraExtraMsg[:v.jiraExtraMsgCursor-1] + v.jiraExtraMsg[v.jiraExtraMsgCursor:]
-			v.jiraExtraMsgCursor--
-		}
+		v.jiraExtraInput.Clear()
 	default:
-		if msg.Paste && len(msg.Runes) > 0 {
-			inserted := string(msg.Runes)
-			v.jiraExtraMsg = v.jiraExtraMsg[:v.jiraExtraMsgCursor] + inserted + v.jiraExtraMsg[v.jiraExtraMsgCursor:]
-			v.jiraExtraMsgCursor += len(inserted)
-		} else if len(msg.Runes) == 1 {
-			r := msg.Runes[0]
-			if r >= 32 {
-				v.jiraExtraMsg = v.jiraExtraMsg[:v.jiraExtraMsgCursor] + string(r) + v.jiraExtraMsg[v.jiraExtraMsgCursor:]
-				v.jiraExtraMsgCursor++
-			}
-		}
+		v.jiraExtraInput.HandleKey(msg)
 	}
 	return nil
 }
@@ -679,12 +667,11 @@ func buildWorkflowCommitInstructions(wf *project.FeatureWorkflow) string {
 func (v *WorkflowsView) handleWorkflowStartInput(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
-		if v.workflowBranchName != "" && v.proj != nil {
-			branchName := v.workflowBranchName
+		if v.workflowBranchInput.Value != "" && v.proj != nil {
+			branchName := v.workflowBranchInput.Value
 			baseDir := v.workflowBaseDir
 			v.showWorkflowStart = false
-			v.workflowBranchName = ""
-			v.workflowBranchNameCursor = 0
+			v.workflowBranchInput.Clear()
 			wf := project.NewFeatureWorkflow(v.proj, branchName, baseDir)
 			v.workflows = append(v.workflows, wf)
 			v.selectedWorkflow = len(v.workflows) - 1
@@ -697,39 +684,9 @@ func (v *WorkflowsView) handleWorkflowStartInput(msg tea.KeyMsg) tea.Cmd {
 		v.showWorkflowStart = false
 	case "esc":
 		v.showWorkflowStart = false
-		v.workflowBranchName = ""
-		v.workflowBranchNameCursor = 0
-	case "left", "ctrl+b":
-		if v.workflowBranchNameCursor > 0 {
-			v.workflowBranchNameCursor--
-		}
-	case "right", "ctrl+f":
-		if v.workflowBranchNameCursor < len(v.workflowBranchName) {
-			v.workflowBranchNameCursor++
-		}
-	case "home", "ctrl+a":
-		v.workflowBranchNameCursor = 0
-	case "end", "ctrl+e":
-		v.workflowBranchNameCursor = len(v.workflowBranchName)
-	case "backspace":
-		if v.workflowBranchNameCursor > 0 {
-			v.workflowBranchName = v.workflowBranchName[:v.workflowBranchNameCursor-1] + v.workflowBranchName[v.workflowBranchNameCursor:]
-			v.workflowBranchNameCursor--
-		}
-	case "ctrl+w":
-		v.workflowBranchName, v.workflowBranchNameCursor = components.DeleteWord(v.workflowBranchName, v.workflowBranchNameCursor)
+		v.workflowBranchInput.Clear()
 	default:
-		if msg.Paste && len(msg.Runes) > 0 {
-			inserted := string(msg.Runes)
-			v.workflowBranchName = v.workflowBranchName[:v.workflowBranchNameCursor] + inserted + v.workflowBranchName[v.workflowBranchNameCursor:]
-			v.workflowBranchNameCursor += len(inserted)
-		} else if len(msg.Runes) == 1 {
-			r := msg.Runes[0]
-			if r >= 32 && r <= 126 {
-				v.workflowBranchName = v.workflowBranchName[:v.workflowBranchNameCursor] + string(r) + v.workflowBranchName[v.workflowBranchNameCursor:]
-				v.workflowBranchNameCursor++
-			}
-		}
+		v.workflowBranchInput.HandleKey(msg)
 	}
 	return nil
 }
@@ -737,11 +694,10 @@ func (v *WorkflowsView) handleWorkflowStartInput(msg tea.KeyMsg) tea.Cmd {
 func (v *WorkflowsView) handleAgentPromptInput(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
-		if v.agentPromptText != "" && v.engine != nil && v.currentWorkflow() != nil {
-			promptText := v.agentPromptText
+		if v.agentPromptInput.Value != "" && v.engine != nil && v.currentWorkflow() != nil {
+			promptText := v.agentPromptInput.Value
 			v.showAgentPrompt = false
-			v.agentPromptText = ""
-			v.agentPromptCursor = 0
+			v.agentPromptInput.Clear()
 			v.spawnAgentForWorkflow(promptText)
 			v.refreshWorkflowAgentSnap()
 			return v.ensureWorkflowTick()
@@ -749,57 +705,9 @@ func (v *WorkflowsView) handleAgentPromptInput(msg tea.KeyMsg) tea.Cmd {
 		v.showAgentPrompt = false
 	case "esc":
 		v.showAgentPrompt = false
-		v.agentPromptText = ""
-		v.agentPromptCursor = 0
-	case "left", "ctrl+b":
-		if v.agentPromptCursor > 0 {
-			v.agentPromptCursor--
-		}
-	case "right", "ctrl+f":
-		if v.agentPromptCursor < len(v.agentPromptText) {
-			v.agentPromptCursor++
-		}
-	case "home", "ctrl+a":
-		v.agentPromptCursor = 0
-	case "end", "ctrl+e":
-		v.agentPromptCursor = len(v.agentPromptText)
-	case "backspace":
-		if v.agentPromptCursor > 0 {
-			v.agentPromptText = v.agentPromptText[:v.agentPromptCursor-1] + v.agentPromptText[v.agentPromptCursor:]
-			v.agentPromptCursor--
-		}
-	case "ctrl+w":
-		v.agentPromptText, v.agentPromptCursor = components.DeleteWord(v.agentPromptText, v.agentPromptCursor)
+		v.agentPromptInput.Clear()
 	default:
-		if msg.Paste && len(msg.Runes) > 0 {
-			inserted := string(msg.Runes)
-			v.agentPromptText = v.agentPromptText[:v.agentPromptCursor] + inserted + v.agentPromptText[v.agentPromptCursor:]
-			v.agentPromptCursor += len(inserted)
-		} else if len(msg.Runes) == 1 {
-			r := msg.Runes[0]
-			if r >= 32 && r <= 126 {
-				v.agentPromptText = v.agentPromptText[:v.agentPromptCursor] + string(r) + v.agentPromptText[v.agentPromptCursor:]
-				v.agentPromptCursor++
-			}
-		}
-	}
-	return nil
-}
-
-func (v *WorkflowsView) handleCleanupConfirm(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
-	case "y":
-		wf := v.currentWorkflow()
-		v.showWorkflowCleanup = false
-		if wf == nil {
-			return nil
-		}
-		return func() tea.Msg {
-			wf.RemoveAllWorktrees()
-			return RefreshDoneMsg{}
-		}
-	case "n", "esc":
-		v.showWorkflowCleanup = false
+		v.agentPromptInput.HandleKey(msg)
 	}
 	return nil
 }
@@ -835,26 +743,6 @@ func (v *WorkflowsView) handleDetachWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "n", "esc":
 		v.showDetachWorkflowConfirm = false
-	}
-	return nil
-}
-
-func (v *WorkflowsView) handlePushConfirm(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
-	case "y":
-		wf := v.currentWorkflow()
-		v.showPushConfirm = false
-		v.pushableRepos = nil
-		if wf == nil {
-			return nil
-		}
-		return func() tea.Msg {
-			wf.PushAll()
-			return pushDoneMsg{}
-		}
-	case "n", "esc":
-		v.showPushConfirm = false
-		v.pushableRepos = nil
 	}
 	return nil
 }
@@ -902,24 +790,6 @@ func (v *WorkflowsView) buildMRSummaryText(wf *project.FeatureWorkflow) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func (v *WorkflowsView) handleBatchMRConfirm(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
-	case "y":
-		wf := v.currentWorkflow()
-		v.showBatchMRConfirm = false
-		if wf == nil {
-			return nil
-		}
-		return func() tea.Msg {
-			wf.CreateAllMRs()
-			return mrDoneMsg{}
-		}
-	case "n", "esc":
-		v.showBatchMRConfirm = false
-	}
-	return nil
-}
-
 // --- Key action helpers ---
 
 func (v *WorkflowsView) handleStartAgent() {
@@ -934,8 +804,7 @@ func (v *WorkflowsView) handleStartAgent() {
 		}
 		if hasWorktree {
 			v.showAgentPrompt = true
-			v.agentPromptText = ""
-			v.agentPromptCursor = 0
+			v.agentPromptInput.Clear()
 		} else {
 			v.workflowStatusMsg = "No worktrees created yet -- create worktrees first"
 		}
@@ -981,7 +850,18 @@ func (v *WorkflowsView) handleStartBatchMR() {
 	if !hasPushed {
 		v.mrResults = "No repos have been pushed yet"
 	} else {
-		v.showBatchMRConfirm = true
+		v.batchMRConfirm.Show("Create MRs/PRs",
+			fmt.Sprintf("Branch: %s\nCreate MRs/PRs for pushed repos.", wf.BranchName),
+			func() tea.Cmd {
+				wf := v.currentWorkflow()
+				if wf == nil {
+					return nil
+				}
+				return func() tea.Msg {
+					wf.CreateAllMRs()
+					return mrDoneMsg{}
+				}
+			})
 	}
 }
 
@@ -1186,8 +1066,7 @@ func (v *WorkflowsView) View() string {
 
 	// Footer
 	s.WriteString("\n")
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 	s.WriteString(v.renderFooterHelp())
 
 	return s.String()
@@ -1198,7 +1077,7 @@ func (v *WorkflowsView) renderJiraConfirmModal() string {
 	th := theme.GetTheme()
 	issue := v.jiraConfirmIssue
 	branch := issueToBranchName(issue)
-	input := v.jiraExtraMsg[:v.jiraExtraMsgCursor] + "█" + v.jiraExtraMsg[v.jiraExtraMsgCursor:]
+	input := v.jiraExtraInput.RenderPlain()
 	lines := []string{
 		"",
 		fmt.Sprintf("  Ticket: %s — %s", th.DashboardAccentStyle.Render(issue.Key), issue.Summary),
@@ -1225,7 +1104,7 @@ func (v *WorkflowsView) renderModals() string {
 	if v.showWorkflowStart {
 		lines := []string{
 			"",
-			fmt.Sprintf("  Branch name: %s%s%s", th.InfoStyle.Render(v.workflowBranchName[:v.workflowBranchNameCursor]), th.MutedTextStyle.Render("_"), th.InfoStyle.Render(v.workflowBranchName[v.workflowBranchNameCursor:])),
+			fmt.Sprintf("  Branch name: %s", v.workflowBranchInput.Render(th.InfoStyle)),
 			"",
 			"  This creates worktrees for all repos in the",
 			fmt.Sprintf("  project under %s/<branch>/", v.workflowBaseDir),
@@ -1249,7 +1128,7 @@ func (v *WorkflowsView) renderModals() string {
 			fmt.Sprintf("  Workflow: %s", th.InfoStyle.Render(wfName)),
 			fmt.Sprintf("  Working dir: %s", th.MutedTextStyle.Render(wfDir)),
 			"",
-			fmt.Sprintf("  Task: %s%s%s", th.InfoStyle.Render(v.agentPromptText[:v.agentPromptCursor]), th.MutedTextStyle.Render("_"), th.InfoStyle.Render(v.agentPromptText[v.agentPromptCursor:])),
+			fmt.Sprintf("  Task: %s", v.agentPromptInput.Render(th.InfoStyle)),
 			"",
 			"  The agent will work across all repo worktrees.",
 			"",
@@ -1259,6 +1138,7 @@ func (v *WorkflowsView) renderModals() string {
 		s.WriteString("\n")
 	}
 
+<<<<<<< HEAD
 	if v.showDetachWorkflowConfirm {
 		if wf := v.currentWorkflow(); wf != nil {
 			lines := []string{
@@ -1283,50 +1163,19 @@ func (v *WorkflowsView) renderModals() string {
 		s.WriteString("\n")
 	}
 
-	if v.showWorkflowCleanup {
-		if wf := v.currentWorkflow(); wf != nil {
-			lines := []string{
-				"",
-				fmt.Sprintf("  Branch: %s", th.InfoStyle.Render(wf.BranchName)),
-				"  This will remove all worktrees and delete",
-				fmt.Sprintf("  the '%s' branch from all repos.", wf.BranchName),
-				"",
-				"  y: Confirm  Esc: Cancel",
-			}
-			s.WriteString(renderModal("Remove Worktrees", lines, modalWidth(v.width)))
-			s.WriteString("\n")
-		}
+	if v.cleanupConfirm.Visible {
+		s.WriteString(v.cleanupConfirm.Render(modalWidth(v.width)))
+		s.WriteString("\n")
 	}
 
-	if v.showPushConfirm {
-		if wf := v.currentWorkflow(); wf != nil {
-			lines := []string{
-				"",
-				fmt.Sprintf("  Branch: %s", th.InfoStyle.Render(wf.BranchName)),
-				fmt.Sprintf("  Push %d repo(s):", len(v.pushableRepos)),
-			}
-			for _, name := range v.pushableRepos {
-				lines = append(lines, fmt.Sprintf("    • %s", name))
-			}
-			lines = append(lines, "", "  y: Confirm  n: Cancel")
-			s.WriteString(renderModal("Push All Repos", lines, modalWidth(v.width)))
-			s.WriteString("\n")
-		}
+	if v.pushConfirm.Visible {
+		s.WriteString(v.pushConfirm.Render(modalWidth(v.width)))
+		s.WriteString("\n")
 	}
 
-	if v.showBatchMRConfirm {
-		if wf := v.currentWorkflow(); wf != nil {
-			st := wf.Status()
-			lines := []string{
-				"",
-				fmt.Sprintf("  Branch: %s", th.InfoStyle.Render(wf.BranchName)),
-				fmt.Sprintf("  Create MRs/PRs for %d pushed repos.", st.Pushed),
-				"",
-				"  y: Confirm  n: Cancel",
-			}
-			s.WriteString(renderModal("Create MRs/PRs", lines, modalWidth(v.width)))
-			s.WriteString("\n")
-		}
+	if v.batchMRConfirm.Visible {
+		s.WriteString(v.batchMRConfirm.Render(modalWidth(v.width)))
+		s.WriteString("\n")
 	}
 
 	if v.showMRSummary && len(v.mrSummaryLines) > 0 {
@@ -1384,8 +1233,7 @@ func (v *WorkflowsView) renderWorkflowList() string {
 
 	s.WriteString(th.StatsStyle.Render(fmt.Sprintf(" %d workflow(s)", len(v.workflows))))
 	s.WriteString("\n")
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 
 	for i, wf := range v.workflows {
 		selected := i == v.selectedWorkflow
@@ -1544,8 +1392,8 @@ func (v *WorkflowsView) ShortHelp() string {
 
 // CapturesInput returns true when the view is in an input mode.
 func (v *WorkflowsView) CapturesInput() bool {
-	return v.showWorkflowStart || v.showWorkflowCleanup || v.showAgentPrompt ||
-		v.showPushConfirm || v.showBatchMRConfirm || v.showMRSummary ||
+	return v.showWorkflowStart || v.cleanupConfirm.Visible || v.showAgentPrompt ||
+		v.pushConfirm.Visible || v.batchMRConfirm.Visible || v.showMRSummary ||
 		v.showDetachWorkflowConfirm ||
 		v.jiraPicker.IsOpen() || v.jiraConfirmIssue != nil
 }

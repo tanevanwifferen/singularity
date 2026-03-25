@@ -431,8 +431,7 @@ func (v *StashView) View() string {
 	// Preview panel
 	if v.showPreview && v.previewStash != nil {
 		s.WriteString("\n")
-		s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-		s.WriteString("\n")
+		s.WriteString(renderSeparator())
 		s.WriteString(th.DashboardTitle.Render(" Stash Preview "))
 		s.WriteString("\n\n")
 
@@ -535,8 +534,7 @@ func (v *StashView) View() string {
 
 	// Footer
 	s.WriteString("\n")
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 	s.WriteString(th.Help.Render(" r: Refresh   /: Search   ↑↓: Navigate   Enter: Preview   a: Apply   p: Pop   d: Drop   n: New   D: Clear All "))
 
 	return s.String()

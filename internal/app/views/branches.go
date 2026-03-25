@@ -488,8 +488,7 @@ func (v *BranchesView) View() string {
 	// Comparison panel
 	if v.showCompare && v.compareBranch != nil {
 		s.WriteString("\n")
-		s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-		s.WriteString("\n")
+		s.WriteString(renderSeparator())
 		s.WriteString(th.DashboardTitle.Render(" Branch Comparison "))
 		s.WriteString("\n\n")
 
@@ -551,8 +550,7 @@ func (v *BranchesView) View() string {
 
 	// Footer
 	s.WriteString("\n")
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 	s.WriteString(th.Help.Render(" r: Refresh   /: Search   ↑↓: Navigate   Enter: Compare   c: Checkout   d: Delete   n: Create   R: Refresh CI "))
 
 	return s.String()

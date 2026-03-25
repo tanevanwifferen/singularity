@@ -1116,8 +1116,7 @@ func (v *JiraView) View() string {
 
 	// Footer
 	s.WriteString("\n")
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 	s.WriteString(th.Help.Render(" R: Refresh   s: Search   /: Filter   ↑↓: Navigate   Enter: Detail   w: Workflow   r: Refine   c: Create   Space: Select   b: Review"))
 
 	return s.String()

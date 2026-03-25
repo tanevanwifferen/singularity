@@ -433,8 +433,7 @@ func (v *ProjectSyncView) View() string {
 func (v *ProjectSyncView) renderRepoStatuses(s *strings.Builder, th theme.Theme) {
 	s.WriteString(th.StatsStyle.Render(" Repository Status "))
 	s.WriteString("\n")
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 
 	if len(v.repoStatuses) == 0 {
 		s.WriteString(th.StatsStyle.Render(" No repositories"))

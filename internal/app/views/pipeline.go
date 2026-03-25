@@ -279,8 +279,7 @@ func (v *PipelineView) View() string {
 	// Expanded branch details
 	if v.expandedBranch != "" {
 		s.WriteString("\n")
-		s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-		s.WriteString("\n")
+		s.WriteString(renderSeparator())
 		s.WriteString(v.renderExpandedDetails())
 	}
 

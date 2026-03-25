@@ -973,8 +973,7 @@ func (v *ProjectView) View() string {
 	// Repos header
 	s.WriteString(th.StatsStyle.Render(" Repositories "))
 	s.WriteString("\n")
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 
 	// Tree list
 	if v.status != nil && len(v.status.Repos) > 0 {
@@ -986,8 +985,7 @@ func (v *ProjectView) View() string {
 	s.WriteString("\n")
 
 	// Footer
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 	s.WriteString(th.Help.Render("⚡current  ✓synced  ↑ahead  ↓behind  ⊘no remote  ●dirty  ✗error"))
 	s.WriteString("\n")
 	s.WriteString(v.renderFooterHelp())

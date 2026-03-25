@@ -267,8 +267,7 @@ func (v *BranchComparisonView) View() string {
 	s.WriteString("\n")
 
 	// Footer
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 	s.WriteString(th.Help.Render(" ↑↓: Select branch   Enter/Tab: Switch comparison   Esc: Back to branches   r: Refresh "))
 
 	return s.String()

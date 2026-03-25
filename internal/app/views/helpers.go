@@ -9,6 +9,12 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// renderSeparator renders the standard section separator line with newline.
+func renderSeparator() string {
+	th := theme.GetTheme()
+	return th.StatsStyle.Render(" ──────────────────────────────────────────────── ") + "\n"
+}
+
 // renderModal renders content inside a box-drawing border.
 func renderModal(title string, lines []string, width int) string {
 	if width < 20 {
