@@ -97,6 +97,8 @@ func (t *TextInput) HandleKey(msg tea.KeyMsg) bool {
 		t.Delete()
 	case "ctrl+w":
 		t.DeleteWord()
+	case "ctrl+enter":
+		t.Insert("\n")
 	default:
 		if msg.Paste && len(msg.Runes) > 0 {
 			t.Insert(string(msg.Runes))
