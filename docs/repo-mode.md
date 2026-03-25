@@ -153,6 +153,8 @@ Browse and link Jira issues. Only shown when `jira.enabled = true` in config.
 
 All keybindings can be overridden in `~/.config/singularity/keybinds.json`.
 
+### Global
+
 | Key | Action |
 |-----|--------|
 | `F1`–`F6` | Switch to primary view |
@@ -163,6 +165,37 @@ All keybindings can be overridden in `~/.config/singularity/keybinds.json`.
 | `Esc` | Back / cancel |
 | `q` / `ctrl+q` | Quit |
 | `R` | Refresh current view |
+
+### Jira view (`g,j`)
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` | Navigate issue list |
+| `enter` | Open issue detail pane |
+| `/` | Filter issues |
+| `s` | Search / JQL query |
+| `r` | Refine selected ticket with AI |
+| `c` | Create child stories from selected ticket (or from raw text) |
+| `w` | Start workflow for selected ticket |
+| `R` | Reload issues |
+| `Esc` | Close detail / cancel |
+
+### Workflows view (`F5` project mode / `g,w` submenu)
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Next workflow |
+| `k` / `↑` | Previous workflow |
+| `w` | New workflow (manual branch name) |
+| `J` | New workflow from Jira ticket (picker) |
+| `a` | Spawn agent for selected workflow |
+| `p` | Push all repos in workflow |
+| `M` | Create MRs for all repos in workflow |
+| `d` | Open diff view for selected workflow |
+| `D` | Delete / clean up selected workflow |
+| `I` | Import workflow |
+| `r` | Refresh |
+| `/` | Filter |
 
 ## Configuration Reference
 
