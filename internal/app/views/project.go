@@ -65,6 +65,12 @@ type ProjectView struct {
 	showResetAllConfirm bool
 	resetAllResult      string
 
+	// Checkout by name state
+	showCheckoutByName   bool
+	checkoutByNameInput  string
+	checkoutByNameRepo   string // repo path to checkout in
+	checkoutByNameResult string
+
 	// Filter for tree list
 	filter *components.Filter[treeNode]
 }
@@ -333,6 +339,9 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.resetAllResult != "" {
 			v.resetAllResult = ""
 		}
+		if v.checkoutByNameResult != "" {
+			v.checkoutByNameResult = ""
+		}
 
 		// Handle new branch creation mode
 		if v.showNewBranch {
@@ -437,6 +446,33 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, nil
 		}
 
+		// Handle checkout-by-name mode
+		if v.showCheckoutByName {
+			switch msg.Type {
+			case tea.KeyBackspace:
+				if len(v.checkoutByNameInput) > 0 {
+					v.checkoutByNameInput = v.checkoutByNameInput[:len(v.checkoutByNameInput)-1]
+				}
+			case tea.KeyEnter:
+				if v.checkoutByNameInput != "" && v.checkoutByNameRepo != "" {
+					err := git.Checkout(v.checkoutByNameRepo, v.checkoutByNameInput)
+					if err != nil {
+						v.checkoutByNameResult = fmt.Sprintf("✗ checkout '%s': %v", v.checkoutByNameInput, err)
+					} else {
+						v.checkoutByNameResult = fmt.Sprintf("✓ checked out '%s'", v.checkoutByNameInput)
+					}
+					v.loadData()
+				}
+				v.showCheckoutByName = false
+			case tea.KeyEsc:
+				v.showCheckoutByName = false
+				v.checkoutByNameInput = ""
+			case tea.KeyRunes:
+				v.checkoutByNameInput += string(msg.Runes)
+			}
+			return v, nil
+		}
+
 		// If filter is active, let it handle keys
 		if v.filter != nil && v.filter.IsActive() {
 			v.filter.Update(msg)
@@ -509,6 +545,30 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "X":
 			// Prompt to reset all repos to their default branch
 			v.showResetAllConfirm = true
+		case "M":
+			// Checkout default branch for selected repo
+			node := v.selectedNode()
+			if node != nil {
+				defaultBranch := node.Repo.DefaultBranch
+				if defaultBranch == "" {
+					defaultBranch = "main"
+				}
+				err := git.Checkout(node.Repo.Path, defaultBranch)
+				if err != nil {
+					v.checkoutByNameResult = fmt.Sprintf("✗ %s: %v", node.Repo.Name, err)
+				} else {
+					v.checkoutByNameResult = fmt.Sprintf("✓ %s: checked out '%s'", node.Repo.Name, defaultBranch)
+				}
+				v.loadData()
+			}
+		case "C":
+			// Checkout a branch by name in the selected repo
+			node := v.selectedNode()
+			if node != nil {
+				v.showCheckoutByName = true
+				v.checkoutByNameInput = ""
+				v.checkoutByNameRepo = node.Repo.Path
+			}
 		case "b":
 			v.showBranchCheck = true
 			v.branchCheckName = ""
@@ -665,6 +725,28 @@ func (v *ProjectView) View() string {
 		s.WriteString("\n")
 	}
 
+	// Checkout by name modal
+	if v.showCheckoutByName {
+		lines := []string{
+			"",
+			fmt.Sprintf("  Branch name: %s%s", th.InfoStyle.Render(v.checkoutByNameInput), th.MutedTextStyle.Render("_")),
+			"",
+			"  Enter: Checkout  Esc: Cancel",
+		}
+		s.WriteString(renderModal("Checkout Branch by Name", lines, modalWidth(v.width)))
+		s.WriteString("\n")
+	}
+
+	// Flash messages for checkout-by-name result
+	if v.checkoutByNameResult != "" {
+		if strings.HasPrefix(v.checkoutByNameResult, "✓") {
+			s.WriteString(th.DashboardAccentStyle.Render(" " + v.checkoutByNameResult))
+		} else {
+			s.WriteString(th.DashboardErrorStyle.Render(" " + v.checkoutByNameResult))
+		}
+		s.WriteString("\n\n")
+	}
+
 	// Flash messages for branch/MR results
 	if v.newBranchResult != "" {
 		for _, line := range strings.Split(v.newBranchResult, "\n") {
@@ -730,7 +812,7 @@ func (v *ProjectView) renderFooterHelp() string {
 		return th.Help.Render("Enter: Confirm  Esc: Cancel")
 	}
 
-	return th.Help.Render(" ↑↓ Navigate  Enter Expand  o Open  c Checkout  n Branch  m MR  b Check  / Filter  r Refresh  X Reset All")
+	return th.Help.Render(" ↑↓ Navigate  Enter Expand  o Open  c Checkout  C Checkout by name  M Checkout main  n Branch  m MR  b Check  / Filter  r Refresh  X Reset All")
 }
 
 // ShortHelp returns a contextual short help string.
@@ -738,18 +820,18 @@ func (v *ProjectView) ShortHelp() string {
 	if v.CapturesInput() {
 		return "Enter: Confirm  Esc: Cancel"
 	}
-	return "↑↓ Navigate  Enter Expand  o Open  c Checkout  n Branch  m MR  b Check  / Filter  r Refresh  X Reset All"
+	return "↑↓ Navigate  Enter Expand  o Open  c Checkout  C Checkout by name  M Checkout main  n Branch  m MR  b Check  / Filter  r Refresh  X Reset All"
 }
 
 // CapturesInput returns true when the view is in an input mode.
 func (v *ProjectView) CapturesInput() bool {
-	return v.showBranchCheck || v.showNewBranch || v.showMRConfirm || v.showResetAllConfirm
+	return v.showBranchCheck || v.showNewBranch || v.showMRConfirm || v.showResetAllConfirm || v.showCheckoutByName
 }
 
 // CapturesKey returns true for keys this view handles directly.
 func (v *ProjectView) CapturesKey(key string) bool {
 	switch key {
-	case "r", "o", "b", "c", "n", "m", "X", "enter", "/", "j", "k", "up", "down":
+	case "r", "o", "b", "c", "C", "n", "m", "M", "X", "enter", "/", "j", "k", "up", "down":
 		return true
 	}
 	return false
@@ -791,6 +873,8 @@ func (v *ProjectView) KeyBindings() []components.KeyBinding {
 		{Key: "enter", Description: "Expand/collapse repo"},
 		{Key: "o", Description: "Open selected repository"},
 		{Key: "c", Description: "Checkout selected branch"},
+		{Key: "C", Description: "Checkout branch by name in selected repo"},
+		{Key: "M", Description: "Checkout default/main branch in selected repo"},
 		{Key: "n", Description: "Create new branch across all repos"},
 		{Key: "m", Description: "Create MR/PR for selected branch"},
 		{Key: "b", Description: "Check if branch exists in all repos"},
