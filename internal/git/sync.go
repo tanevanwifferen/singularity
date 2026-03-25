@@ -82,10 +82,25 @@ func Pull(repoPath string) (string, error) {
 }
 
 // Push runs git push on the current branch.
+// When the local branch name differs from the upstream branch name (common in
+// worktrees), it uses an explicit HEAD:<remote-branch> refspec to avoid the
+// "upstream branch name does not match" error.
 func Push(repoPath string, force bool) (string, error) {
 	args := []string{"-C", repoPath, "push"}
 	if force {
 		args = append(args, "--force-with-lease")
+	}
+
+	// Detect upstream; if it exists and has a different name than the local
+	// branch, build an explicit refspec so git doesn't reject the push.
+	if status, err := GetUpstreamStatus(repoPath); err == nil && status.Upstream != "" {
+		// Upstream is "remote/branch" — strip the remote prefix.
+		parts := strings.SplitN(status.Upstream, "/", 2)
+		if len(parts) == 2 && parts[1] != status.Branch {
+			remote := parts[0]
+			remoteBranch := parts[1]
+			args = append(args, remote, "HEAD:"+remoteBranch)
+		}
 	}
 
 	cmd := exec.Command("git", args...)
