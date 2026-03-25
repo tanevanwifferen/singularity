@@ -209,11 +209,6 @@ func (v *ApprovalView) ensureCursorVisible() {
 	available := v.availableItemLines()
 	linesUsed := 0
 	for i := v.scrollOffset; i < len(v.items); i++ {
-		if linesUsed >= available {
-			// cursor is not visible yet; scroll forward
-			v.scrollOffset = v.cursor
-			return
-		}
 		if i == v.cursor {
 			return // cursor is visible
 		}
@@ -221,6 +216,12 @@ func (v *ApprovalView) ensureCursorVisible() {
 		if v.items[i].Expanded {
 			detail := v.renderDetail(v.items[i].Action, t)
 			linesUsed += strings.Count(detail, "\n")
+		}
+		if linesUsed >= available {
+			// cursor is not visible yet; scroll forward by one line
+			v.scrollOffset++
+			v.ensureCursorVisible()
+			return
 		}
 	}
 }
