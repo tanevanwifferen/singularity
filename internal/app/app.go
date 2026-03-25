@@ -543,112 +543,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Check if the active view is capturing input (e.g., text input modal)
-	viewCapturesInput := m.router.ActiveViewCapturesInput()
-
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c":
-			m.showQuitConfirm = true
-			m.quitConfirm = components.NewConfirmDialog("Quit", "Are you sure you want to quit?", "quit")
-			m.quitConfirm.Modal.SetSize(m.layout.width, m.layout.height)
-			return m, nil
-		case "q":
-			if !viewCapturesInput {
-				m.showQuitConfirm = true
-				m.quitConfirm = components.NewConfirmDialog("Quit", "Are you sure you want to quit?", "quit")
-				m.quitConfirm.Modal.SetSize(m.layout.width, m.layout.height)
-				return m, nil
-			}
-		case "R":
-			if !viewCapturesInput {
-				// Refresh repo (capital R — lowercase r used by views)
-				m.loadRepo()
-				return m, nil
-			}
-		case "P":
-			if !viewCapturesInput && m.proj != nil && !m.projectMode {
-				// Return to project overview
-				m.projectMode = true
-				m.loadProject()
-				return m, nil
-			}
-		case "[":
-			if !viewCapturesInput && m.projectMode && m.proj != nil && len(m.proj.Repos) > 1 {
-				m.activeRepoIdx = (m.activeRepoIdx - 1 + len(m.proj.Repos)) % len(m.proj.Repos)
-				return m, m.switchToProjectRepo(m.activeRepoIdx)
-			}
-		case "]":
-			if !viewCapturesInput && m.projectMode && m.proj != nil && len(m.proj.Repos) > 1 {
-				m.activeRepoIdx = (m.activeRepoIdx + 1) % len(m.proj.Repos)
-				return m, m.switchToProjectRepo(m.activeRepoIdx)
-			}
-		case "T":
-			if !viewCapturesInput {
-				// Toggle theme
-				theme.ToggleTheme()
-				m.layout.rebuildStyles()
-				m.statusMsg = "Theme toggled"
-				return m, nil
-			}
-		}
+		return m.handleAppKeyMsg(msg)
 	case tea.WindowSizeMsg:
 		m.layout.SetSize(msg.Width, msg.Height)
 		vw, vh := m.layout.AvailableViewDimensions()
 		m.router.NotifySize(vw, vh)
 		return m, nil
-	case WSConnectionMsg:
-		m.wsStatus = msg.Status
-		// Update status message based on connection state
-		if msg.Status.Connected {
-			m.statusMsg = fmt.Sprintf("Connected to %s", msg.Status.URL)
-		} else if msg.Status.Reconnecting {
-			m.statusMsg = fmt.Sprintf("Reconnecting to %s...", msg.Status.URL)
-		} else if msg.Status.Error != "" {
-			m.errorMsg = fmt.Sprintf("Connection error: %s", msg.Status.Error)
-		}
-	case WSRepoUpdateMsg:
-		// Repo was updated on server, refresh the current view
-		m.repoInfo = msg.Repo
-		return m, func() tea.Msg {
-			return views.RefreshMsg{}
-		}
-	case WSBranchUpdateMsg:
-		// Branch was updated, switch to Branches view and refresh
-		if m.router != nil {
-			m.router.SwitchTo("Branches")
-		}
-		return m, func() tea.Msg {
-			return views.RefreshMsg{}
-		}
-	case WSPipelineUpdateMsg:
-		// Pipeline was updated, switch to Pipeline view and refresh
-		if m.router != nil {
-			m.router.SwitchTo("Pipeline")
-		}
-		return m, func() tea.Msg {
-			return views.RefreshMsg{}
-		}
-	case WSAgentOutputMsg:
-		// Agent output received, switch to Agents view
-		if m.router != nil {
-			m.router.SwitchTo("Agents")
-		}
-		// The AgentView will handle the refresh via its Update
-		return m, nil
-	case WSAgentEventMsg:
-		// Agent lifecycle event, switch to Agents view and refresh
-		if m.router != nil {
-			m.router.SwitchTo("Agents")
-		}
-		return m, func() tea.Msg {
-			return views.RefreshMsg{}
-		}
-	case WSProjectUpdateMsg:
-		// Project update, could show a notification or refresh overview
-		m.statusMsg = fmt.Sprintf("Project updated: %s", msg.Status)
-		return m, nil
+	case WSConnectionMsg, WSRepoUpdateMsg, WSBranchUpdateMsg, WSPipelineUpdateMsg,
+		WSAgentOutputMsg, WSAgentEventMsg, WSProjectUpdateMsg:
+		return m.handleAppWSMsg(msg)
 	case views.OpenPRForBranchMsg:
 		// Navigate to PR creation view with the worktree branch pre-selected
 		if m.router != nil {
@@ -698,6 +603,112 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Delegate to router
 	_, cmd := m.router.Update(msg)
 	return m, cmd
+}
+
+// handleAppKeyMsg handles all key events for the top-level app model.
+func (m Model) handleAppKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	viewCapturesInput := m.router.ActiveViewCapturesInput()
+
+	switch msg.String() {
+	case "ctrl+c":
+		m.showQuitConfirm = true
+		m.quitConfirm = components.NewConfirmDialog("Quit", "Are you sure you want to quit?", "quit")
+		m.quitConfirm.Modal.SetSize(m.layout.width, m.layout.height)
+		return m, nil
+	case "q":
+		if !viewCapturesInput {
+			m.showQuitConfirm = true
+			m.quitConfirm = components.NewConfirmDialog("Quit", "Are you sure you want to quit?", "quit")
+			m.quitConfirm.Modal.SetSize(m.layout.width, m.layout.height)
+			return m, nil
+		}
+	case "R":
+		if !viewCapturesInput {
+			// Refresh repo (capital R — lowercase r used by views)
+			m.loadRepo()
+			return m, nil
+		}
+	case "P":
+		if !viewCapturesInput && m.proj != nil && !m.projectMode {
+			// Return to project overview
+			m.projectMode = true
+			m.loadProject()
+			return m, nil
+		}
+	case "[":
+		if !viewCapturesInput && m.projectMode && m.proj != nil && len(m.proj.Repos) > 1 {
+			m.activeRepoIdx = (m.activeRepoIdx - 1 + len(m.proj.Repos)) % len(m.proj.Repos)
+			return m, m.switchToProjectRepo(m.activeRepoIdx)
+		}
+	case "]":
+		if !viewCapturesInput && m.projectMode && m.proj != nil && len(m.proj.Repos) > 1 {
+			m.activeRepoIdx = (m.activeRepoIdx + 1) % len(m.proj.Repos)
+			return m, m.switchToProjectRepo(m.activeRepoIdx)
+		}
+	case "T":
+		if !viewCapturesInput {
+			// Toggle theme
+			theme.ToggleTheme()
+			m.layout.rebuildStyles()
+			m.statusMsg = "Theme toggled"
+			return m, nil
+		}
+	}
+
+	// Delegate unhandled keys to router
+	_, cmd := m.router.Update(msg)
+	return m, cmd
+}
+
+// handleAppWSMsg handles WebSocket message types (connection, repo, branch,
+// pipeline, agent output/event, and project updates).
+func (m Model) handleAppWSMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case WSConnectionMsg:
+		m.wsStatus = msg.Status
+		if msg.Status.Connected {
+			m.statusMsg = fmt.Sprintf("Connected to %s", msg.Status.URL)
+		} else if msg.Status.Reconnecting {
+			m.statusMsg = fmt.Sprintf("Reconnecting to %s...", msg.Status.URL)
+		} else if msg.Status.Error != "" {
+			m.errorMsg = fmt.Sprintf("Connection error: %s", msg.Status.Error)
+		}
+	case WSRepoUpdateMsg:
+		m.repoInfo = msg.Repo
+		return m, func() tea.Msg {
+			return views.RefreshMsg{}
+		}
+	case WSBranchUpdateMsg:
+		if m.router != nil {
+			m.router.SwitchTo("Branches")
+		}
+		return m, func() tea.Msg {
+			return views.RefreshMsg{}
+		}
+	case WSPipelineUpdateMsg:
+		if m.router != nil {
+			m.router.SwitchTo("Pipeline")
+		}
+		return m, func() tea.Msg {
+			return views.RefreshMsg{}
+		}
+	case WSAgentOutputMsg:
+		if m.router != nil {
+			m.router.SwitchTo("Agents")
+		}
+		return m, nil
+	case WSAgentEventMsg:
+		if m.router != nil {
+			m.router.SwitchTo("Agents")
+		}
+		return m, func() tea.Msg {
+			return views.RefreshMsg{}
+		}
+	case WSProjectUpdateMsg:
+		m.statusMsg = fmt.Sprintf("Project updated: %s", msg.Status)
+		return m, nil
+	}
+	return m, nil
 }
 
 // View renders the TUI

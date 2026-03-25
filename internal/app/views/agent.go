@@ -354,196 +354,7 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
-		// Handle kill confirmation first
-		if v.showKillConfirm {
-			return v, v.handleKillConfirm(msg)
-		}
-
-		// Handle message input to running agent
-		if v.showMessageInput {
-			return v, v.handleMessageInput(msg)
-		}
-
-		// Handle new agent input
-		if v.showNewAgent {
-			return v, v.handleNewAgentInput(msg)
-		}
-
-		// Handle Jira picker
-		if v.jiraPicker.IsOpen() {
-			return v, v.handleJiraPickerKey(msg)
-		}
-
-		// Handle Jira confirm-start-agent modal
-		if v.jiraConfirmIssue != nil {
-			return v, v.handleJiraAgentConfirm(msg)
-		}
-
-		key := msg.String()
-
-		// Output pane navigation when focused
-		if v.focus == focusOutput && v.selectedAgent != nil {
-			switch key {
-			case "tab":
-				v.focus = focusList
-				return v, nil
-			case "esc", "q":
-				v.deselectAgent()
-				return v, nil
-			case "j", "down":
-				v.outputAutoScroll = false
-				v.outputViewport.LineDown(1)
-				if v.outputViewport.ScrollPercent() >= 1.0 {
-					v.outputAutoScroll = true
-				}
-				return v, nil
-			case "k", "up":
-				v.outputAutoScroll = false
-				v.outputViewport.LineUp(1)
-				return v, nil
-			case "g":
-				v.outputAutoScroll = false
-				v.outputViewport.GotoTop()
-				return v, nil
-			case "G":
-				v.outputAutoScroll = true
-				v.outputViewport.GotoBottom()
-				return v, nil
-			case "ctrl+d", "pgdown":
-				v.outputAutoScroll = false
-				v.outputViewport.HalfViewDown()
-				if v.outputViewport.ScrollPercent() >= 1.0 {
-					v.outputAutoScroll = true
-				}
-				return v, nil
-			case "ctrl+u", "pgup":
-				v.outputAutoScroll = false
-				v.outputViewport.HalfViewUp()
-				return v, nil
-			case "i":
-				if v.selectedAgent != nil &&
-					(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting || v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentKilled) {
-					v.showMessageInput = true
-					v.messageInput = ""
-					v.focus = focusInput
-					v.recalcLayout()
-				}
-				return v, nil
-			}
-			return v, nil
-		}
-
-		// List pane keys
-		switch key {
-		case "r":
-			v.loading = true
-			return v, func() tea.Msg {
-				v.loadAgents()
-				return RefreshDoneMsg{}
-			}
-
-		case "n":
-			v.showNewAgent = true
-			v.newAgentTask = ""
-			return v, nil
-
-		case "J":
-			// Open Jira ticket picker to start an agent from a ticket
-			if v.jiraPicker.IsAvailable() {
-				return v, v.jiraPicker.Open()
-			}
-			return v, nil
-
-		case "K":
-			// Kill selected agent (capital K to not conflict with vim nav)
-			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				if item.State == engine.AgentRunning || item.State == engine.AgentStarting {
-					v.showKillConfirm = true
-					v.killAgentID = item.ID
-				}
-			}
-			return v, nil
-
-		case "enter":
-			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				v.selectAgent(item)
-				v.focus = focusOutput
-			}
-			return v, nil
-
-		case "tab":
-			if v.selectedAgent != nil {
-				v.focus = focusOutput
-				return v, nil
-			}
-
-		case "i":
-			if v.selectedAgent != nil &&
-				(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting || v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentKilled) {
-				v.showMessageInput = true
-				v.messageInput = ""
-				v.focus = focusInput
-				v.recalcLayout()
-			}
-			return v, nil
-
-		case "d", "esc":
-			if key == "esc" && v.filter.IsActive() {
-				v.filter.Update(msg)
-				return v, nil
-			}
-			if v.selectedAgent != nil {
-				v.deselectAgent()
-				return v, nil
-			}
-
-		case "c":
-			if v.engine != nil {
-				if item, idx := v.filter.SelectedItem(); idx >= 0 {
-					if item.State != engine.AgentRunning && item.State != engine.AgentStarting {
-						v.engine.RemoveAgent(item.ID)
-						if v.selectedAgent != nil && v.selectedAgent.ID == item.ID {
-							v.deselectAgent()
-						}
-						v.loadAgents()
-					}
-				}
-			}
-			return v, nil
-
-		case "/":
-			if v.filter != nil {
-				v.filter.Update(msg)
-			}
-
-		case "j", "down", "k", "up", "g", "G":
-			v.filter.Update(msg)
-			v.syncPreview()
-			return v, nil
-
-		case "pgdown", "ctrl+d":
-			if v.selectedAgent != nil {
-				v.outputAutoScroll = false
-				v.outputViewport.HalfViewDown()
-				if v.outputViewport.ScrollPercent() >= 1.0 {
-					v.outputAutoScroll = true
-				}
-				return v, nil
-			}
-
-		case "pgup", "ctrl+u":
-			if v.selectedAgent != nil {
-				v.outputAutoScroll = false
-				v.outputViewport.HalfViewUp()
-				return v, nil
-			}
-		}
-
-		// Pass remaining keys to filter
-		if v.filter != nil {
-			v.filter.Update(msg)
-			v.syncPreview()
-		}
+		return v.handleAgentKeyMsg(msg)
 
 	case AgentCreatedMsg:
 		if msg.Err != nil {
@@ -675,6 +486,203 @@ func (v *AgentView) handleMessageInput(msg tea.KeyMsg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// handleAgentKeyMsg dispatches key events based on the current modal/focus state.
+func (v *AgentView) handleAgentKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Handle modal states first (highest priority)
+	if v.showKillConfirm {
+		return v, v.handleKillConfirm(msg)
+	}
+	if v.showMessageInput {
+		return v, v.handleMessageInput(msg)
+	}
+	if v.showNewAgent {
+		return v, v.handleNewAgentInput(msg)
+	}
+	if v.jiraPicker.IsOpen() {
+		return v, v.handleJiraPickerKey(msg)
+	}
+	if v.jiraConfirmIssue != nil {
+		return v, v.handleJiraAgentConfirm(msg)
+	}
+
+	// Output pane navigation when focused
+	if v.focus == focusOutput && v.selectedAgent != nil {
+		return v.handleOutputPaneKey(msg)
+	}
+
+	// List pane keys
+	return v.handleListPaneKey(msg)
+}
+
+// handleOutputPaneKey handles keys when the output pane has focus.
+func (v *AgentView) handleOutputPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	switch key {
+	case "tab":
+		v.focus = focusList
+		return v, nil
+	case "esc", "q":
+		v.deselectAgent()
+		return v, nil
+	case "j", "down":
+		v.outputAutoScroll = false
+		v.outputViewport.LineDown(1)
+		if v.outputViewport.ScrollPercent() >= 1.0 {
+			v.outputAutoScroll = true
+		}
+		return v, nil
+	case "k", "up":
+		v.outputAutoScroll = false
+		v.outputViewport.LineUp(1)
+		return v, nil
+	case "g":
+		v.outputAutoScroll = false
+		v.outputViewport.GotoTop()
+		return v, nil
+	case "G":
+		v.outputAutoScroll = true
+		v.outputViewport.GotoBottom()
+		return v, nil
+	case "ctrl+d", "pgdown":
+		v.outputAutoScroll = false
+		v.outputViewport.HalfViewDown()
+		if v.outputViewport.ScrollPercent() >= 1.0 {
+			v.outputAutoScroll = true
+		}
+		return v, nil
+	case "ctrl+u", "pgup":
+		v.outputAutoScroll = false
+		v.outputViewport.HalfViewUp()
+		return v, nil
+	case "i":
+		if v.selectedAgent != nil &&
+			(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting || v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentKilled) {
+			v.showMessageInput = true
+			v.messageInput = ""
+			v.focus = focusInput
+			v.recalcLayout()
+		}
+		return v, nil
+	}
+	return v, nil
+}
+
+// handleListPaneKey handles keys when the agent list pane has focus.
+func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	switch key {
+	case "r":
+		v.loading = true
+		return v, func() tea.Msg {
+			v.loadAgents()
+			return RefreshDoneMsg{}
+		}
+
+	case "n":
+		v.showNewAgent = true
+		v.newAgentTask = ""
+		return v, nil
+
+	case "J":
+		// Open Jira ticket picker to start an agent from a ticket
+		if v.jiraPicker.IsAvailable() {
+			return v, v.jiraPicker.Open()
+		}
+		return v, nil
+
+	case "K":
+		// Kill selected agent (capital K to not conflict with vim nav)
+		if item, idx := v.filter.SelectedItem(); idx >= 0 {
+			if item.State == engine.AgentRunning || item.State == engine.AgentStarting {
+				v.showKillConfirm = true
+				v.killAgentID = item.ID
+			}
+		}
+		return v, nil
+
+	case "enter":
+		if item, idx := v.filter.SelectedItem(); idx >= 0 {
+			v.selectAgent(item)
+			v.focus = focusOutput
+		}
+		return v, nil
+
+	case "tab":
+		if v.selectedAgent != nil {
+			v.focus = focusOutput
+			return v, nil
+		}
+
+	case "i":
+		if v.selectedAgent != nil &&
+			(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting || v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentKilled) {
+			v.showMessageInput = true
+			v.messageInput = ""
+			v.focus = focusInput
+			v.recalcLayout()
+		}
+		return v, nil
+
+	case "d", "esc":
+		if key == "esc" && v.filter.IsActive() {
+			v.filter.Update(msg)
+			return v, nil
+		}
+		if v.selectedAgent != nil {
+			v.deselectAgent()
+			return v, nil
+		}
+
+	case "c":
+		if v.engine != nil {
+			if item, idx := v.filter.SelectedItem(); idx >= 0 {
+				if item.State != engine.AgentRunning && item.State != engine.AgentStarting {
+					v.engine.RemoveAgent(item.ID)
+					if v.selectedAgent != nil && v.selectedAgent.ID == item.ID {
+						v.deselectAgent()
+					}
+					v.loadAgents()
+				}
+			}
+		}
+		return v, nil
+
+	case "/":
+		if v.filter != nil {
+			v.filter.Update(msg)
+		}
+
+	case "j", "down", "k", "up", "g", "G":
+		v.filter.Update(msg)
+		v.syncPreview()
+		return v, nil
+
+	case "pgdown", "ctrl+d":
+		if v.selectedAgent != nil {
+			v.outputAutoScroll = false
+			v.outputViewport.HalfViewDown()
+			if v.outputViewport.ScrollPercent() >= 1.0 {
+				v.outputAutoScroll = true
+			}
+			return v, nil
+		}
+
+	case "pgup", "ctrl+u":
+		if v.selectedAgent != nil {
+			v.outputAutoScroll = false
+			v.outputViewport.HalfViewUp()
+			return v, nil
+		}
+	}
+
+	// Pass remaining keys to filter
+	if v.filter != nil {
+		v.filter.Update(msg)
+		v.syncPreview()
+	}
+	return v, nil
 }
 
 // renderAgentItem renders a single agent item in the list.

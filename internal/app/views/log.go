@@ -298,191 +298,7 @@ func (v *LogView) closeDetail() {
 func (v *LogView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// Handle modal states first (highest priority)
-		if v.showCherryPickConfirm {
-			return v, v.handleCherryPickConfirm(msg)
-		}
-		if v.showResetConfirm {
-			return v, v.handleResetConfirm(msg)
-		}
-		if v.showResetMenu {
-			return v, v.handleResetMenu(msg)
-		}
-		if v.showRewordEditor {
-			return v, v.handleRewordEditor(msg)
-		}
-
-		// Handle detail panel
-		if v.showDetail {
-			return v, v.handleDetailKey(msg)
-		}
-
-		// Main view keys
-		switch msg.String() {
-		case "r":
-			v.loading = true
-			return v, func() tea.Msg {
-				v.loadCommits(true)
-				return RefreshDoneMsg{}
-			}
-
-		case "/":
-			// Activate filter mode - show filter type prompt first
-			v.filterMode = ""
-
-		case "a":
-			// Set author filter mode
-			if v.authorFilter != "" {
-				v.authorFilter = ""
-			} else {
-				v.filterMode = "author"
-			}
-
-		case "s":
-			// Set message filter mode
-			if v.messageFilter != "" {
-				v.messageFilter = ""
-			} else {
-				v.filterMode = "message"
-			}
-
-		case "enter":
-			// Show commit detail
-			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				v.openCommitDetail(&item)
-			}
-
-		case "esc":
-			// Clear filter if active, or clear filter mode
-			if v.filterMode != "" {
-				v.filterMode = ""
-				return v, nil
-			}
-			if v.authorFilter != "" {
-				v.authorFilter = ""
-				v.loadCommits(true)
-				return v, func() tea.Msg { return RefreshDoneMsg{} }
-			}
-			if v.messageFilter != "" {
-				v.messageFilter = ""
-				v.loadCommits(true)
-				return v, func() tea.Msg { return RefreshDoneMsg{} }
-			}
-			if v.filter.IsActive() {
-				v.filter.Update(msg)
-			}
-
-		case "g":
-			// Go to bottom - load more
-			if v.hasMore && !v.loadingMore {
-				v.loadingMore = true
-				return v, func() tea.Msg {
-					v.loadCommits(false)
-					return RefreshDoneMsg{}
-				}
-			}
-
-		case "f":
-			// Filter - if in filter mode, activate filter input
-			if v.filterMode != "" {
-				v.filter.Update(msg)
-			}
-
-		case "y":
-			// Copy commit hash to clipboard
-			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				v.operationErr = nil
-				v.operationSuccess = ""
-				if err := git.CopyToClipboard(item.Hash); err != nil {
-					v.operationErr = err
-				} else {
-					v.operationSuccess = fmt.Sprintf("Copied %s to clipboard", item.ShortHash)
-				}
-			}
-
-		case "c":
-			// Cherry-pick selected commit (show confirmation)
-			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				v.cherryPickHash = item.Hash
-				v.showCherryPickConfirm = true
-				v.operationErr = nil
-				v.operationSuccess = ""
-			}
-
-		case "w":
-			// Reword HEAD commit message
-			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				// Only allow reword on the first commit (HEAD)
-				if idx == 0 {
-					v.showRewordEditor = true
-					v.rewordMessage = item.Subject
-					v.rewordCursor = len(item.Subject)
-					v.operationErr = nil
-					v.operationSuccess = ""
-				} else {
-					v.operationErr = fmt.Errorf("can only reword HEAD commit (first in list)")
-					v.operationSuccess = ""
-				}
-			}
-
-		case "x":
-			// Reset to commit (show submenu)
-			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				_ = idx // idx used only for bounds check
-				v.resetHash = item.Hash
-				v.showResetMenu = true
-				v.resetMode = "mixed" // default selection
-				v.operationErr = nil
-				v.operationSuccess = ""
-			}
-		}
-
-		// Handle filter mode activation via typing
-		if v.filterMode != "" {
-			if v.filterMode == "author" {
-				// Author filter - handle character input
-				if msg.Paste && len(msg.Runes) > 0 {
-					v.authorFilter += string(msg.Runes)
-					return v, func() tea.Msg {
-						v.loadCommits(true)
-						return RefreshDoneMsg{}
-					}
-				} else if len(msg.Runes) == 1 {
-					r := msg.Runes[0]
-					if r >= 32 && r <= 126 {
-						v.authorFilter += string(r)
-						return v, func() tea.Msg {
-							v.loadCommits(true)
-							return RefreshDoneMsg{}
-						}
-					}
-				} else if msg.String() == "backspace" && len(v.authorFilter) > 0 {
-					v.authorFilter = v.authorFilter[:len(v.authorFilter)-1]
-					return v, func() tea.Msg {
-						v.loadCommits(true)
-						return RefreshDoneMsg{}
-					}
-				} else if msg.String() == "enter" {
-					v.filterMode = ""
-				} else if msg.String() == "esc" {
-					v.authorFilter = ""
-					v.filterMode = ""
-				}
-			} else if v.filterMode == "message" {
-				// Message filter - use the filter component
-				v.filter.Update(msg)
-				// Sync filter text to message filter
-				v.messageFilter = v.filter.FilterText()
-			}
-		}
-
-		// Pass to filter for navigation
-		if v.filter != nil {
-			v.filter.Update(msg)
-		}
-
-		// Check if we scrolled to bottom for auto-load-more
-		// (handled by filter's internal state)
+		return v.handleLogKeyMsg(msg)
 
 	case RefreshDoneMsg:
 		v.loading = false
@@ -519,6 +335,199 @@ func (v *LogView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return v, nil
 			}
 		}
+	}
+
+	return v, nil
+}
+
+// handleLogKeyMsg dispatches key events based on the current modal/view state.
+func (v *LogView) handleLogKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Handle modal states first (highest priority)
+	if v.showCherryPickConfirm {
+		return v, v.handleCherryPickConfirm(msg)
+	}
+	if v.showResetConfirm {
+		return v, v.handleResetConfirm(msg)
+	}
+	if v.showResetMenu {
+		return v, v.handleResetMenu(msg)
+	}
+	if v.showRewordEditor {
+		return v, v.handleRewordEditor(msg)
+	}
+
+	// Handle detail panel
+	if v.showDetail {
+		return v, v.handleDetailKey(msg)
+	}
+
+	// Main list view keys
+	return v.handleListKeyMsg(msg)
+}
+
+// handleListKeyMsg handles key events in the main commit list view.
+func (v *LogView) handleListKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "r":
+		v.loading = true
+		return v, func() tea.Msg {
+			v.loadCommits(true)
+			return RefreshDoneMsg{}
+		}
+
+	case "/":
+		// Activate filter mode - show filter type prompt first
+		v.filterMode = ""
+
+	case "a":
+		// Set author filter mode
+		if v.authorFilter != "" {
+			v.authorFilter = ""
+		} else {
+			v.filterMode = "author"
+		}
+
+	case "s":
+		// Set message filter mode
+		if v.messageFilter != "" {
+			v.messageFilter = ""
+		} else {
+			v.filterMode = "message"
+		}
+
+	case "enter":
+		// Show commit detail
+		if item, idx := v.filter.SelectedItem(); idx >= 0 {
+			v.openCommitDetail(&item)
+		}
+
+	case "esc":
+		// Clear filter if active, or clear filter mode
+		if v.filterMode != "" {
+			v.filterMode = ""
+			return v, nil
+		}
+		if v.authorFilter != "" {
+			v.authorFilter = ""
+			v.loadCommits(true)
+			return v, func() tea.Msg { return RefreshDoneMsg{} }
+		}
+		if v.messageFilter != "" {
+			v.messageFilter = ""
+			v.loadCommits(true)
+			return v, func() tea.Msg { return RefreshDoneMsg{} }
+		}
+		if v.filter.IsActive() {
+			v.filter.Update(msg)
+		}
+
+	case "g":
+		// Go to bottom - load more
+		if v.hasMore && !v.loadingMore {
+			v.loadingMore = true
+			return v, func() tea.Msg {
+				v.loadCommits(false)
+				return RefreshDoneMsg{}
+			}
+		}
+
+	case "f":
+		// Filter - if in filter mode, activate filter input
+		if v.filterMode != "" {
+			v.filter.Update(msg)
+		}
+
+	case "y":
+		// Copy commit hash to clipboard
+		if item, idx := v.filter.SelectedItem(); idx >= 0 {
+			v.operationErr = nil
+			v.operationSuccess = ""
+			if err := git.CopyToClipboard(item.Hash); err != nil {
+				v.operationErr = err
+			} else {
+				v.operationSuccess = fmt.Sprintf("Copied %s to clipboard", item.ShortHash)
+			}
+		}
+
+	case "c":
+		// Cherry-pick selected commit (show confirmation)
+		if item, idx := v.filter.SelectedItem(); idx >= 0 {
+			v.cherryPickHash = item.Hash
+			v.showCherryPickConfirm = true
+			v.operationErr = nil
+			v.operationSuccess = ""
+		}
+
+	case "w":
+		// Reword HEAD commit message
+		if item, idx := v.filter.SelectedItem(); idx >= 0 {
+			// Only allow reword on the first commit (HEAD)
+			if idx == 0 {
+				v.showRewordEditor = true
+				v.rewordMessage = item.Subject
+				v.rewordCursor = len(item.Subject)
+				v.operationErr = nil
+				v.operationSuccess = ""
+			} else {
+				v.operationErr = fmt.Errorf("can only reword HEAD commit (first in list)")
+				v.operationSuccess = ""
+			}
+		}
+
+	case "x":
+		// Reset to commit (show submenu)
+		if item, idx := v.filter.SelectedItem(); idx >= 0 {
+			_ = idx // idx used only for bounds check
+			v.resetHash = item.Hash
+			v.showResetMenu = true
+			v.resetMode = "mixed" // default selection
+			v.operationErr = nil
+			v.operationSuccess = ""
+		}
+	}
+
+	// Handle filter mode activation via typing
+	if v.filterMode != "" {
+		if v.filterMode == "author" {
+			// Author filter - handle character input
+			if msg.Paste && len(msg.Runes) > 0 {
+				v.authorFilter += string(msg.Runes)
+				return v, func() tea.Msg {
+					v.loadCommits(true)
+					return RefreshDoneMsg{}
+				}
+			} else if len(msg.Runes) == 1 {
+				r := msg.Runes[0]
+				if r >= 32 && r <= 126 {
+					v.authorFilter += string(r)
+					return v, func() tea.Msg {
+						v.loadCommits(true)
+						return RefreshDoneMsg{}
+					}
+				}
+			} else if msg.String() == "backspace" && len(v.authorFilter) > 0 {
+				v.authorFilter = v.authorFilter[:len(v.authorFilter)-1]
+				return v, func() tea.Msg {
+					v.loadCommits(true)
+					return RefreshDoneMsg{}
+				}
+			} else if msg.String() == "enter" {
+				v.filterMode = ""
+			} else if msg.String() == "esc" {
+				v.authorFilter = ""
+				v.filterMode = ""
+			}
+		} else if v.filterMode == "message" {
+			// Message filter - use the filter component
+			v.filter.Update(msg)
+			// Sync filter text to message filter
+			v.messageFilter = v.filter.FilterText()
+		}
+	}
+
+	// Pass to filter for navigation
+	if v.filter != nil {
+		v.filter.Update(msg)
 	}
 
 	return v, nil

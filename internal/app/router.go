@@ -219,49 +219,22 @@ func (r *Router) Init() tea.Cmd {
 func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle submenu overlay first if visible
 	if r.showSubmenu && r.activeSubmenu != nil {
-		switch msg := msg.(type) {
-		case tea.KeyMsg:
-			key := msg.String()
-			if key == "esc" {
-				r.showSubmenu = false
-				r.activeSubmenu = nil
-				return r, nil
-			}
-			// Check if key matches a submenu item
-			if viewName := r.activeSubmenu.Match(key); viewName != "" {
-				r.showSubmenu = false
-				r.activeSubmenu = nil
-				if err := r.SwitchTo(viewName); err != nil {
-					return r, nil
-				}
-				return r, r.active.Init()
-			}
-			// Any other key closes the submenu
-			r.showSubmenu = false
-			r.activeSubmenu = nil
-			return r, nil
-		case tea.WindowSizeMsg:
-			r.activeSubmenu.SetSize(msg.Width, msg.Height)
+		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			return r.handleSubmenuInput(keyMsg)
+		}
+		if wsMsg, ok := msg.(tea.WindowSizeMsg); ok {
+			r.activeSubmenu.SetSize(wsMsg.Width, wsMsg.Height)
 			return r, nil
 		}
 	}
 
 	// Handle help overlay if visible
 	if r.showHelp {
-		switch msg := msg.(type) {
-		case tea.KeyMsg:
-			switch msg.String() {
-			case "?", "esc":
-				r.showHelp = false
-				return r, nil
-			}
-			// Pass other keys to help overlay
-			updated := components.HelpOverlay{}
-			updated, _ = r.helpOverlay.Update(msg)
-			r.helpOverlay = updated
-			return r, nil
-		case tea.WindowSizeMsg:
-			r.helpOverlay.SetSize(msg.Width, msg.Height)
+		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			return r.handleHelpInput(keyMsg)
+		}
+		if wsMsg, ok := msg.(tea.WindowSizeMsg); ok {
+			r.helpOverlay.SetSize(wsMsg.Width, wsMsg.Height)
 			return r, nil
 		}
 	}
@@ -269,20 +242,13 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle SwitchViewMsg (defined in this package)
 	if swMsg, ok := msg.(SwitchViewMsg); ok {
 		if err := r.SwitchTo(swMsg.ViewName); err != nil {
-			// Could log error here
 			return r, nil
 		}
-		// Re-init the new view
 		return r, r.active.Init()
 	}
 
-	// Handle views.ViewChangeMsg by importing views package
-	// This avoids circular dependencies while allowing view-to-view communication
-	// Note: We can't use the ViewChanger interface here because views.ViewChangeMsg
-	// can't implement an interface from app package without circular imports.
-	// Instead, we check for the concrete type via type switch.
-	switch v := msg.(type) {
-	case views.ViewChangeMsg:
+	// Handle views.ViewChangeMsg for cross-view communication
+	if v, ok := msg.(views.ViewChangeMsg); ok {
 		if err := r.SwitchTo(v.ViewName); err != nil {
 			return r, nil
 		}
@@ -291,86 +257,7 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Handle key-based navigation (skip when active view is capturing input)
 	if keyMsg, ok := msg.(tea.KeyMsg); ok && !r.ActiveViewCapturesInput() {
-		key := keyMsg.String()
-
-		// Check submenu trigger keys first (e.g. "g" for Git Operations)
-		// These take priority over view key claims.
-		// Use case-insensitive matching so both "g" and "G" trigger the submenu.
-		if sm, ok := r.submenus[strings.ToLower(key)]; ok {
-			r.showSubmenu = true
-			r.activeSubmenu = sm
-			r.activeSubmenu.SetSize(r.viewWidth, r.viewHeight)
-			return r, nil
-		}
-
-		// Let views claim specific keys before router handles them.
-		// If a view implements KeyCapturer and claims this key, delegate directly.
-		// If a view does NOT implement KeyCapturer, assume it uses all plain
-		// single-letter keys (safe default) — only F-keys and special keys bypass this.
-		if kc, ok := r.active.(KeyCapturer); ok {
-			if kc.CapturesKey(key) {
-				_, cmd := r.active.Update(msg)
-				return r, cmd
-			}
-		} else if len(key) == 1 && key >= "a" && key <= "z" {
-			// View doesn't declare its keys — don't intercept plain letters
-			_, cmd := r.active.Update(msg)
-			return r, cmd
-		}
-
-		switch key {
-		case "?":
-			// Show help overlay with combined global and view-specific bindings
-			r.showHelp = true
-			r.buildHelpOverlay()
-			return r, nil
-		case "tab":
-			// Cycle to next top-level view
-			names := r.TopLevelViewNames()
-			for i, name := range names {
-				if name == r.activeName {
-					next := (i + 1) % len(names)
-					if err := r.SwitchTo(names[next]); err != nil {
-						return r, nil
-					}
-					return r, r.active.Init()
-				}
-			}
-			// If active view is in a submenu, jump to first top-level view
-			if r.IsSubmenuView(r.activeName) && len(names) > 0 {
-				if err := r.SwitchTo(names[0]); err != nil {
-					return r, nil
-				}
-				return r, r.active.Init()
-			}
-		case "shift+tab":
-			// Cycle to previous top-level view
-			names := r.TopLevelViewNames()
-			for i, name := range names {
-				if name == r.activeName {
-					prev := (i - 1 + len(names)) % len(names)
-					if err := r.SwitchTo(names[prev]); err != nil {
-						return r, nil
-					}
-					return r, r.active.Init()
-				}
-			}
-			// If active view is in a submenu, jump to last top-level view
-			if r.IsSubmenuView(r.activeName) && len(names) > 0 {
-				if err := r.SwitchTo(names[len(names)-1]); err != nil {
-					return r, nil
-				}
-				return r, r.active.Init()
-			}
-		default:
-			// View switching via F-key (when view allows it)
-			if viewName, ok := r.keyToView[key]; ok {
-				if err := r.SwitchTo(viewName); err != nil {
-					return r, nil
-				}
-				return r, r.active.Init()
-			}
-		}
+		return r.handleRouterKeyMsg(keyMsg)
 	}
 
 	// Handle mouse clicks on tab bar
@@ -386,6 +273,129 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Delegate to active view
+	_, cmd := r.active.Update(msg)
+	return r, cmd
+}
+
+// handleSubmenuInput handles key input when a submenu overlay is shown.
+func (r *Router) handleSubmenuInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	if key == "esc" {
+		r.showSubmenu = false
+		r.activeSubmenu = nil
+		return r, nil
+	}
+	// Check if key matches a submenu item
+	if viewName := r.activeSubmenu.Match(key); viewName != "" {
+		r.showSubmenu = false
+		r.activeSubmenu = nil
+		if err := r.SwitchTo(viewName); err != nil {
+			return r, nil
+		}
+		return r, r.active.Init()
+	}
+	// Any other key closes the submenu
+	r.showSubmenu = false
+	r.activeSubmenu = nil
+	return r, nil
+}
+
+// handleHelpInput handles key input when the help overlay is shown.
+func (r *Router) handleHelpInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "?", "esc":
+		r.showHelp = false
+		return r, nil
+	}
+	// Pass other keys to help overlay for scrolling
+	updated, _ := r.helpOverlay.Update(msg)
+	r.helpOverlay = updated
+	return r, nil
+}
+
+// handleRouterKeyMsg handles regular key navigation: F-keys, tab/shift-tab,
+// submenu triggers, and help toggle.
+func (r *Router) handleRouterKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	// Check submenu trigger keys first (e.g. "g" for Git Operations)
+	// Use case-insensitive matching so both "g" and "G" trigger the submenu.
+	if sm, ok := r.submenus[strings.ToLower(key)]; ok {
+		r.showSubmenu = true
+		r.activeSubmenu = sm
+		r.activeSubmenu.SetSize(r.viewWidth, r.viewHeight)
+		return r, nil
+	}
+
+	// Let views claim specific keys before router handles them.
+	// If a view implements KeyCapturer and claims this key, delegate directly.
+	// If a view does NOT implement KeyCapturer, assume it uses all plain
+	// single-letter keys (safe default) — only F-keys and special keys bypass this.
+	if kc, ok := r.active.(KeyCapturer); ok {
+		if kc.CapturesKey(key) {
+			_, cmd := r.active.Update(msg)
+			return r, cmd
+		}
+	} else if len(key) == 1 && key >= "a" && key <= "z" {
+		// View doesn't declare its keys — don't intercept plain letters
+		_, cmd := r.active.Update(msg)
+		return r, cmd
+	}
+
+	switch key {
+	case "?":
+		r.showHelp = true
+		r.buildHelpOverlay()
+		return r, nil
+	case "tab":
+		// Cycle to next top-level view
+		names := r.TopLevelViewNames()
+		for i, name := range names {
+			if name == r.activeName {
+				next := (i + 1) % len(names)
+				if err := r.SwitchTo(names[next]); err != nil {
+					return r, nil
+				}
+				return r, r.active.Init()
+			}
+		}
+		// If active view is in a submenu, jump to first top-level view
+		if r.IsSubmenuView(r.activeName) && len(names) > 0 {
+			if err := r.SwitchTo(names[0]); err != nil {
+				return r, nil
+			}
+			return r, r.active.Init()
+		}
+	case "shift+tab":
+		// Cycle to previous top-level view
+		names := r.TopLevelViewNames()
+		for i, name := range names {
+			if name == r.activeName {
+				prev := (i - 1 + len(names)) % len(names)
+				if err := r.SwitchTo(names[prev]); err != nil {
+					return r, nil
+				}
+				return r, r.active.Init()
+			}
+		}
+		// If active view is in a submenu, jump to last top-level view
+		if r.IsSubmenuView(r.activeName) && len(names) > 0 {
+			if err := r.SwitchTo(names[len(names)-1]); err != nil {
+				return r, nil
+			}
+			return r, r.active.Init()
+		}
+	default:
+		// View switching via F-key (when view allows it)
+		if viewName, ok := r.keyToView[key]; ok {
+			if err := r.SwitchTo(viewName); err != nil {
+				return r, nil
+			}
+			return r, r.active.Init()
+		}
+	}
+
+	// Delegate unhandled keys to active view
 	_, cmd := r.active.Update(msg)
 	return r, cmd
 }
