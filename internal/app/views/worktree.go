@@ -750,8 +750,7 @@ func (v *WorktreeView) View() string {
 
 	// Footer
 	s.WriteString("\n")
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 	s.WriteString(th.Help.Render(" r: Refresh   /: Search   ↑↓: Navigate   Enter: Navigate   n: Create   d: Remove   a: Merge (agent)   R: Rebase (agent)   m: Create MR   p: Prune   D: Detach All "))
 
 	return s.String()

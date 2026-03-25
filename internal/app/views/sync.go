@@ -400,8 +400,7 @@ func (v *SyncView) View() string {
 func (v *SyncView) renderStatus(s *strings.Builder, th theme.Theme) {
 	s.WriteString(th.StatsStyle.Render(" Branch Status "))
 	s.WriteString("\n")
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 
 	if v.status == nil {
 		s.WriteString(th.DashboardErrorStyle.Render(" Not on a branch"))

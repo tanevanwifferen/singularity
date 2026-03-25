@@ -78,8 +78,7 @@ type AgentView struct {
 	newAgentTask string
 
 	// Kill confirmation state
-	showKillConfirm bool
-	killAgentID     string
+	killConfirm components.ConfirmPrompt
 
 	// Message input state (send to running agent stdin)
 	showMessageInput bool
@@ -529,23 +528,6 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return v, nil
 }
 
-// handleKillConfirm handles key events during kill confirmation.
-func (v *AgentView) handleKillConfirm(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
-	case "y", "enter":
-		if v.engine != nil && v.killAgentID != "" {
-			v.engine.KillAgent(v.killAgentID)
-			v.loadAgents()
-		}
-		v.showKillConfirm = false
-		v.killAgentID = ""
-	case "n", "esc":
-		v.showKillConfirm = false
-		v.killAgentID = ""
-	}
-	return nil
-}
-
 // handleNewAgentInput handles key events during new agent task input.
 func (v *AgentView) handleNewAgentInput(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
@@ -631,8 +613,8 @@ func (v *AgentView) handleAgentKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		_, cmd := v.approvalView.Update(msg)
 		return v, cmd
 	}
-	if v.showKillConfirm {
-		return v, v.handleKillConfirm(msg)
+	if handled, cmd := v.killConfirm.HandleKey(msg); handled {
+		return v, cmd
 	}
 	if v.showMessageInput {
 		return v, v.handleMessageInput(msg)
@@ -755,8 +737,14 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Kill selected agent (capital K to not conflict with vim nav)
 		if item, idx := v.filter.SelectedItem(); idx >= 0 {
 			if item.State == engine.AgentRunning || item.State == engine.AgentStarting {
-				v.showKillConfirm = true
-				v.killAgentID = item.ID
+				agentID := item.ID
+				v.killConfirm.Show("Kill Agent", fmt.Sprintf("Kill agent %s?", agentID), func() tea.Cmd {
+					if v.engine != nil {
+						v.engine.KillAgent(agentID)
+						v.loadAgents()
+					}
+					return nil
+				})
 			}
 		}
 		return v, nil
@@ -1009,7 +997,7 @@ func (v *AgentView) View() string {
 	}
 
 	// Help hint
-	if !v.showNewAgent && !v.showKillConfirm && !v.jiraPicker.IsOpen() && v.jiraConfirmIssue == nil {
+	if !v.showNewAgent && !v.killConfirm.Visible && !v.jiraPicker.IsOpen() && v.jiraConfirmIssue == nil {
 		s.WriteString("  ")
 		jiraHint := ""
 		if v.jiraPicker.IsAvailable() {
@@ -1193,13 +1181,9 @@ func (v *AgentView) View() string {
 	}
 
 	// Kill confirmation modal
-	if v.showKillConfirm {
+	if v.killConfirm.Visible {
 		s.WriteString("\n")
-		shortID := v.killAgentID
-		if len(shortID) > 12 {
-			shortID = shortID[:12]
-		}
-		s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf(" Kill agent %s? (y/n) ", shortID)))
+		s.WriteString(v.killConfirm.Render(modalWidth(v.width)))
 	}
 
 	// Error display
@@ -1230,7 +1214,7 @@ func (v *AgentView) Refresh() error {
 
 // CapturesInput returns true when the view is in an input mode.
 func (v *AgentView) CapturesInput() bool {
-	return v.showNewAgent || v.showKillConfirm || v.showMessageInput || v.focus == focusOutput ||
+	return v.showNewAgent || v.killConfirm.Visible || v.showMessageInput || v.focus == focusOutput ||
 		v.jiraPicker.IsOpen() || v.jiraConfirmIssue != nil || v.approvalView != nil
 }
 

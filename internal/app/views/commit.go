@@ -906,8 +906,7 @@ func (v *CommitView) renderStagingView(s *strings.Builder, th theme.Theme) strin
 	}
 
 	// Summary line
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 
 	if stagedCount > 0 {
 		s.WriteString(fmt.Sprintf(" %s %s files  %s +%s  %s -%s\n",
@@ -937,8 +936,7 @@ func (v *CommitView) renderStagingView(s *strings.Builder, th theme.Theme) strin
 			th.StatsStyle.Render("0")))
 	}
 
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n\n")
+	s.WriteString(renderSeparator() + "\n")
 
 	// Staged section
 	s.WriteString(th.StatsStyle.Render(" Staged Changes "))
@@ -1025,8 +1023,7 @@ func (v *CommitView) renderStagingView(s *strings.Builder, th theme.Theme) strin
 	s.WriteString("\n")
 
 	// Help footer
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 	if stagedCount > 0 {
 		s.WriteString(th.Help.Render(" Space: Stage/Unstage   Enter: Hunk diff   a: Stage all   u: Unstage all   Tab: Switch   c: Commit   r: Refresh "))
 	} else {
@@ -1038,8 +1035,7 @@ func (v *CommitView) renderStagingView(s *strings.Builder, th theme.Theme) strin
 
 // renderMessageEditor renders the message editor view
 func (v *CommitView) renderMessageEditor(s *strings.Builder, th theme.Theme) string {
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 	s.WriteString(th.DashboardAccentStyle.Render(" Write Commit Message "))
 	s.WriteString("\n\n")
 
@@ -1051,8 +1047,7 @@ func (v *CommitView) renderMessageEditor(s *strings.Builder, th theme.Theme) str
 	}
 
 	// Message input area
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 
 	// Render message with cursor
 	messageHeight := 6
@@ -1086,8 +1081,7 @@ func (v *CommitView) renderMessageEditor(s *strings.Builder, th theme.Theme) str
 		}
 	}
 
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n\n")
+	s.WriteString(renderSeparator() + "\n")
 
 	// Conventional commit hint
 	s.WriteString(th.Help.Render(" Conventional format: type: description (e.g., feat: add new feature)\n"))
@@ -1105,8 +1099,7 @@ func (v *CommitView) renderMessageEditor(s *strings.Builder, th theme.Theme) str
 	s.WriteString("\n")
 
 	// Help footer for message editing mode
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 	s.WriteString(th.Help.Render(" Enter: New line   Ctrl+G: AI generate   Ctrl+S: Commit   Esc: Cancel "))
 
 	return s.String()
@@ -1122,8 +1115,7 @@ func (v *CommitView) renderConfirmDialog(s *strings.Builder, th theme.Theme) str
 
 	// Show commit message preview
 	s.WriteString(th.StatsStyle.Render(" Commit message:\n"))
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 
 	// Word wrap the message for display
 	lines := strings.Split(v.commitMessage, "\n")
@@ -1146,8 +1138,7 @@ func (v *CommitView) renderConfirmDialog(s *strings.Builder, th theme.Theme) str
 		}
 	}
 
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n\n")
+	s.WriteString(renderSeparator() + "\n")
 
 	// File count
 	stagedCount := len(v.stagedFiles)
@@ -1174,8 +1165,7 @@ func (v *CommitView) renderHunkDiffView(s *strings.Builder, th theme.Theme) stri
 	}
 	s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" Hunk Diff: %s (%s) ", v.hunkFilePath, sectionLabel)))
 	s.WriteString("\n")
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 
 	s.WriteString(fmt.Sprintf(" Hunk %s of %s\n",
 		th.DashboardAccentStyle.Render(fmt.Sprintf("%d", v.hunkIndex+1)),
@@ -1266,8 +1256,7 @@ func (v *CommitView) renderHunkDiffView(s *strings.Builder, th theme.Theme) stri
 	}
 
 	s.WriteString("\n")
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 	s.WriteString(th.Help.Render(" Up/Down: Select hunk   Space: Stage/Unstage hunk   l: Line select   Esc: Back to file list "))
 
 	return s.String()
@@ -1281,8 +1270,7 @@ func (v *CommitView) renderLineDiffView(s *strings.Builder, th theme.Theme) stri
 	}
 	s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" Line Select: %s (%s) ", v.hunkFilePath, sectionLabel)))
 	s.WriteString("\n")
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 
 	hunk := v.hunkList[v.hunkIndex]
 	s.WriteString(fmt.Sprintf(" Hunk %s of %s  |  ",
@@ -1365,8 +1353,7 @@ func (v *CommitView) renderLineDiffView(s *strings.Builder, th theme.Theme) stri
 	}
 
 	s.WriteString("\n")
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 
 	action := "stage"
 	if v.hunkIsStaged {

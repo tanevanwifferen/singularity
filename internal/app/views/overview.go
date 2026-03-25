@@ -198,8 +198,7 @@ func (v *OverviewView) View() string {
 	// Repository status section
 	s.WriteString(theme.StatsStyle.Render(" Repository Status "))
 	s.WriteString("\n")
-	s.WriteString(theme.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 
 	if v.repo != nil {
 		// Branch
@@ -280,8 +279,7 @@ func (v *OverviewView) View() string {
 	// Recent commits section
 	s.WriteString(theme.StatsStyle.Render(" Recent Commits "))
 	s.WriteString("\n")
-	s.WriteString(theme.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 
 	if len(v.commits) == 0 {
 		s.WriteString(theme.StatsStyle.Render(" No commits yet"))

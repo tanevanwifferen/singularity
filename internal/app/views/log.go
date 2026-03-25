@@ -65,17 +65,15 @@ type LogView struct {
 	filterMode string // "" or "author" or "message"
 
 	// Commit operations modal states
-	showCherryPickConfirm bool
-	cherryPickHash        string
-	showResetMenu         bool // shows soft/mixed/hard submenu
-	resetHash             string
-	resetMode             string // "soft", "mixed", "hard"
-	showResetConfirm      bool
-	showRewordEditor      bool
-	rewordMessage         string
-	rewordCursor          int
-	operationErr          error  // transient error from last operation
-	operationSuccess      string // transient success message
+	cherryPickConfirm components.ConfirmPrompt
+	showResetMenu     bool // shows soft/mixed/hard submenu
+	resetHash         string
+	resetMode         string // "soft", "mixed", "hard"
+	resetConfirm      components.ConfirmPrompt
+	showRewordEditor  bool
+	rewordInput       components.TextInput
+	operationErr      error  // transient error from last operation
+	operationSuccess  string // transient success message
 }
 
 // NewLogView creates a new log view.
@@ -336,11 +334,11 @@ func (v *LogView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // handleLogKeyMsg dispatches key events based on the current modal/view state.
 func (v *LogView) handleLogKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Handle modal states first (highest priority)
-	if v.showCherryPickConfirm {
-		return v, v.handleCherryPickConfirm(msg)
+	if handled, cmd := v.cherryPickConfirm.HandleKey(msg); handled {
+		return v, cmd
 	}
-	if v.showResetConfirm {
-		return v, v.handleResetConfirm(msg)
+	if handled, cmd := v.resetConfirm.HandleKey(msg); handled {
+		return v, cmd
 	}
 	if v.showResetMenu {
 		return v, v.handleResetMenu(msg)
@@ -445,10 +443,20 @@ func (v *LogView) handleListKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "c":
 		// Cherry-pick selected commit (show confirmation)
 		if item, idx := v.filter.SelectedItem(); idx >= 0 {
-			v.cherryPickHash = item.Hash
-			v.showCherryPickConfirm = true
 			v.operationErr = nil
 			v.operationSuccess = ""
+			hash := item.Hash
+			v.cherryPickConfirm.Show("Cherry-pick Commit",
+				fmt.Sprintf("Cherry-pick commit %s onto current branch?", hash[:min(8, len(hash))]),
+				func() tea.Cmd {
+					if err := git.CherryPick(v.repoPath, hash); err != nil {
+						v.operationErr = err
+					} else {
+						v.operationSuccess = fmt.Sprintf("Cherry-picked %s", hash[:8])
+						v.loadCommits(true)
+					}
+					return nil
+				})
 		}
 
 	case "w":
@@ -457,8 +465,7 @@ func (v *LogView) handleListKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Only allow reword on the first commit (HEAD)
 			if idx == 0 {
 				v.showRewordEditor = true
-				v.rewordMessage = item.Subject
-				v.rewordCursor = len(item.Subject)
+				v.rewordInput.Set(item.Subject)
 				v.operationErr = nil
 				v.operationSuccess = ""
 			} else {
@@ -600,41 +607,18 @@ func (v *LogView) handleDetailKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// handleCherryPickConfirm handles y/n during cherry-pick confirmation.
-func (v *LogView) handleCherryPickConfirm(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
-	case "y", "Y", "enter":
-		hash := v.cherryPickHash
-		v.showCherryPickConfirm = false
-		v.cherryPickHash = ""
-		if err := git.CherryPick(v.repoPath, hash); err != nil {
-			v.operationErr = err
-		} else {
-			v.operationSuccess = fmt.Sprintf("Cherry-picked %s", hash[:8])
-			v.loadCommits(true)
-		}
-	case "n", "N", "esc":
-		v.showCherryPickConfirm = false
-		v.cherryPickHash = ""
-	}
-	return nil
-}
-
 // handleResetMenu handles the soft/mixed/hard submenu for reset.
 func (v *LogView) handleResetMenu(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "s":
-		v.resetMode = "soft"
 		v.showResetMenu = false
-		v.showResetConfirm = true
+		v.showResetConfirmForMode("soft")
 	case "m":
-		v.resetMode = "mixed"
 		v.showResetMenu = false
-		v.showResetConfirm = true
+		v.showResetConfirmForMode("mixed")
 	case "h":
-		v.resetMode = "hard"
 		v.showResetMenu = false
-		v.showResetConfirm = true
+		v.showResetConfirmForMode("hard")
 	case "esc":
 		v.showResetMenu = false
 		v.resetHash = ""
@@ -643,27 +627,27 @@ func (v *LogView) handleResetMenu(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// handleResetConfirm handles y/n during reset confirmation.
-func (v *LogView) handleResetConfirm(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
-	case "y", "Y", "enter":
-		hash := v.resetHash
-		mode := v.resetMode
-		v.showResetConfirm = false
-		v.resetHash = ""
-		v.resetMode = ""
-		if err := git.ResetToCommit(v.repoPath, hash, mode); err != nil {
-			v.operationErr = err
-		} else {
-			v.operationSuccess = fmt.Sprintf("Reset --%s to %s", mode, hash[:8])
-			v.loadCommits(true)
-		}
-	case "n", "N", "esc":
-		v.showResetConfirm = false
-		v.resetHash = ""
-		v.resetMode = ""
-	}
-	return nil
+// showResetConfirmForMode configures and shows the reset confirmation dialog.
+func (v *LogView) showResetConfirmForMode(mode string) {
+	hash := v.resetHash
+	v.resetMode = mode
+	v.resetConfirm.ShowWithCancel("Confirm Reset",
+		fmt.Sprintf("Reset --%s to %s?\nThis may modify your working tree.", mode, hash[:min(8, len(hash))]),
+		func() tea.Cmd {
+			v.resetHash = ""
+			v.resetMode = ""
+			if err := git.ResetToCommit(v.repoPath, hash, mode); err != nil {
+				v.operationErr = err
+			} else {
+				v.operationSuccess = fmt.Sprintf("Reset --%s to %s", mode, hash[:8])
+				v.loadCommits(true)
+			}
+			return nil
+		},
+		func() {
+			v.resetHash = ""
+			v.resetMode = ""
+		})
 }
 
 // handleRewordEditor handles the text editor for rewording HEAD commit.
@@ -671,11 +655,10 @@ func (v *LogView) handleRewordEditor(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
 		// Confirm reword
-		if v.rewordMessage != "" {
-			newMsg := v.rewordMessage
+		if v.rewordInput.Value != "" {
+			newMsg := v.rewordInput.Value
 			v.showRewordEditor = false
-			v.rewordMessage = ""
-			v.rewordCursor = 0
+			v.rewordInput.Clear()
 			if err := git.AmendCommitMessage(v.repoPath, newMsg); err != nil {
 				v.operationErr = err
 			} else {
@@ -685,43 +668,9 @@ func (v *LogView) handleRewordEditor(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "esc":
 		v.showRewordEditor = false
-		v.rewordMessage = ""
-		v.rewordCursor = 0
-	case "backspace":
-		if v.rewordCursor > 0 {
-			v.rewordMessage = v.rewordMessage[:v.rewordCursor-1] + v.rewordMessage[v.rewordCursor:]
-			v.rewordCursor--
-		}
-	case "left":
-		if v.rewordCursor > 0 {
-			v.rewordCursor--
-		}
-	case "right":
-		if v.rewordCursor < len(v.rewordMessage) {
-			v.rewordCursor++
-		}
-	case "home":
-		v.rewordCursor = 0
-	case "end":
-		v.rewordCursor = len(v.rewordMessage)
-	case "ctrl+w":
-		v.rewordMessage, v.rewordCursor = components.DeleteWord(v.rewordMessage, v.rewordCursor)
+		v.rewordInput.Clear()
 	default:
-		if msg.Paste && len(msg.Runes) > 0 {
-			pasted := string(msg.Runes)
-			before := v.rewordMessage[:v.rewordCursor]
-			after := v.rewordMessage[v.rewordCursor:]
-			v.rewordMessage = before + pasted + after
-			v.rewordCursor += len([]rune(pasted))
-		} else if len(msg.Runes) == 1 {
-			r := msg.Runes[0]
-			if r >= 32 && r <= 126 {
-				before := v.rewordMessage[:v.rewordCursor]
-				after := v.rewordMessage[v.rewordCursor:]
-				v.rewordMessage = before + string(r) + after
-				v.rewordCursor++
-			}
-		}
+		v.rewordInput.HandleKey(msg)
 	}
 	return nil
 }
@@ -935,8 +884,7 @@ func (v *LogView) View() string {
 
 	// Footer
 	s.WriteString("\n")
-	s.WriteString(th.StatsStyle.Render(" ──────────────────────────────────────────────── "))
-	s.WriteString("\n")
+	s.WriteString(renderSeparator())
 	footerText := " r: Refresh   a: Author   s: Search   Enter: Detail   y: Copy hash   c: Cherry-pick   w: Reword   x: Reset"
 	if v.hasMore {
 		footerText += "   g: More"
@@ -946,18 +894,8 @@ func (v *LogView) View() string {
 	// Render modal overlays on top
 	base := s.String()
 
-	if v.showCherryPickConfirm {
-		shortHash := v.cherryPickHash
-		if len(shortHash) > 8 {
-			shortHash = shortHash[:8]
-		}
-		modal := components.NewConfirmDialog(
-			"Cherry-pick Commit",
-			fmt.Sprintf("Cherry-pick commit %s onto current branch?", shortHash),
-			"cherry-pick",
-		)
-		modal.SetSize(v.width, v.height)
-		return modal.View(base)
+	if v.cherryPickConfirm.Visible {
+		return base + "\n\n" + v.cherryPickConfirm.Render(modalWidth(v.width))
 	}
 
 	if v.showResetMenu {
@@ -977,23 +915,13 @@ func (v *LogView) View() string {
 		return m.Render(base)
 	}
 
-	if v.showResetConfirm {
-		shortHash := v.resetHash
-		if len(shortHash) > 8 {
-			shortHash = shortHash[:8]
-		}
-		modal := components.NewConfirmDialog(
-			"Confirm Reset",
-			fmt.Sprintf("Reset --%s to %s?\nThis may modify your working tree.", v.resetMode, shortHash),
-			"reset",
-		)
-		modal.SetSize(v.width, v.height)
-		return modal.View(base)
+	if v.resetConfirm.Visible {
+		return base + "\n\n" + v.resetConfirm.Render(modalWidth(v.width))
 	}
 
 	if v.showRewordEditor {
 		// Render inline text editor modal
-		content := fmt.Sprintf("Edit commit message for HEAD:\n\n> %s\n\nEnter: Confirm   Esc: Cancel", v.rewordMessage+"█")
+		content := fmt.Sprintf("Edit commit message for HEAD:\n\n> %s\n\nEnter: Confirm   Esc: Cancel", v.rewordInput.RenderPlain())
 		m := components.NewModal("Reword Commit", content)
 		m.SetSize(v.width, v.height)
 		return m.Render(base)
