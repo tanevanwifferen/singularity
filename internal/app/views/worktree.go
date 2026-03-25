@@ -16,14 +16,12 @@ import (
 
 // WorktreeView displays and manages git worktrees.
 type WorktreeView struct {
-	repoPath  string
+	viewBase
 	repo      *git.RepoInfo
 	worktrees []git.Worktree
 	filter    *components.Filter[git.Worktree]
 	loading   bool
 	err       error
-	width     int
-	height    int
 
 	// Agent engine for starting merge agents
 	engine *engine.Engine
@@ -58,9 +56,7 @@ type WorktreeView struct {
 // NewWorktreeView creates a new worktree view.
 func NewWorktreeView(repoPath string) *WorktreeView {
 	v := &WorktreeView{
-		repoPath: repoPath,
-		width:    80,
-		height:   24,
+		viewBase: viewBase{repoPath: repoPath, width: 80, height: 24},
 	}
 
 	// Initialize the filter with worktree items
@@ -70,9 +66,6 @@ func NewWorktreeView(repoPath string) *WorktreeView {
 
 	return v
 }
-
-// SetRepoPath updates the repository path for this view.
-func (v *WorktreeView) SetRepoPath(path string) { v.repoPath = path }
 
 // SetEngine sets the agent engine used to start merge agents.
 func (v *WorktreeView) SetEngine(eng *engine.Engine) {
@@ -718,21 +711,15 @@ func fitStr(s string, n int) string {
 	return s + strings.Repeat(" ", n-len(r))
 }
 
-// SetSize updates the view dimensions.
+// SetSize updates the view dimensions and resizes filters.
 func (v *WorktreeView) SetSize(width, height int) {
-	v.width = width
-	v.height = height
+	v.viewBase.SetSize(width, height)
 	if v.filter != nil {
 		v.filter.SetHeight(height)
 	}
 	if v.branchFilter != nil {
 		v.branchFilter.SetHeight(height)
 	}
-}
-
-// GetRepoPath returns the repository path.
-func (v *WorktreeView) GetRepoPath() string {
-	return v.repoPath
 }
 
 // Refresh reloads repository data.

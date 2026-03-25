@@ -32,15 +32,13 @@ type LogCommit struct {
 
 // LogView displays a scrollable commit log with filtering and detail view.
 type LogView struct {
-	repoPath    string
+	viewBase
 	repo        *git.RepoInfo
 	commits     []LogCommit
 	filter      *components.Filter[LogCommit]
 	loading     bool
 	loadingMore bool
 	err         error
-	width       int
-	height      int
 
 	// Filter state
 	authorFilter  string
@@ -83,9 +81,7 @@ type LogView struct {
 // NewLogView creates a new log view.
 func NewLogView(repoPath string) *LogView {
 	v := &LogView{
-		repoPath: repoPath,
-		width:    80,
-		height:   24,
+		viewBase: viewBase{repoPath: repoPath, width: 80, height: 24},
 		pageSize: 50,
 		hasMore:  true,
 	}
@@ -101,9 +97,6 @@ func NewLogView(repoPath string) *LogView {
 
 	return v
 }
-
-// SetRepoPath updates the repository path for this view.
-func (v *LogView) SetRepoPath(path string) { v.repoPath = path }
 
 // Init initializes the log view.
 func (v *LogView) Init() tea.Cmd {
@@ -1379,10 +1372,9 @@ func (v *LogView) headerFooterLines() int {
 	return lines
 }
 
-// SetSize updates the view dimensions.
+// SetSize updates the view dimensions and resizes the filter.
 func (v *LogView) SetSize(width, height int) {
-	v.width = width
-	v.height = height
+	v.viewBase.SetSize(width, height)
 	if v.filter != nil {
 		listHeight := height - v.headerFooterLines()
 		if listHeight < 3 {
@@ -1390,11 +1382,6 @@ func (v *LogView) SetSize(width, height int) {
 		}
 		v.filter.SetHeight(listHeight)
 	}
-}
-
-// GetRepoPath returns the repository path.
-func (v *LogView) GetRepoPath() string {
-	return v.repoPath
 }
 
 // Refresh reloads commit data.

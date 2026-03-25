@@ -33,14 +33,13 @@ func (n treeNode) String() string {
 
 // ProjectView displays aggregate multi-repo project status.
 type ProjectView struct {
+	viewBase
 	proj *project.Project
 	// Fallback path if proj is nil
 	projectPath string
 	status      *project.ProjectStatus
 	loading     bool
 	err         error
-	width       int
-	height      int
 
 	// Tree state
 	expanded map[int]bool // repo index -> expanded
@@ -73,9 +72,8 @@ type ProjectView struct {
 // NewProjectView creates a new project view with an already-loaded project.
 func NewProjectView(proj *project.Project) *ProjectView {
 	v := &ProjectView{
+		viewBase: viewBase{width: 80, height: 24},
 		proj:     proj,
-		width:    80,
-		height:   24,
 		expanded: make(map[int]bool),
 	}
 
@@ -89,9 +87,8 @@ func NewProjectView(proj *project.Project) *ProjectView {
 // The project will be loaded lazily via auto-discovery.
 func NewProjectViewWithPath(projectPath string) *ProjectView {
 	v := &ProjectView{
+		viewBase:    viewBase{width: 80, height: 24},
 		projectPath: projectPath,
-		width:       80,
-		height:      24,
 		expanded:    make(map[int]bool),
 	}
 
@@ -758,10 +755,9 @@ func (v *ProjectView) CapturesKey(key string) bool {
 	return false
 }
 
-// SetSize updates the view dimensions.
+// SetSize updates the view dimensions and resizes the filter.
 func (v *ProjectView) SetSize(width, height int) {
-	v.width = width
-	v.height = height
+	v.viewBase.SetSize(width, height)
 	if v.filter != nil {
 		// Fixed overhead: title(1) + blank(1) + summary(1) + blank(1) + repos header(2) + footer(3)
 		available := height - 10

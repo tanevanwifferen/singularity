@@ -13,11 +13,9 @@ import (
 
 // PRView provides a TUI interface for creating Pull Requests (GitHub) and Merge Requests (GitLab).
 type PRView struct {
-	repoPath string
+	viewBase
 	repo     *git.RepoInfo
 	branches []git.BranchInfo
-	width    int
-	height   int
 
 	// Branch selection state
 	sourceBranchIdx     int
@@ -52,20 +50,15 @@ type PRView struct {
 // NewPRView creates a new PR/MR creation view.
 func NewPRView(repoPath string) *PRView {
 	return &PRView{
-		repoPath:        repoPath,
+		viewBase:        viewBase{repoPath: repoPath, width: 120, height: 30},
 		sourceBranchIdx: -1,
 		targetBranchIdx: -1,
-		width:           120,
-		height:          30,
 		editDescription: false,
 		descLines:       []string{""},
 		descCursorRow:   0,
 		descCursorCol:   0,
 	}
 }
-
-// SetRepoPath updates the repository path for this view.
-func (v *PRView) SetRepoPath(path string) { v.repoPath = path }
 
 // SetPendingSourceBranch pre-selects a branch as the source on the next data load.
 func (v *PRView) SetPendingSourceBranch(name string) {

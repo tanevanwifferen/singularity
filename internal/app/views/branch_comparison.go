@@ -16,12 +16,10 @@ import (
 // Left panel: list of branches to compare against
 // Right panel: detailed comparison results
 type BranchComparisonView struct {
-	repoPath    string
+	viewBase
 	repo        *git.RepoInfo
 	branches    []git.BranchInfo
 	selectedIdx int
-	width       int
-	height      int
 	loading     bool
 	err         error
 
@@ -35,15 +33,10 @@ type BranchComparisonView struct {
 // NewBranchComparisonView creates a new branch comparison view.
 func NewBranchComparisonView(repoPath string) *BranchComparisonView {
 	return &BranchComparisonView{
-		repoPath:    repoPath,
-		width:       120,
-		height:      30,
+		viewBase:    viewBase{repoPath: repoPath, width: 120, height: 30},
 		selectedIdx: 0,
 	}
 }
-
-// SetRepoPath updates the repository path for this view.
-func (v *BranchComparisonView) SetRepoPath(path string) { v.repoPath = path }
 
 // Init initializes the view.
 func (v *BranchComparisonView) Init() tea.Cmd {
@@ -506,17 +499,6 @@ func (v *BranchComparisonView) renderRightPanel(width int) string {
 // ShortHelp returns a short help string.
 func (v *BranchComparisonView) ShortHelp() string {
 	return "↑↓: Select  Enter/Tab: Switch  Esc: Back  r: Refresh"
-}
-
-// SetSize updates the view dimensions.
-func (v *BranchComparisonView) SetSize(width, height int) {
-	v.width = width
-	v.height = height
-}
-
-// GetRepoPath returns the repository path.
-func (v *BranchComparisonView) GetRepoPath() string {
-	return v.repoPath
 }
 
 // Refresh reloads repository data.

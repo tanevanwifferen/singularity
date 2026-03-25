@@ -37,9 +37,7 @@ const (
 
 // CommitView displays the staging area and allows creating commits.
 type CommitView struct {
-	repoPath   string
-	width      int
-	height     int
+	viewBase
 	loading    bool
 	generating bool // AI message generation in progress
 	committing bool // Commit in progress
@@ -80,16 +78,11 @@ type CommitView struct {
 // NewCommitView creates a new commit view.
 func NewCommitView(repoPath string) *CommitView {
 	return &CommitView{
-		repoPath:      repoPath,
-		width:         80,
-		height:        24,
+		viewBase:      viewBase{repoPath: repoPath, width: 80, height: 24},
 		activeSection: 1, // Start on unstaged (more common to stage from)
 		selectedIndex: 0,
 	}
 }
-
-// SetRepoPath updates the repository path for this view.
-func (v *CommitView) SetRepoPath(path string) { v.repoPath = path }
 
 // Init initializes the commit view.
 func (v *CommitView) Init() tea.Cmd {
@@ -1423,17 +1416,6 @@ func (v *CommitView) ShortHelp() string {
 		return "Up/Down: Select hunk  Space: Stage/Unstage hunk  l: Line mode  Esc: Back"
 	}
 	return "Space: Toggle  Enter: Hunk diff  a/u: Stage/Unstage all  Tab: Switch  c: Commit"
-}
-
-// SetSize updates the view dimensions.
-func (v *CommitView) SetSize(width, height int) {
-	v.width = width
-	v.height = height
-}
-
-// GetRepoPath returns the repository path.
-func (v *CommitView) GetRepoPath() string {
-	return v.repoPath
 }
 
 // Refresh reloads file data.

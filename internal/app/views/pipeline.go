@@ -15,14 +15,12 @@ import (
 
 // PipelineView displays CI/CD pipeline status for branches.
 type PipelineView struct {
-	repoPath  string
+	viewBase
 	repo      *git.RepoInfo
 	branches  []git.BranchInfo
 	pipelines map[string]*git.PipelineInfo
 	loading   bool
 	err       error
-	width     int
-	height    int
 
 	// Selection state
 	selectedIdx    int
@@ -41,16 +39,13 @@ type PipelineView struct {
 // NewPipelineView creates a new pipeline view.
 func NewPipelineView(repoPath string) *PipelineView {
 	v := &PipelineView{
-		repoPath:        repoPath,
+		viewBase:        viewBase{repoPath: repoPath},
 		refreshInterval: 30 * time.Second,
 		selectedIdx:     0,
 	}
 
 	return v
 }
-
-// SetRepoPath updates the repository path for this view.
-func (v *PipelineView) SetRepoPath(path string) { v.repoPath = path }
 
 // Init initializes the pipeline view.
 func (v *PipelineView) Init() tea.Cmd {
@@ -477,17 +472,6 @@ func (v *PipelineView) getStatusStyle(status git.PipelineStatus) lipgloss.Style 
 // ShortHelp returns a short help string.
 func (v *PipelineView) ShortHelp() string {
 	return "↑↓: Navigate  Enter: Expand  R: Retry  r: Refresh  a: Auto-refresh"
-}
-
-// SetSize updates the view dimensions.
-func (v *PipelineView) SetSize(width, height int) {
-	v.width = width
-	v.height = height
-}
-
-// GetRepoPath returns the repository path.
-func (v *PipelineView) GetRepoPath() string {
-	return v.repoPath
 }
 
 // KeyBindings returns the keybindings for this view.

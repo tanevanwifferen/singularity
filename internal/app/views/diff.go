@@ -34,12 +34,10 @@ type DiffLine struct {
 // Left panel: scrollable file list with status indicators
 // Right panel: file details and diff content
 type DiffView struct {
-	repoPath string
-	repo     *git.RepoInfo
-	width    int
-	height   int
-	loading  bool
-	err      error
+	viewBase
+	repo    *git.RepoInfo
+	loading bool
+	err     error
 
 	// Mode: branch diff or workdir diff
 	mode DiffViewMode
@@ -74,27 +72,20 @@ type DiffView struct {
 // NewDiffView creates a new diff view for branch comparison.
 func NewDiffView(repoPath, branchA, branchB string) *DiffView {
 	return &DiffView{
-		repoPath:      repoPath,
+		viewBase:      viewBase{repoPath: repoPath, width: 120, height: 30},
 		branchA:       branchA,
 		branchB:       branchB,
 		mode:          DiffModeBranch,
-		width:         120,
-		height:        30,
 		selectedIdx:   0,
 		focusFileList: true,
 	}
 }
 
-// SetRepoPath updates the repository path for this view.
-func (v *DiffView) SetRepoPath(path string) { v.repoPath = path }
-
 // NewWorkdirDiffView creates a new diff view for staged/unstaged changes.
 func NewWorkdirDiffView(repoPath string) *DiffView {
 	return &DiffView{
-		repoPath:      repoPath,
+		viewBase:      viewBase{repoPath: repoPath, width: 120, height: 30},
 		mode:          DiffModeWorkdir,
-		width:         120,
-		height:        30,
 		selectedIdx:   0,
 		focusFileList: true,
 	}
@@ -716,17 +707,6 @@ func (v *DiffView) renderDiffWithGutter(width int) string {
 // ShortHelp returns a short help string.
 func (v *DiffView) ShortHelp() string {
 	return "↑↓: Navigate files  Enter: View diff  j/k: Scroll diff  g/G: Top/Bottom  Esc: Back"
-}
-
-// SetSize updates the view dimensions.
-func (v *DiffView) SetSize(width, height int) {
-	v.width = width
-	v.height = height
-}
-
-// GetRepoPath returns the repository path.
-func (v *DiffView) GetRepoPath() string {
-	return v.repoPath
 }
 
 // Refresh reloads diff data.

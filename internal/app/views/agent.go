@@ -42,14 +42,12 @@ const (
 
 // AgentView displays the agent console with a split-pane layout.
 type AgentView struct {
-	repoPath     string
+	viewBase
 	engine       *engine.Engine
 	contextFiles []string // Files to inject into agent prompts
 	agents       []AgentInfo
 	filter       *components.Filter[AgentInfo]
 	loading      bool
-	width        int
-	height       int
 	err          error
 
 	// Split pane focus
@@ -90,11 +88,9 @@ func NewAgentView(repoPath string, eng *engine.Engine, contextFiles ...[]string)
 		ctxFiles = contextFiles[0]
 	}
 	v := &AgentView{
-		repoPath:         repoPath,
+		viewBase:         viewBase{repoPath: repoPath, width: 80, height: 24},
 		engine:           eng,
 		contextFiles:     ctxFiles,
-		width:            80,
-		height:           24,
 		refreshInterval:  500 * time.Millisecond,
 		outputAutoScroll: true,
 		focus:            focusList,
@@ -140,9 +136,6 @@ func (v *AgentView) outputHeight() int {
 	}
 	return h
 }
-
-// SetRepoPath updates the repository path for this view.
-func (v *AgentView) SetRepoPath(path string) { v.repoPath = path }
 
 // SetEngine sets the agent engine (allows late binding)
 func (v *AgentView) SetEngine(eng *engine.Engine) {
@@ -965,16 +958,10 @@ func (v *AgentView) ShortHelp() string {
 	return "n:new  K:kill  enter:view  d:close  c:clear  r:refresh"
 }
 
-// SetSize updates the view dimensions.
+// SetSize updates the view dimensions and recalculates the layout.
 func (v *AgentView) SetSize(width, height int) {
-	v.width = width
-	v.height = height
+	v.viewBase.SetSize(width, height)
 	v.recalcLayout()
-}
-
-// GetRepoPath returns the repository path.
-func (v *AgentView) GetRepoPath() string {
-	return v.repoPath
 }
 
 // Refresh reloads agent data.

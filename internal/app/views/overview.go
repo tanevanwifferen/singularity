@@ -17,13 +17,11 @@ import (
 
 // OverviewView displays repository health at a glance.
 type OverviewView struct {
-	repoPath    string
+	viewBase
 	repo        *git.RepoInfo
 	commits     []CommitInfo
 	stashCount  int
 	worktreeCnt int
-	width       int
-	height      int
 	loading     bool
 	err         error
 }
@@ -39,14 +37,9 @@ type CommitInfo struct {
 // NewOverviewView creates a new overview view.
 func NewOverviewView(repoPath string) *OverviewView {
 	return &OverviewView{
-		repoPath: repoPath,
-		width:    80,
-		height:   24,
+		viewBase: viewBase{repoPath: repoPath, width: 80, height: 24},
 	}
 }
-
-// SetRepoPath updates the repository path for this view.
-func (v *OverviewView) SetRepoPath(path string) { v.repoPath = path }
 
 // Init initializes the overview view.
 func (v *OverviewView) Init() tea.Cmd {
@@ -277,17 +270,6 @@ func (v *OverviewView) findCurrentBranch() *git.BranchInfo {
 // ShortHelp returns a short help string.
 func (v *OverviewView) ShortHelp() string {
 	return "r: Refresh"
-}
-
-// SetSize updates the view dimensions.
-func (v *OverviewView) SetSize(width, height int) {
-	v.width = width
-	v.height = height
-}
-
-// GetRepoPath returns the repository path.
-func (v *OverviewView) GetRepoPath() string {
-	return v.repoPath
 }
 
 // Refresh reloads repository data.

@@ -36,9 +36,8 @@ type WorkflowTickMsg struct{}
 
 // WorkflowsView manages multi-repo feature workflows (worktrees, push, MR, agents).
 type WorkflowsView struct {
-	proj   *project.Project
-	width  int
-	height int
+	viewBase
+	proj *project.Project
 
 	// Workflow state
 	workflows        []*project.FeatureWorkflow
@@ -88,9 +87,8 @@ type WorkflowsView struct {
 // NewWorkflowsView creates a new workflows view.
 func NewWorkflowsView(proj *project.Project) *WorkflowsView {
 	v := &WorkflowsView{
-		proj:   proj,
-		width:  80,
-		height: 24,
+		viewBase: viewBase{width: 80, height: 24},
+		proj:     proj,
 	}
 	v.workflowBaseDir = defaultWorkflowBaseDir(proj.Name)
 	v.filter = components.NewFilter([]*project.FeatureWorkflow{}, v.renderWorkflowItem)
@@ -1407,10 +1405,9 @@ func (v *WorkflowsView) CapturesKey(key string) bool {
 	return false
 }
 
-// SetSize updates the view dimensions.
+// SetSize updates the view dimensions and resizes the filter.
 func (v *WorkflowsView) SetSize(width, height int) {
-	v.width = width
-	v.height = height
+	v.viewBase.SetSize(width, height)
 	if v.filter != nil {
 		v.filter.SetHeight(height - 10)
 	}

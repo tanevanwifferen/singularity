@@ -48,9 +48,8 @@ type projectSyncStepMsg struct {
 
 // ProjectSyncView handles sync operations across all repos in a project.
 type ProjectSyncView struct {
-	proj   *project.Project
-	width  int
-	height int
+	viewBase
+	proj *project.Project
 
 	// Per-repo status
 	repoStatuses []projectSyncRepoStatus
@@ -78,9 +77,8 @@ func (v *ProjectSyncView) syncMaxLines() int {
 // NewProjectSyncView creates a new project sync view.
 func NewProjectSyncView(proj *project.Project) *ProjectSyncView {
 	return &ProjectSyncView{
+		viewBase:      viewBase{width: 80, height: 24},
 		proj:          proj,
-		width:         80,
-		height:        24,
 		syncLogHelper: syncLogHelper{outputLog: make([]logEntry, 0)},
 	}
 }
@@ -545,12 +543,6 @@ func (v *ProjectSyncView) CapturesInput() bool {
 // ShortHelp returns short help text.
 func (v *ProjectSyncView) ShortHelp() string {
 	return "f: Fetch All  p: Pull All  P: Push All  r: Rebase All  S: Sync All  F: Force Push All"
-}
-
-// SetSize updates the view dimensions.
-func (v *ProjectSyncView) SetSize(width, height int) {
-	v.width = width
-	v.height = height
 }
 
 // Refresh reloads status data.

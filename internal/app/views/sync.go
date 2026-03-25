@@ -70,10 +70,8 @@ type (
 
 // SyncView handles push, pull, fetch, rebase, and sync operations.
 type SyncView struct {
-	repoPath string
-	width    int
-	height   int
-	loading  bool
+	viewBase
+	loading bool
 
 	// Upstream status
 	status    *git.UpstreamStatus
@@ -96,9 +94,7 @@ type SyncView struct {
 // NewSyncView creates a new sync view.
 func NewSyncView(repoPath string) *SyncView {
 	return &SyncView{
-		repoPath:      repoPath,
-		width:         80,
-		height:        24,
+		viewBase:      viewBase{repoPath: repoPath, width: 80, height: 24},
 		syncLogHelper: syncLogHelper{outputLog: make([]logEntry, 0)},
 	}
 }
@@ -107,9 +103,6 @@ func NewSyncView(repoPath string) *SyncView {
 func (v *SyncView) syncMaxLines() int {
 	return v.height - 27
 }
-
-// SetRepoPath updates the repository path for this view.
-func (v *SyncView) SetRepoPath(path string) { v.repoPath = path }
 
 // Init initializes the sync view.
 func (v *SyncView) Init() tea.Cmd {
@@ -506,17 +499,6 @@ func (v *SyncView) CapturesInput() bool {
 // ShortHelp returns short help text.
 func (v *SyncView) ShortHelp() string {
 	return "f: Fetch  p: Pull  P: Push  r: Rebase  S: Sync  F: Force push"
-}
-
-// SetSize updates the view dimensions.
-func (v *SyncView) SetSize(width, height int) {
-	v.width = width
-	v.height = height
-}
-
-// GetRepoPath returns the repository path.
-func (v *SyncView) GetRepoPath() string {
-	return v.repoPath
 }
 
 // Refresh reloads status data.

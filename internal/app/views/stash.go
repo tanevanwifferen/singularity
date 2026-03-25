@@ -15,14 +15,12 @@ import (
 
 // StashView displays a list of git stash entries with management capabilities.
 type StashView struct {
-	repoPath string
-	repo     *git.RepoInfo
-	stashes  []git.StashEntry
-	filter   *components.Filter[git.StashEntry]
-	loading  bool
-	err      error
-	width    int
-	height   int
+	viewBase
+	repo    *git.RepoInfo
+	stashes []git.StashEntry
+	filter  *components.Filter[git.StashEntry]
+	loading bool
+	err     error
 
 	// Preview panel state
 	showPreview  bool
@@ -45,9 +43,7 @@ type StashView struct {
 // NewStashView creates a new stash view.
 func NewStashView(repoPath string) *StashView {
 	v := &StashView{
-		repoPath: repoPath,
-		width:    80,
-		height:   24,
+		viewBase: viewBase{repoPath: repoPath, width: 80, height: 24},
 	}
 
 	// Initialize the filter with stash items
@@ -57,9 +53,6 @@ func NewStashView(repoPath string) *StashView {
 
 	return v
 }
-
-// SetRepoPath updates the repository path for this view.
-func (v *StashView) SetRepoPath(path string) { v.repoPath = path }
 
 // Init initializes the stash view.
 func (v *StashView) Init() tea.Cmd {
@@ -554,18 +547,12 @@ func (v *StashView) ShortHelp() string {
 	return "/: Search  ↑↓: Navigate  Enter: Preview  a: Apply  p: Pop  d: Drop  n: New  D: Clear All"
 }
 
-// SetSize updates the view dimensions.
+// SetSize updates the view dimensions and resizes the filter.
 func (v *StashView) SetSize(width, height int) {
-	v.width = width
-	v.height = height
+	v.viewBase.SetSize(width, height)
 	if v.filter != nil {
 		v.filter.SetHeight(height)
 	}
-}
-
-// GetRepoPath returns the repository path.
-func (v *StashView) GetRepoPath() string {
-	return v.repoPath
 }
 
 // Refresh reloads repository data.

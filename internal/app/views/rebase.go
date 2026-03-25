@@ -18,12 +18,10 @@ import (
 
 // RebaseView provides visual interactive rebase planning and execution.
 type RebaseView struct {
-	repoPath string
-	repo     *git.RepoInfo
-	loading  bool
-	err      error
-	width    int
-	height   int
+	viewBase
+	repo    *git.RepoInfo
+	loading bool
+	err     error
 
 	// Branch selection state
 	showBranchSelect bool
@@ -58,18 +56,13 @@ type RebaseView struct {
 // NewRebaseView creates a new rebase view.
 func NewRebaseView(repoPath string) *RebaseView {
 	v := &RebaseView{
-		repoPath:     repoPath,
-		width:        80,
-		height:       24,
+		viewBase:     viewBase{repoPath: repoPath, width: 80, height: 24},
 		cursor:       0,
 		branchCursor: 0,
 	}
 
 	return v
 }
-
-// SetRepoPath updates the repository path for this view.
-func (v *RebaseView) SetRepoPath(path string) { v.repoPath = path }
 
 // Init initializes the rebase view.
 func (v *RebaseView) Init() tea.Cmd {
@@ -993,17 +986,6 @@ func (v *RebaseView) ShortHelp() string {
 		return "c: Continue  s: Skip  x: Abort"
 	}
 	return "b: Base  o: Cycle op  K/J: Move  Enter: Execute  x: Abort"
-}
-
-// SetSize updates the view dimensions.
-func (v *RebaseView) SetSize(width, height int) {
-	v.width = width
-	v.height = height
-}
-
-// GetRepoPath returns the repository path.
-func (v *RebaseView) GetRepoPath() string {
-	return v.repoPath
 }
 
 // Refresh reloads repository data.

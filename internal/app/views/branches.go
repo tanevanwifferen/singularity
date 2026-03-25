@@ -17,14 +17,12 @@ import (
 
 // BranchesView displays a filterable list of branches with comparison capabilities.
 type BranchesView struct {
-	repoPath string
+	viewBase
 	repo     *git.RepoInfo
 	branches []git.BranchInfo
 	filter   *components.Filter[git.BranchInfo]
 	loading  bool
 	err      error
-	width    int
-	height   int
 
 	// Comparison panel state
 	showCompare   bool
@@ -51,9 +49,7 @@ type BranchesView struct {
 // NewBranchesView creates a new branches view.
 func NewBranchesView(repoPath string) *BranchesView {
 	v := &BranchesView{
-		repoPath:      repoPath,
-		width:         80,
-		height:        24,
+		viewBase:      viewBase{repoPath: repoPath, width: 80, height: 24},
 		pipelines:     make(map[string]*git.PipelineInfo),
 		cacheDuration: 2 * time.Minute, // Cache CI status for 2 minutes
 	}
@@ -65,9 +61,6 @@ func NewBranchesView(repoPath string) *BranchesView {
 
 	return v
 }
-
-// SetRepoPath updates the repository path for this view.
-func (v *BranchesView) SetRepoPath(path string) { v.repoPath = path }
 
 // Init initializes the branches view.
 func (v *BranchesView) Init() tea.Cmd {
@@ -570,18 +563,12 @@ func (v *BranchesView) ShortHelp() string {
 	return "/: Search  ↑↓: Navigate  Enter: Compare  c: Checkout  d: Delete  n: Create  R: Refresh CI"
 }
 
-// SetSize updates the view dimensions.
+// SetSize updates the view dimensions and resizes the filter.
 func (v *BranchesView) SetSize(width, height int) {
-	v.width = width
-	v.height = height
+	v.viewBase.SetSize(width, height)
 	if v.filter != nil {
 		v.filter.SetHeight(height)
 	}
-}
-
-// GetRepoPath returns the repository path.
-func (v *BranchesView) GetRepoPath() string {
-	return v.repoPath
 }
 
 // Refresh reloads repository data.

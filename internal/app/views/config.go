@@ -39,9 +39,8 @@ type configTab struct {
 
 // ConfigView is a TUI form for editing application settings.
 type ConfigView struct {
-	cfg    *config.Config
-	width  int
-	height int
+	viewBase
+	cfg *config.Config
 
 	tabs     []configTab
 	tabIdx   int // active tab (0-based)
@@ -57,9 +56,8 @@ type ConfigView struct {
 // NewConfigView creates a new config editing view.
 func NewConfigView(cfg *config.Config) *ConfigView {
 	v := &ConfigView{
-		cfg:    cfg,
-		width:  80,
-		height: 24,
+		viewBase: viewBase{width: 80, height: 24},
+		cfg:      cfg,
 	}
 	v.tabs = v.buildTabs()
 	return v
@@ -301,12 +299,6 @@ func (v *ConfigView) CapturesInput() bool {
 func (v *ConfigView) CapturesKey(key string) bool {
 	// Capture tab so it cycles config tabs, not TUI views
 	return key == "tab" || key == "shift+tab"
-}
-
-// SetSize updates the view dimensions.
-func (v *ConfigView) SetSize(width, height int) {
-	v.width = width
-	v.height = height
 }
 
 // ShortHelp returns a short help string.

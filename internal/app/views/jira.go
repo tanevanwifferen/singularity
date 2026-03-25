@@ -69,19 +69,17 @@ type jiraAIOutputMsg struct {
 
 // JiraView displays a browsable, filterable list of Jira issues.
 type JiraView struct {
+	viewBase
 	cfg     config.JiraConfig
 	client  *jira.Client
 	issues  []jira.Issue
 	filter  *components.Filter[jira.Issue]
 	loading bool
 	err     error
-	width   int
-	height  int
 
 	// Dependencies wired by app
-	eng      *engine.Engine
-	proj     *project.Project
-	repoPath string
+	eng  *engine.Engine
+	proj *project.Project
 
 	// Search / JQL input mode
 	searchMode  bool
@@ -126,10 +124,9 @@ type JiraView struct {
 // NewJiraView creates a new Jira issues view.
 func NewJiraView(cfg config.JiraConfig) *JiraView {
 	v := &JiraView{
-		cfg:    cfg,
-		client: jira.NewClient(cfg.BaseURL, cfg.Email, cfg.APIToken),
-		width:  80,
-		height: 24,
+		viewBase: viewBase{width: 80, height: 24},
+		cfg:      cfg,
+		client:   jira.NewClient(cfg.BaseURL, cfg.Email, cfg.APIToken),
 	}
 	v.filter = components.NewFilter([]jira.Issue{}, v.renderIssueItem)
 	v.filter.SetHeight(v.height)
@@ -141,9 +138,6 @@ func (v *JiraView) SetEngine(eng *engine.Engine) { v.eng = eng }
 
 // SetProject wires the project (project mode).
 func (v *JiraView) SetProject(proj *project.Project) { v.proj = proj }
-
-// SetRepoPath sets the single-repo path (single-repo mode).
-func (v *JiraView) SetRepoPath(path string) { v.repoPath = path }
 
 // CapturesInput reports whether the view is consuming all keyboard input.
 func (v *JiraView) CapturesInput() bool {
@@ -1212,10 +1206,9 @@ func (v *JiraView) ShortHelp() string {
 	return "R: Refresh  s: Search  /: Filter  r: Refine  c: Create  w: Workflow"
 }
 
-// SetSize updates the view dimensions.
+// SetSize updates the view dimensions and resizes the filter.
 func (v *JiraView) SetSize(width, height int) {
-	v.width = width
-	v.height = height
+	v.viewBase.SetSize(width, height)
 	if v.filter != nil {
 		v.filter.SetHeight(height)
 	}

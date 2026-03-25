@@ -44,10 +44,9 @@ type projectDiffItem struct {
 
 // ProjectDiffView shows uncommitted changes across all repos in the project.
 type ProjectDiffView struct {
+	viewBase
 	diffNavHelper
 	proj    *project.Project
-	width   int
-	height  int
 	loading bool
 	err     error
 
@@ -60,9 +59,8 @@ type ProjectDiffView struct {
 // NewProjectDiffView creates a new project diff view.
 func NewProjectDiffView(proj *project.Project) *ProjectDiffView {
 	return &ProjectDiffView{
-		proj:   proj,
-		width:  120,
-		height: 30,
+		viewBase: viewBase{width: 120, height: 30},
+		proj:     proj,
 	}
 }
 
@@ -585,12 +583,6 @@ func (v *ProjectDiffView) ShortHelp() string {
 		name = v.proj.Name
 	}
 	return fmt.Sprintf("Project: %s  j/k: Navigate  PgUp/PgDn: Scroll diff  r: Refresh  Esc: Back", name)
-}
-
-// SetSize updates the view dimensions.
-func (v *ProjectDiffView) SetSize(width, height int) {
-	v.width = width
-	v.height = height
 }
 
 // CapturesKey returns true for keys this view handles directly.

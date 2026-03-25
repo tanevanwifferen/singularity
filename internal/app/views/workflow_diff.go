@@ -57,10 +57,9 @@ type hunkStats struct {
 
 // WorkflowDiffView shows all git changes for a workflow, grouped by repo.
 type WorkflowDiffView struct {
+	viewBase
 	diffNavHelper
 	workflow *project.FeatureWorkflow
-	width    int
-	height   int
 	loading  bool
 	err      error
 
@@ -76,8 +75,7 @@ type WorkflowDiffView struct {
 // NewWorkflowDiffView creates a new workflow diff view.
 func NewWorkflowDiffView() *WorkflowDiffView {
 	return &WorkflowDiffView{
-		width:  120,
-		height: 30,
+		viewBase: viewBase{width: 120, height: 30},
 	}
 }
 
@@ -731,12 +729,6 @@ func (v *WorkflowDiffView) ShortHelp() string {
 		branch = v.workflow.BranchName
 	}
 	return fmt.Sprintf("Workflow: %s  j/k: Navigate  Enter: Diff  Esc: Back", branch)
-}
-
-// SetSize updates the view dimensions.
-func (v *WorkflowDiffView) SetSize(width, height int) {
-	v.width = width
-	v.height = height
 }
 
 // CapturesKey returns true for keys this view handles directly.
