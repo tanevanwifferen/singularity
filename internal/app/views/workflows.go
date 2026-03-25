@@ -45,9 +45,10 @@ type WorkflowsView struct {
 	filter           *components.Filter[*project.FeatureWorkflow]
 
 	// Workflow start modal
-	showWorkflowStart  bool
-	workflowBranchName string
-	workflowBaseDir    string
+	showWorkflowStart        bool
+	workflowBranchName       string
+	workflowBranchNameCursor int
+	workflowBaseDir          string
 
 	// Workflow cleanup confirmation
 	showWorkflowCleanup bool
@@ -67,18 +68,20 @@ type WorkflowsView struct {
 	mrSummaryLines     []string
 
 	// Agent orchestration
-	engine          *engine.Engine
-	showAgentPrompt bool
-	agentPromptText string
+	engine            *engine.Engine
+	showAgentPrompt   bool
+	agentPromptText   string
+	agentPromptCursor int
 
 	// Auto-refresh tick for live agent status
 	workflowTicking   bool
 	workflowAgentSnap *engine.AgentSnapshot
 
 	// Jira ticket picker
-	jiraPicker       *JiraPickerState
-	jiraConfirmIssue *jira.Issue // issue pending workflow-start confirmation
-	jiraExtraMsg     string      // optional extra instructions for the agent
+	jiraPicker         *JiraPickerState
+	jiraConfirmIssue   *jira.Issue // issue pending workflow-start confirmation
+	jiraExtraMsg       string      // optional extra instructions for the agent
+	jiraExtraMsgCursor int
 
 	// Drill-down diff view
 	workflowDiffView *WorkflowDiffView
@@ -334,6 +337,7 @@ func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cm
 	case "w":
 		v.showWorkflowStart = true
 		v.workflowBranchName = ""
+		v.workflowBranchNameCursor = 0
 
 	case "J":
 		// Open Jira ticket picker to create a workflow from a ticket
@@ -489,6 +493,7 @@ func (v *WorkflowsView) handleJiraWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 		extraMsg := v.jiraExtraMsg
 		v.jiraConfirmIssue = nil
 		v.jiraExtraMsg = ""
+		v.jiraExtraMsgCursor = 0
 		return v.startWorkflowFromJira(issue, extraMsg)
 	case "e":
 		wf := v.currentWorkflow()
@@ -497,24 +502,42 @@ func (v *WorkflowsView) handleJiraWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 			extraMsg := v.jiraExtraMsg
 			v.jiraConfirmIssue = nil
 			v.jiraExtraMsg = ""
+			v.jiraExtraMsgCursor = 0
 			return v.startWorkflowFromJiraOnExisting(issue, wf, extraMsg)
 		}
 	case "esc":
 		v.jiraConfirmIssue = nil
 		v.jiraExtraMsg = ""
+		v.jiraExtraMsgCursor = 0
+	case "left", "ctrl+b":
+		if v.jiraExtraMsgCursor > 0 {
+			v.jiraExtraMsgCursor--
+		}
+	case "right", "ctrl+f":
+		if v.jiraExtraMsgCursor < len(v.jiraExtraMsg) {
+			v.jiraExtraMsgCursor++
+		}
+	case "home", "ctrl+a":
+		v.jiraExtraMsgCursor = 0
+	case "end", "ctrl+e":
+		v.jiraExtraMsgCursor = len(v.jiraExtraMsg)
 	case "ctrl+w":
-		v.jiraExtraMsg = components.DeleteWordEnd(v.jiraExtraMsg)
+		v.jiraExtraMsg, v.jiraExtraMsgCursor = components.DeleteWord(v.jiraExtraMsg, v.jiraExtraMsgCursor)
 	case "backspace":
-		if len(v.jiraExtraMsg) > 0 {
-			v.jiraExtraMsg = v.jiraExtraMsg[:len(v.jiraExtraMsg)-1]
+		if v.jiraExtraMsgCursor > 0 {
+			v.jiraExtraMsg = v.jiraExtraMsg[:v.jiraExtraMsgCursor-1] + v.jiraExtraMsg[v.jiraExtraMsgCursor:]
+			v.jiraExtraMsgCursor--
 		}
 	default:
 		if msg.Paste && len(msg.Runes) > 0 {
-			v.jiraExtraMsg += string(msg.Runes)
+			inserted := string(msg.Runes)
+			v.jiraExtraMsg = v.jiraExtraMsg[:v.jiraExtraMsgCursor] + inserted + v.jiraExtraMsg[v.jiraExtraMsgCursor:]
+			v.jiraExtraMsgCursor += len(inserted)
 		} else if len(msg.Runes) == 1 {
 			r := msg.Runes[0]
 			if r >= 32 {
-				v.jiraExtraMsg += string(r)
+				v.jiraExtraMsg = v.jiraExtraMsg[:v.jiraExtraMsgCursor] + string(r) + v.jiraExtraMsg[v.jiraExtraMsgCursor:]
+				v.jiraExtraMsgCursor++
 			}
 		}
 	}
@@ -647,6 +670,7 @@ func (v *WorkflowsView) handleWorkflowStartInput(msg tea.KeyMsg) tea.Cmd {
 			baseDir := v.workflowBaseDir
 			v.showWorkflowStart = false
 			v.workflowBranchName = ""
+			v.workflowBranchNameCursor = 0
 			wf := project.NewFeatureWorkflow(v.proj, branchName, baseDir)
 			v.workflows = append(v.workflows, wf)
 			v.selectedWorkflow = len(v.workflows) - 1
@@ -660,19 +684,36 @@ func (v *WorkflowsView) handleWorkflowStartInput(msg tea.KeyMsg) tea.Cmd {
 	case "esc":
 		v.showWorkflowStart = false
 		v.workflowBranchName = ""
+		v.workflowBranchNameCursor = 0
+	case "left", "ctrl+b":
+		if v.workflowBranchNameCursor > 0 {
+			v.workflowBranchNameCursor--
+		}
+	case "right", "ctrl+f":
+		if v.workflowBranchNameCursor < len(v.workflowBranchName) {
+			v.workflowBranchNameCursor++
+		}
+	case "home", "ctrl+a":
+		v.workflowBranchNameCursor = 0
+	case "end", "ctrl+e":
+		v.workflowBranchNameCursor = len(v.workflowBranchName)
 	case "backspace":
-		if len(v.workflowBranchName) > 0 {
-			v.workflowBranchName = v.workflowBranchName[:len(v.workflowBranchName)-1]
+		if v.workflowBranchNameCursor > 0 {
+			v.workflowBranchName = v.workflowBranchName[:v.workflowBranchNameCursor-1] + v.workflowBranchName[v.workflowBranchNameCursor:]
+			v.workflowBranchNameCursor--
 		}
 	case "ctrl+w":
-		v.workflowBranchName = components.DeleteWordEnd(v.workflowBranchName)
+		v.workflowBranchName, v.workflowBranchNameCursor = components.DeleteWord(v.workflowBranchName, v.workflowBranchNameCursor)
 	default:
 		if msg.Paste && len(msg.Runes) > 0 {
-			v.workflowBranchName += string(msg.Runes)
+			inserted := string(msg.Runes)
+			v.workflowBranchName = v.workflowBranchName[:v.workflowBranchNameCursor] + inserted + v.workflowBranchName[v.workflowBranchNameCursor:]
+			v.workflowBranchNameCursor += len(inserted)
 		} else if len(msg.Runes) == 1 {
 			r := msg.Runes[0]
 			if r >= 32 && r <= 126 {
-				v.workflowBranchName += string(r)
+				v.workflowBranchName = v.workflowBranchName[:v.workflowBranchNameCursor] + string(r) + v.workflowBranchName[v.workflowBranchNameCursor:]
+				v.workflowBranchNameCursor++
 			}
 		}
 	}
@@ -686,6 +727,7 @@ func (v *WorkflowsView) handleAgentPromptInput(msg tea.KeyMsg) tea.Cmd {
 			promptText := v.agentPromptText
 			v.showAgentPrompt = false
 			v.agentPromptText = ""
+			v.agentPromptCursor = 0
 			v.spawnAgentForWorkflow(promptText)
 			v.refreshWorkflowAgentSnap()
 			return v.ensureWorkflowTick()
@@ -694,19 +736,36 @@ func (v *WorkflowsView) handleAgentPromptInput(msg tea.KeyMsg) tea.Cmd {
 	case "esc":
 		v.showAgentPrompt = false
 		v.agentPromptText = ""
+		v.agentPromptCursor = 0
+	case "left", "ctrl+b":
+		if v.agentPromptCursor > 0 {
+			v.agentPromptCursor--
+		}
+	case "right", "ctrl+f":
+		if v.agentPromptCursor < len(v.agentPromptText) {
+			v.agentPromptCursor++
+		}
+	case "home", "ctrl+a":
+		v.agentPromptCursor = 0
+	case "end", "ctrl+e":
+		v.agentPromptCursor = len(v.agentPromptText)
 	case "backspace":
-		if len(v.agentPromptText) > 0 {
-			v.agentPromptText = v.agentPromptText[:len(v.agentPromptText)-1]
+		if v.agentPromptCursor > 0 {
+			v.agentPromptText = v.agentPromptText[:v.agentPromptCursor-1] + v.agentPromptText[v.agentPromptCursor:]
+			v.agentPromptCursor--
 		}
 	case "ctrl+w":
-		v.agentPromptText = components.DeleteWordEnd(v.agentPromptText)
+		v.agentPromptText, v.agentPromptCursor = components.DeleteWord(v.agentPromptText, v.agentPromptCursor)
 	default:
 		if msg.Paste && len(msg.Runes) > 0 {
-			v.agentPromptText += string(msg.Runes)
+			inserted := string(msg.Runes)
+			v.agentPromptText = v.agentPromptText[:v.agentPromptCursor] + inserted + v.agentPromptText[v.agentPromptCursor:]
+			v.agentPromptCursor += len(inserted)
 		} else if len(msg.Runes) == 1 {
 			r := msg.Runes[0]
 			if r >= 32 && r <= 126 {
-				v.agentPromptText += string(r)
+				v.agentPromptText = v.agentPromptText[:v.agentPromptCursor] + string(r) + v.agentPromptText[v.agentPromptCursor:]
+				v.agentPromptCursor++
 			}
 		}
 	}
@@ -827,6 +886,7 @@ func (v *WorkflowsView) handleStartAgent() {
 		if hasWorktree {
 			v.showAgentPrompt = true
 			v.agentPromptText = ""
+			v.agentPromptCursor = 0
 		} else {
 			v.workflowStatusMsg = "No worktrees created yet -- create worktrees first"
 		}
@@ -1089,7 +1149,7 @@ func (v *WorkflowsView) renderJiraConfirmModal() string {
 	th := theme.GetTheme()
 	issue := v.jiraConfirmIssue
 	branch := issueToBranchName(issue)
-	input := v.jiraExtraMsg + "█"
+	input := v.jiraExtraMsg[:v.jiraExtraMsgCursor] + "█" + v.jiraExtraMsg[v.jiraExtraMsgCursor:]
 	lines := []string{
 		"",
 		fmt.Sprintf("  Ticket: %s — %s", th.DashboardAccentStyle.Render(issue.Key), issue.Summary),
@@ -1116,7 +1176,7 @@ func (v *WorkflowsView) renderModals() string {
 	if v.showWorkflowStart {
 		lines := []string{
 			"",
-			fmt.Sprintf("  Branch name: %s%s", th.InfoStyle.Render(v.workflowBranchName), th.MutedTextStyle.Render("_")),
+			fmt.Sprintf("  Branch name: %s%s%s", th.InfoStyle.Render(v.workflowBranchName[:v.workflowBranchNameCursor]), th.MutedTextStyle.Render("_"), th.InfoStyle.Render(v.workflowBranchName[v.workflowBranchNameCursor:])),
 			"",
 			"  This creates worktrees for all repos in the",
 			fmt.Sprintf("  project under %s/<branch>/", v.workflowBaseDir),
@@ -1140,7 +1200,7 @@ func (v *WorkflowsView) renderModals() string {
 			fmt.Sprintf("  Workflow: %s", th.InfoStyle.Render(wfName)),
 			fmt.Sprintf("  Working dir: %s", th.MutedTextStyle.Render(wfDir)),
 			"",
-			fmt.Sprintf("  Task: %s%s", th.InfoStyle.Render(v.agentPromptText), th.MutedTextStyle.Render("_")),
+			fmt.Sprintf("  Task: %s%s%s", th.InfoStyle.Render(v.agentPromptText[:v.agentPromptCursor]), th.MutedTextStyle.Render("_"), th.InfoStyle.Render(v.agentPromptText[v.agentPromptCursor:])),
 			"",
 			"  The agent will work across all repo worktrees.",
 			"",
