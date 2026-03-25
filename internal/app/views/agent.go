@@ -413,8 +413,9 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				v.jiraAgentMeta[msg.ID] = msg.jiraMeta
 			}
 			v.loadAgents()
-			for _, a := range v.agents {
+			for i, a := range v.agents {
 				if a.ID == msg.ID {
+					v.filter.SelectAt(i)
 					v.selectAgent(a)
 					break
 				}
