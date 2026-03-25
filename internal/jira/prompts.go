@@ -8,10 +8,13 @@ import (
 )
 
 // RefineTicket launches an agent that explores the codebase and rewrites a Jira ticket
-// to be implementation-ready. The agent writes its proposed changes to .jira-actions.json
-// in the working directory (i.e. filepath.Join(repoPath, ".jira-actions.json")).
-func RefineTicket(eng *engine.Engine, issue *Issue, repoPath string, focus string) (string, error) {
-	prompt := buildRefinePrompt(issue, repoPath, focus)
+// to be implementation-ready. The agent writes its proposed changes to the specified
+// actionsFile (or ".jira-actions.json" if empty) in the working directory.
+func RefineTicket(eng *engine.Engine, issue *Issue, repoPath string, focus string, actionsFile string) (string, error) {
+	if actionsFile == "" {
+		actionsFile = ".jira-actions.json"
+	}
+	prompt := buildRefinePrompt(issue, repoPath, focus, actionsFile)
 	return eng.StartAgent(repoPath, prompt, engine.AgentOptions{
 		Model:        "sonnet",
 		MaxTurns:     15,
@@ -21,7 +24,7 @@ func RefineTicket(eng *engine.Engine, issue *Issue, repoPath string, focus strin
 }
 
 // buildRefinePrompt constructs the system prompt for the refine-ticket agent.
-func buildRefinePrompt(issue *Issue, repoPath string, focus string) string {
+func buildRefinePrompt(issue *Issue, repoPath string, focus string, actionsFile string) string {
 	var b strings.Builder
 
 	b.WriteString("You are analyzing a Jira ticket to make it implementation-ready.\n\n")
@@ -69,9 +72,9 @@ func buildRefinePrompt(issue *Issue, repoPath string, focus string) string {
 	}
 
 	b.WriteString("## Output\n\n")
-	b.WriteString("Write your proposed changes to `.jira-actions.json` in the current directory.\n")
+	fmt.Fprintf(&b, "Write your proposed changes to `%s` in the current directory.\n", actionsFile)
 	b.WriteString("Use the Bash tool:\n\n")
-	b.WriteString("```\ncat > .jira-actions.json << 'ACTIONS_EOF'\n[\n  ...\n]\nACTIONS_EOF\n```\n\n")
+	fmt.Fprintf(&b, "```\ncat > %s << 'ACTIONS_EOF'\n[\n  ...\n]\nACTIONS_EOF\n```\n\n", actionsFile)
 	b.WriteString("The file must be a JSON array of action objects. Supported types:\n\n")
 
 	b.WriteString("**Update the ticket description:**\n")
@@ -90,10 +93,14 @@ func buildRefinePrompt(issue *Issue, repoPath string, focus string) string {
 }
 
 // CreateStories launches an agent that explores the codebase and breaks a requirement
-// into implementable stories. The agent writes proposed stories to .jira-actions.json.
+// into implementable stories. The agent writes proposed stories to the specified
+// actionsFile (or ".jira-actions.json" if empty).
 // If issue is nil, rawText is used as the requirement description.
-func CreateStories(eng *engine.Engine, issue *Issue, rawText string, project string, repoPath string) (string, error) {
-	prompt := buildCreatePrompt(issue, rawText, project, repoPath)
+func CreateStories(eng *engine.Engine, issue *Issue, rawText string, project string, repoPath string, actionsFile string) (string, error) {
+	if actionsFile == "" {
+		actionsFile = ".jira-actions.json"
+	}
+	prompt := buildCreatePrompt(issue, rawText, project, repoPath, actionsFile)
 	return eng.StartAgent(repoPath, prompt, engine.AgentOptions{
 		Model:        "sonnet",
 		MaxTurns:     20,
@@ -103,7 +110,7 @@ func CreateStories(eng *engine.Engine, issue *Issue, rawText string, project str
 }
 
 // buildCreatePrompt constructs the system prompt for the create-stories agent.
-func buildCreatePrompt(issue *Issue, rawText string, project string, repoPath string) string {
+func buildCreatePrompt(issue *Issue, rawText string, project string, repoPath string, actionsFile string) string {
 	var b strings.Builder
 
 	b.WriteString("You are breaking down a requirement or epic into implementable stories.\n\n")
@@ -154,9 +161,9 @@ func buildCreatePrompt(issue *Issue, rawText string, project string, repoPath st
 	}
 
 	b.WriteString("## Output\n\n")
-	b.WriteString("Write your proposed stories to `.jira-actions.json` in the current directory.\n")
+	fmt.Fprintf(&b, "Write your proposed stories to `%s` in the current directory.\n", actionsFile)
 	b.WriteString("Use the Bash tool:\n\n")
-	b.WriteString("```\ncat > .jira-actions.json << 'ACTIONS_EOF'\n[\n  ...\n]\nACTIONS_EOF\n```\n\n")
+	fmt.Fprintf(&b, "```\ncat > %s << 'ACTIONS_EOF'\n[\n  ...\n]\nACTIONS_EOF\n```\n\n", actionsFile)
 	b.WriteString("The file must be a JSON array of `create_issue` objects:\n\n")
 	fmt.Fprintf(&b, "```json\n{\"type\": \"create_issue\", \"project\": \"%s\", \"issue_type\": \"Story\", \"summary\": \"...\", \"description\": \"...\", \"priority\": \"Medium\", \"link_to\": \"%s\", \"link_type\": \"is_child_of\", \"reason\": \"why this story\", \"order\": 1, \"depends_on_order\": []}\n```\n\n", project, linkTo)
 	b.WriteString("`issue_type` should be `\"Story\"` for user-facing work and `\"Task\"` for infrastructure/\n")

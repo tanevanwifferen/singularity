@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,6 +16,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// jiraAgentMeta tracks metadata for Jira refine/create agents started from the agents view.
+type jiraAgentMeta struct {
+	IssueKey    string
+	Mode        string // "refine" or "create"
+	ActionsFile string // path to the actions JSON file
+}
 
 // AgentInfo holds agent summary info for display
 type AgentInfo struct {
@@ -79,6 +87,14 @@ type AgentView struct {
 	jiraPicker       *JiraPickerState
 	jiraConfirmIssue *jira.Issue // issue pending agent-start confirmation
 	jiraExtraMsg     string      // custom instructions for the jira agent
+	jiraConfirmMode  string      // "implement" (default), "refine", or "create"
+
+	// Jira refine/create agent tracking
+	jiraCfg       config.JiraConfig
+	jiraClient    *jira.Client
+	jiraAgentMeta map[string]*jiraAgentMeta // agentID -> metadata
+	approvalView  *ApprovalView
+	approvalAgent string // agentID of the agent whose approval is shown
 }
 
 // NewAgentView creates a new agent console view.
@@ -144,6 +160,9 @@ func (v *AgentView) SetEngine(eng *engine.Engine) {
 
 // SetJiraConfig wires Jira configuration so the Jira ticket picker is available.
 func (v *AgentView) SetJiraConfig(cfg config.JiraConfig) {
+	v.jiraCfg = cfg
+	v.jiraClient = jira.NewClient(cfg.BaseURL, cfg.Email, cfg.APIToken)
+	v.jiraAgentMeta = make(map[string]*jiraAgentMeta)
 	v.jiraPicker = NewJiraPickerState(cfg)
 	if v.jiraPicker != nil {
 		v.jiraPicker.SetSize(v.width, v.height)
@@ -353,6 +372,10 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			v.err = msg.Err
 		} else {
+			// Register Jira agent metadata if present
+			if msg.jiraMeta != nil && v.jiraAgentMeta != nil {
+				v.jiraAgentMeta[msg.ID] = msg.jiraMeta
+			}
 			v.loadAgents()
 			for _, a := range v.agents {
 				if a.ID == msg.ID {
@@ -361,6 +384,15 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+
+	case approvalExecDoneMsg:
+		if v.approvalView != nil {
+			v.approvalView.Update(msg)
+		}
+
+	case ApprovalDoneMsg:
+		v.approvalView = nil
+		v.approvalAgent = ""
 
 	case RefreshDoneMsg:
 		v.loading = false
@@ -484,6 +516,10 @@ func (v *AgentView) handleMessageInput(msg tea.KeyMsg) tea.Cmd {
 // handleAgentKeyMsg dispatches key events based on the current modal/focus state.
 func (v *AgentView) handleAgentKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Handle modal states first (highest priority)
+	if v.approvalView != nil {
+		_, cmd := v.approvalView.Update(msg)
+		return v, cmd
+	}
 	if v.showKillConfirm {
 		return v, v.handleKillConfirm(msg)
 	}
@@ -548,6 +584,21 @@ func (v *AgentView) handleOutputPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+u", "pgup":
 		v.outputAutoScroll = false
 		v.outputViewport.HalfViewUp()
+		return v, nil
+	case "a":
+		// Open approval view for completed Jira refine/create agents
+		if v.selectedAgent != nil && v.jiraAgentMeta != nil {
+			if meta, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
+				if v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentError || v.selectedAgent.State == engine.AgentKilled {
+					actions, err := jira.ParseJiraActions(meta.ActionsFile)
+					if err == nil && len(actions) > 0 && v.jiraClient != nil {
+						v.approvalView = NewApprovalView(actions, v.jiraClient)
+						v.approvalView.SetSize(v.width, v.height)
+						v.approvalAgent = v.selectedAgent.ID
+					}
+				}
+			}
+		}
 		return v, nil
 	case "i":
 		if v.selectedAgent != nil &&
@@ -827,18 +878,35 @@ func (v *AgentView) View() string {
 		issue := v.jiraConfirmIssue
 		branch := issueToBranchName(issue)
 		input := v.jiraExtraMsg + "█"
+
+		// Mode indicator
+		modeLabel := "Implement (worktree)"
+		if v.jiraConfirmMode == "refine" {
+			modeLabel = "Refine ticket"
+		} else if v.jiraConfirmMode == "create" {
+			modeLabel = "Create stories"
+		}
+
 		s.WriteString("\n")
 		s.WriteString(renderModal("Start Agent from Jira Ticket", []string{
 			"",
 			fmt.Sprintf("  Ticket:  %s — %s", issue.Key, issue.Summary),
 			fmt.Sprintf("  Branch:  %s", branch),
 			fmt.Sprintf("  Type:    %s  Priority: %s", issue.Type, issue.Priority),
+			fmt.Sprintf("  Mode:    %s", modeLabel),
 			"",
 			"  Custom instructions (optional):",
 			"  " + input,
 			"",
-			"  Enter: Start   Esc: Cancel",
+			"  Enter: Start   Ctrl+r: Refine   Ctrl+s: Stories   Esc: Cancel",
 		}, modalWidth(v.width)))
+		return s.String()
+	}
+
+	// Approval view overlay
+	if v.approvalView != nil {
+		s.WriteString("\n")
+		s.WriteString(v.approvalView.View())
 		return s.String()
 	}
 
@@ -928,6 +996,14 @@ func (v *AgentView) View() string {
 				(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting || v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentKilled) {
 				hint += "  i:send message"
 			}
+			// Show actions hint for completed Jira refine/create agents
+			if v.selectedAgent != nil && v.jiraAgentMeta != nil {
+				if _, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
+					if v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentError || v.selectedAgent.State == engine.AgentKilled {
+						hint += "  a:review actions"
+					}
+				}
+			}
 			s.WriteString(th.Help.Render(hint))
 		} else {
 			s.WriteString(th.Help.Render(" tab:focus output  esc/d:close"))
@@ -973,7 +1049,7 @@ func (v *AgentView) Refresh() error {
 // CapturesInput returns true when the view is in an input mode.
 func (v *AgentView) CapturesInput() bool {
 	return v.showNewAgent || v.showKillConfirm || v.showMessageInput || v.focus == focusOutput ||
-		v.jiraPicker.IsOpen() || v.jiraConfirmIssue != nil
+		v.jiraPicker.IsOpen() || v.jiraConfirmIssue != nil || v.approvalView != nil
 }
 
 // CapturesKey returns true for keys the agent view needs when the output pane is visible.
@@ -1017,12 +1093,36 @@ func (v *AgentView) handleJiraAgentConfirm(msg tea.KeyMsg) tea.Cmd {
 	case "enter":
 		issue := v.jiraConfirmIssue
 		extraMsg := v.jiraExtraMsg
+		mode := v.jiraConfirmMode
 		v.jiraConfirmIssue = nil
 		v.jiraExtraMsg = ""
-		return v.startAgentFromJira(issue, extraMsg)
+		v.jiraConfirmMode = ""
+		switch mode {
+		case "refine":
+			return v.startRefineFromJira(issue, extraMsg)
+		case "create":
+			return v.startCreateFromJira(issue)
+		default:
+			return v.startAgentFromJira(issue, extraMsg)
+		}
+	case "ctrl+r":
+		// Toggle to refine mode
+		if v.jiraConfirmMode == "refine" {
+			v.jiraConfirmMode = ""
+		} else {
+			v.jiraConfirmMode = "refine"
+		}
+	case "ctrl+s":
+		// Toggle to create stories mode
+		if v.jiraConfirmMode == "create" {
+			v.jiraConfirmMode = ""
+		} else {
+			v.jiraConfirmMode = "create"
+		}
 	case "esc":
 		v.jiraConfirmIssue = nil
 		v.jiraExtraMsg = ""
+		v.jiraConfirmMode = ""
 	case "ctrl+w":
 		v.jiraExtraMsg = components.DeleteWordEnd(v.jiraExtraMsg)
 	case "backspace":
@@ -1062,11 +1162,73 @@ func (v *AgentView) startAgentFromJira(issue *jira.Issue, extraMsg string) tea.C
 	}
 }
 
+// startRefineFromJira starts a Jira refine agent for the given issue.
+func (v *AgentView) startRefineFromJira(issue *jira.Issue, focus string) tea.Cmd {
+	if issue == nil || v.engine == nil {
+		return nil
+	}
+	eng := v.engine
+	repoPath := v.repoPath
+
+	return func() tea.Msg {
+		// Use a unique actions file per issue key to avoid conflicts with parallel refines
+		actionsFile := fmt.Sprintf(".jira-actions-%s.json", issue.Key)
+		id, err := jira.RefineTicket(eng, issue, repoPath, focus, actionsFile)
+		if err == nil {
+			// We'll register the meta in the AgentCreatedMsg handler
+			return AgentCreatedMsg{
+				ID:  id,
+				Err: nil,
+				jiraMeta: &jiraAgentMeta{
+					IssueKey:    issue.Key,
+					Mode:        "refine",
+					ActionsFile: filepath.Join(repoPath, actionsFile),
+				},
+			}
+		}
+		return AgentCreatedMsg{ID: id, Err: err}
+	}
+}
+
+// startCreateFromJira starts a Jira create-stories agent for the given issue.
+func (v *AgentView) startCreateFromJira(issue *jira.Issue) tea.Cmd {
+	if issue == nil || v.engine == nil {
+		return nil
+	}
+	eng := v.engine
+	repoPath := v.repoPath
+	cfg := v.jiraCfg
+
+	return func() tea.Msg {
+		project := cfg.DefaultProject
+		if project == "" {
+			if idx := strings.Index(issue.Key, "-"); idx > 0 {
+				project = issue.Key[:idx]
+			}
+		}
+		actionsFile := fmt.Sprintf(".jira-actions-%s.json", issue.Key)
+		id, err := jira.CreateStories(eng, issue, "", project, repoPath, actionsFile)
+		if err == nil {
+			return AgentCreatedMsg{
+				ID:  id,
+				Err: nil,
+				jiraMeta: &jiraAgentMeta{
+					IssueKey:    issue.Key,
+					Mode:        "create",
+					ActionsFile: filepath.Join(repoPath, actionsFile),
+				},
+			}
+		}
+		return AgentCreatedMsg{ID: id, Err: err}
+	}
+}
+
 // StreamTickMsg is sent periodically to refresh streaming output.
 type StreamTickMsg struct{}
 
 // AgentCreatedMsg is sent when a new agent has been started (or failed to start).
 type AgentCreatedMsg struct {
-	ID  string
-	Err error
+	ID       string
+	Err      error
+	jiraMeta *jiraAgentMeta // non-nil for Jira refine/create agents
 }
