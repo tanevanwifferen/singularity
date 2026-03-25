@@ -246,112 +246,146 @@ func (v *WorkflowsView) spawnAgentForWorkflow(task string) {
 func (v *WorkflowsView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// Clear flash messages on any key press
-		v.workflowStatusMsg = ""
-		v.pushResults = ""
-		v.mrResults = ""
+		return v.handleWorkflowsKeyMsg(msg)
 
-		// Handle Jira picker
-		if v.jiraPicker.IsOpen() {
-			return v, v.handleJiraPickerKey(msg)
+	case tea.WindowSizeMsg:
+		v.width = msg.Width
+		v.height = msg.Height
+		if v.filter != nil {
+			v.filter.SetHeight(msg.Height - 10)
+		}
+		if v.jiraPicker != nil {
+			v.jiraPicker.SetSize(msg.Width, msg.Height)
 		}
 
-		// Handle Jira confirm-start-workflow modal
-		if v.jiraConfirmIssue != nil {
-			return v, v.handleJiraWorkflowConfirm(msg)
+	case tea.MouseMsg:
+		if v.filter != nil {
+			v.filter.HandleMouse(msg)
 		}
 
-		// Handle workflow start modal
-		if v.showWorkflowStart {
-			return v, v.handleWorkflowStartInput(msg)
-		}
+	default:
+		return v.handleWorkflowsMsg(msg)
+	}
 
-		// Handle agent prompt modal
-		if v.showAgentPrompt {
-			return v, v.handleAgentPromptInput(msg)
-		}
+	return v, nil
+}
 
-		// Handle workflow cleanup confirmation
-		if v.showWorkflowCleanup {
-			return v, v.handleCleanupConfirm(msg)
-		}
+// handleWorkflowsKeyMsg handles all keyboard input for the workflows view,
+// including modal dispatch and the main key switch.
+func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Clear flash messages on any key press
+	v.workflowStatusMsg = ""
+	v.pushResults = ""
+	v.mrResults = ""
 
-		// Handle batch push confirmation
-		if v.showPushConfirm {
-			return v, v.handlePushConfirm(msg)
-		}
+	// Handle Jira picker
+	if v.jiraPicker.IsOpen() {
+		return v, v.handleJiraPickerKey(msg)
+	}
 
-		// Handle MR summary panel
-		if v.showMRSummary {
-			return v, v.handleMRSummary(msg)
-		}
+	// Handle Jira confirm-start-workflow modal
+	if v.jiraConfirmIssue != nil {
+		return v, v.handleJiraWorkflowConfirm(msg)
+	}
 
-		// Handle batch MR creation confirmation
-		if v.showBatchMRConfirm {
-			return v, v.handleBatchMRConfirm(msg)
-		}
+	// Handle workflow start modal
+	if v.showWorkflowStart {
+		return v, v.handleWorkflowStartInput(msg)
+	}
 
-		// If filter is active, let it handle keys
-		if v.filter != nil && v.filter.IsActive() {
+	// Handle agent prompt modal
+	if v.showAgentPrompt {
+		return v, v.handleAgentPromptInput(msg)
+	}
+
+	// Handle workflow cleanup confirmation
+	if v.showWorkflowCleanup {
+		return v, v.handleCleanupConfirm(msg)
+	}
+
+	// Handle batch push confirmation
+	if v.showPushConfirm {
+		return v, v.handlePushConfirm(msg)
+	}
+
+	// Handle MR summary panel
+	if v.showMRSummary {
+		return v, v.handleMRSummary(msg)
+	}
+
+	// Handle batch MR creation confirmation
+	if v.showBatchMRConfirm {
+		return v, v.handleBatchMRConfirm(msg)
+	}
+
+	// If filter is active, let it handle keys
+	if v.filter != nil && v.filter.IsActive() {
+		v.filter.Update(msg)
+		return v, nil
+	}
+
+	switch msg.String() {
+	case "r":
+		return v, tea.Batch(
+			func() tea.Msg {
+				v.loadWorkflows()
+				return RefreshDoneMsg{}
+			},
+			v.refreshBranchStatusCmd(),
+		)
+	case "w":
+		v.showWorkflowStart = true
+		v.workflowBranchName = ""
+
+	case "J":
+		// Open Jira ticket picker to create a workflow from a ticket
+		if v.jiraPicker.IsAvailable() {
+			return v, v.jiraPicker.Open()
+		}
+	case "D":
+		wf := v.currentWorkflow()
+		if wf != nil {
+			v.showWorkflowCleanup = true
+		}
+	case "a":
+		v.handleStartAgent()
+	case "p":
+		return v, v.handleStartPush()
+	case "M":
+		v.handleStartBatchMR()
+	case "d":
+		wf := v.currentWorkflow()
+		if wf != nil && v.workflowDiffView != nil {
+			v.workflowDiffView.SetWorkflow(wf)
+			return v, func() tea.Msg {
+				return ViewChangeMsg{ViewName: "WorkflowDiff"}
+			}
+		}
+	case "I":
+		v.handleImport()
+	case "j", "down":
+		if len(v.workflows) > 1 && v.selectedWorkflow < len(v.workflows)-1 {
+			v.selectedWorkflow++
+			v.refreshWorkflowAgentSnap()
+		}
+	case "k", "up":
+		if len(v.workflows) > 1 && v.selectedWorkflow > 0 {
+			v.selectedWorkflow--
+			v.refreshWorkflowAgentSnap()
+		}
+	case "/":
+		if v.filter != nil {
 			v.filter.Update(msg)
-			return v, nil
 		}
+	}
 
-		switch msg.String() {
-		case "r":
-			return v, tea.Batch(
-				func() tea.Msg {
-					v.loadWorkflows()
-					return RefreshDoneMsg{}
-				},
-				v.refreshBranchStatusCmd(),
-			)
-		case "w":
-			v.showWorkflowStart = true
-			v.workflowBranchName = ""
+	return v, nil
+}
 
-		case "J":
-			// Open Jira ticket picker to create a workflow from a ticket
-			if v.jiraPicker.IsAvailable() {
-				return v, v.jiraPicker.Open()
-			}
-		case "D":
-			wf := v.currentWorkflow()
-			if wf != nil {
-				v.showWorkflowCleanup = true
-			}
-		case "a":
-			v.handleStartAgent()
-		case "p":
-			return v, v.handleStartPush()
-		case "M":
-			v.handleStartBatchMR()
-		case "d":
-			wf := v.currentWorkflow()
-			if wf != nil && v.workflowDiffView != nil {
-				v.workflowDiffView.SetWorkflow(wf)
-				return v, func() tea.Msg {
-					return ViewChangeMsg{ViewName: "WorkflowDiff"}
-				}
-			}
-		case "I":
-			v.handleImport()
-		case "j", "down":
-			if len(v.workflows) > 1 && v.selectedWorkflow < len(v.workflows)-1 {
-				v.selectedWorkflow++
-				v.refreshWorkflowAgentSnap()
-			}
-		case "k", "up":
-			if len(v.workflows) > 1 && v.selectedWorkflow > 0 {
-				v.selectedWorkflow--
-				v.refreshWorkflowAgentSnap()
-			}
-		case "/":
-			if v.filter != nil {
-				v.filter.Update(msg)
-			}
-		}
-
+// handleWorkflowsMsg handles non-key, non-standard messages for the workflows view
+// (refresh, push, MR, tick, and Jira picker messages).
+func (v *WorkflowsView) handleWorkflowsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
 	case RefreshDoneMsg:
 		v.refreshWorkflowAgentSnap()
 		wf := v.currentWorkflow()
@@ -432,21 +466,6 @@ func (v *WorkflowsView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case jiraPickerLoadedMsg:
 		if cmd := v.jiraPicker.HandleMsg(msg); cmd != nil {
 			return v, cmd
-		}
-
-	case tea.WindowSizeMsg:
-		v.width = msg.Width
-		v.height = msg.Height
-		if v.filter != nil {
-			v.filter.SetHeight(msg.Height - 10)
-		}
-		if v.jiraPicker != nil {
-			v.jiraPicker.SetSize(msg.Width, msg.Height)
-		}
-
-	case tea.MouseMsg:
-		if v.filter != nil {
-			v.filter.HandleMouse(msg)
 		}
 	}
 

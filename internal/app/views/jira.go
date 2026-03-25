@@ -274,121 +274,129 @@ func (v *JiraView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return v, nil
 
 	case tea.KeyMsg:
-		// Approval view active
-		if v.approvalView != nil {
-			_, cmd := v.approvalView.Update(msg)
-			return v, cmd
-		}
-
-		// AI agent running - allow Esc to cancel
-		if v.aiMode != "" && v.approvalView == nil {
-			if msg.String() == "esc" {
-				if v.aiAgentID != "" && v.eng != nil {
-					v.eng.KillAgent(v.aiAgentID)
-				}
-				v.aiMode = ""
-				v.aiAgentID = ""
-				v.aiOutputEntries = nil
-				return v, nil
-			}
-			return v, nil // swallow other keys while agent runs
-		}
-
-		// Workflow confirmation modal
-		if v.showWorkflowConfirm {
-			return v, v.handleWorkflowConfirm(msg)
-		}
-
-		// Detail pane active
-		if v.showDetail {
-			switch msg.String() {
-			case "w":
-				if v.detailIssue != nil {
-					return v, v.triggerWorkflow(v.detailIssue)
-				}
-			case "esc":
-				v.showDetail = false
-				v.detailIssue = nil
-			}
-			return v, nil
-		}
-
-		// Focus input for refine mode
-		if v.showFocusInput {
-			return v, v.handleFocusInput(msg)
-		}
-
-		// Text input for create mode
-		if v.showTextInput {
-			return v, v.handleTextInput(msg)
-		}
-
-		// Search / JQL input mode
-		if v.searchMode {
-			return v, v.handleSearchInput(msg)
-		}
-
-		switch msg.String() {
-		case "R":
-			v.loading = true
-			v.err = nil
-			return v, v.fetchCmd(v.defaultJQL())
-
-		case "r":
-			// Refine: show focus input, then launch agent
-			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				v.showFocusInput = true
-				v.focusInput = ""
-				v.focusIssue = &item
-				return v, nil
-			}
-
-		case "c":
-			// Create stories from selected ticket, or from raw text if none selected
-			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				return v, v.startAIMode("create", &item, "")
-			}
-			v.showTextInput = true
-			v.textInput = ""
-			return v, nil
-
-		case "s":
-			v.searchMode = true
-			v.searchInput = ""
-			return v, nil
-
-		case "w":
-			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				return v, v.triggerWorkflow(&item)
-			}
-			return v, nil
-
-		case "enter":
-			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				v.detailIssue = &item
-				v.showDetail = true
-			}
-			return v, nil
-
-		case "esc":
-			if v.filter.IsActive() {
-				v.filter.Update(msg)
-			}
-			return v, nil
-
-		case "/":
-			v.filter.Update(msg)
-			return v, nil
-		}
-
-		if v.filter != nil {
-			v.filter.Update(msg)
-		}
+		return v.handleJiraKeyMsg(msg)
 
 	case tea.MouseMsg:
 		if v.filter != nil {
 			v.filter.HandleMouse(msg)
 		}
+	}
+
+	return v, nil
+}
+
+// handleJiraKeyMsg handles all keyboard input for the Jira view,
+// including modal state dispatch and the main key switch.
+func (v *JiraView) handleJiraKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Approval view active
+	if v.approvalView != nil {
+		_, cmd := v.approvalView.Update(msg)
+		return v, cmd
+	}
+
+	// AI agent running - allow Esc to cancel
+	if v.aiMode != "" && v.approvalView == nil {
+		if msg.String() == "esc" {
+			if v.aiAgentID != "" && v.eng != nil {
+				v.eng.KillAgent(v.aiAgentID)
+			}
+			v.aiMode = ""
+			v.aiAgentID = ""
+			v.aiOutputEntries = nil
+			return v, nil
+		}
+		return v, nil // swallow other keys while agent runs
+	}
+
+	// Workflow confirmation modal
+	if v.showWorkflowConfirm {
+		return v, v.handleWorkflowConfirm(msg)
+	}
+
+	// Detail pane active
+	if v.showDetail {
+		switch msg.String() {
+		case "w":
+			if v.detailIssue != nil {
+				return v, v.triggerWorkflow(v.detailIssue)
+			}
+		case "esc":
+			v.showDetail = false
+			v.detailIssue = nil
+		}
+		return v, nil
+	}
+
+	// Focus input for refine mode
+	if v.showFocusInput {
+		return v, v.handleFocusInput(msg)
+	}
+
+	// Text input for create mode
+	if v.showTextInput {
+		return v, v.handleTextInput(msg)
+	}
+
+	// Search / JQL input mode
+	if v.searchMode {
+		return v, v.handleSearchInput(msg)
+	}
+
+	switch msg.String() {
+	case "R":
+		v.loading = true
+		v.err = nil
+		return v, v.fetchCmd(v.defaultJQL())
+
+	case "r":
+		// Refine: show focus input, then launch agent
+		if item, idx := v.filter.SelectedItem(); idx >= 0 {
+			v.showFocusInput = true
+			v.focusInput = ""
+			v.focusIssue = &item
+			return v, nil
+		}
+
+	case "c":
+		// Create stories from selected ticket, or from raw text if none selected
+		if item, idx := v.filter.SelectedItem(); idx >= 0 {
+			return v, v.startAIMode("create", &item, "")
+		}
+		v.showTextInput = true
+		v.textInput = ""
+		return v, nil
+
+	case "s":
+		v.searchMode = true
+		v.searchInput = ""
+		return v, nil
+
+	case "w":
+		if item, idx := v.filter.SelectedItem(); idx >= 0 {
+			return v, v.triggerWorkflow(&item)
+		}
+		return v, nil
+
+	case "enter":
+		if item, idx := v.filter.SelectedItem(); idx >= 0 {
+			v.detailIssue = &item
+			v.showDetail = true
+		}
+		return v, nil
+
+	case "esc":
+		if v.filter.IsActive() {
+			v.filter.Update(msg)
+		}
+		return v, nil
+
+	case "/":
+		v.filter.Update(msg)
+		return v, nil
+	}
+
+	if v.filter != nil {
+		v.filter.Update(msg)
 	}
 
 	return v, nil
