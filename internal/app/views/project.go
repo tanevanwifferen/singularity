@@ -667,25 +667,9 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "W":
 			// Sync: checkout main dir of each repo as detached at each worktree's HEAD
 			v.showSyncWorktreeConfirm = true
-		case "A":
+		case "M":
 			// Checkout default branch in all repos
 			v.showCheckoutAllMainConfirm = true
-		case "M":
-			// Checkout default branch for selected repo
-			node := v.selectedNode()
-			if node != nil {
-				defaultBranch := node.Repo.DefaultBranch
-				if defaultBranch == "" {
-					defaultBranch = "main"
-				}
-				err := git.Checkout(node.Repo.Path, defaultBranch)
-				if err != nil {
-					v.checkoutByNameResult = fmt.Sprintf("✗ %s: %v", node.Repo.Name, err)
-				} else {
-					v.checkoutByNameResult = fmt.Sprintf("✓ %s: checked out '%s'", node.Repo.Name, defaultBranch)
-				}
-				v.loadData()
-			}
 		case "C":
 			// Checkout a branch by name in the selected repo
 			node := v.selectedNode()
@@ -1019,7 +1003,7 @@ func (v *ProjectView) renderFooterHelp() string {
 		return th.Help.Render("Enter: Confirm  Esc: Cancel")
 	}
 
-	return th.Help.Render(" ↑↓ Navigate  Enter Expand  o Open  c Checkout  C Checkout by name  M Checkout main  n Branch  m MR  b Check  / Filter  r Refresh  X Reset All  D Detach All  W Sync Main→Worktrees  A Checkout Main All")
+	return th.Help.Render(" ↑↓ Navigate  Enter Expand  o Open  c Checkout  C Checkout by name  M Checkout main (all)  n Branch  m MR  b Check  / Filter  r Refresh  X Reset All  D Detach All  W Sync Main→Worktrees")
 }
 
 // ShortHelp returns a contextual short help string.
@@ -1027,7 +1011,7 @@ func (v *ProjectView) ShortHelp() string {
 	if v.CapturesInput() {
 		return "Enter: Confirm  Esc: Cancel"
 	}
-	return "↑↓ Navigate  Enter Expand  o Open  c Checkout  C Checkout by name  M Checkout main  n Branch  m MR  b Check  / Filter  r Refresh  X Reset All  D Detach All  W Sync Main→Worktrees  A Checkout Main All"
+	return "↑↓ Navigate  Enter Expand  o Open  c Checkout  C Checkout by name  M Checkout main (all)  n Branch  m MR  b Check  / Filter  r Refresh  X Reset All  D Detach All  W Sync Main→Worktrees"
 }
 
 // CapturesInput returns true when the view is in an input mode.
@@ -1038,7 +1022,7 @@ func (v *ProjectView) CapturesInput() bool {
 // CapturesKey returns true for keys this view handles directly.
 func (v *ProjectView) CapturesKey(key string) bool {
 	switch key {
-	case "r", "o", "b", "c", "C", "n", "m", "M", "X", "D", "W", "A", "enter", "/", "j", "k", "up", "down":
+	case "r", "o", "b", "c", "C", "n", "m", "M", "X", "D", "W", "enter", "/", "j", "k", "up", "down":
 		return true
 	}
 	return false
@@ -1081,7 +1065,7 @@ func (v *ProjectView) KeyBindings() []components.KeyBinding {
 		{Key: "o", Description: "Open selected repository"},
 		{Key: "c", Description: "Checkout selected branch"},
 		{Key: "C", Description: "Checkout branch by name in selected repo"},
-		{Key: "M", Description: "Checkout default/main branch in selected repo"},
+		{Key: "M", Description: "Checkout default/main branch in all repos"},
 		{Key: "n", Description: "Create new branch across all repos"},
 		{Key: "m", Description: "Create MR/PR for selected branch"},
 		{Key: "b", Description: "Check if branch exists in all repos"},
@@ -1090,6 +1074,5 @@ func (v *ProjectView) KeyBindings() []components.KeyBinding {
 		{Key: "X", Description: "Reset ALL repos to main (destructive)"},
 		{Key: "D", Description: "Checkout all worktrees of all repos as detached HEAD"},
 		{Key: "W", Description: "Sync main dir to worktree HEADs (detached)"},
-		{Key: "A", Description: "Checkout default branch in all repos"},
 	}
 }
