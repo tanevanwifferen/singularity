@@ -211,10 +211,7 @@ func (s *Server) handleRepoOpen(w http.ResponseWriter, r *http.Request) {
 
 // handleRepoInfo handles GET /api/repo/info
 func (s *Server) handleRepoInfo(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Query().Get("path")
-	if path == "" {
-		path = s.repoPath
-	}
+	path := s.resolveRepoPath(r.URL.Query().Get("path"))
 
 	if path == "" {
 		s.writeError(w, http.StatusBadRequest, "no repo path provided")
@@ -448,7 +445,7 @@ func (s *Server) BroadcastBranchUpdate(branch string) {
 
 // Helper methods
 
-// resolveRepoPath returns reqPath when non-empty, otherwise the server's default repo path.
+// resolveRepoPath returns reqPath if non-empty, otherwise falls back to s.repoPath.
 func (s *Server) resolveRepoPath(reqPath string) string {
 	if reqPath != "" {
 		return reqPath

@@ -24,13 +24,16 @@ import (
 // issueKeyRe matches a Jira issue key like "PROJ-123".
 var issueKeyRe = regexp.MustCompile(`(?i)^[A-Z][A-Z0-9_]+-\d+$`)
 
-// workflowStep constants drive the multi-step workflow modal.
+// workflowStep enumerates the multi-step workflow modal states.
+type workflowStep int
+
 const (
-	workflowStepChoose       = "choose"        // pick new vs existing worktree
-	workflowStepNewConfirm   = "new-confirm"   // confirm creating a fresh worktree
-	workflowStepSelectWT     = "select-wt"     // browse existing worktrees
-	workflowStepExistConfirm = "exist-confirm" // confirm running on existing worktree
-	workflowStepExtraMsg     = "extra-msg"     // optional extra message for the agent
+	workflowStepNone         workflowStep = iota // no active workflow
+	workflowStepChoose                           // pick new vs existing worktree
+	workflowStepNewConfirm                       // confirm creating a fresh worktree
+	workflowStepSelectWT                         // browse existing worktrees
+	workflowStepExistConfirm                     // confirm running on existing worktree
+	workflowStepExtraMsg                         // optional extra message for the agent
 )
 
 // jiraLoadedMsg carries freshly fetched Jira issues back to the view.
@@ -93,7 +96,7 @@ type JiraView struct {
 	workflowIssue       *jira.Issue
 	workflowBranch      string
 	workflowStatusMsg   string
-	workflowStep        string
+	wfStep              workflowStep
 
 	// Existing-worktree picker (workflowStepSelectWT)
 	existingWTs   []git.Worktree
@@ -396,7 +399,7 @@ func (v *JiraView) triggerWorkflow(issue *jira.Issue) tea.Cmd {
 	v.workflowIssue = issue
 	v.workflowBranch = issueToBranchName(issue)
 	v.showWorkflowConfirm = true
-	v.workflowStep = workflowStepChoose
+	v.wfStep = workflowStepChoose
 	v.existingWTs = nil
 	v.selectedWTIdx = 0
 	v.workflowExtraMsg = ""
@@ -532,13 +535,13 @@ func (v *JiraView) fetchAIOutput() tea.Cmd {
 
 // handleWorkflowConfirm handles key input in the multi-step workflow modal.
 func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
-	switch v.workflowStep {
+	switch v.wfStep {
 
 	case workflowStepChoose:
 		switch msg.String() {
 		case "n":
 			v.workflowExtraMsg = ""
-			v.workflowStep = workflowStepNewConfirm
+			v.wfStep = workflowStepNewConfirm
 		case "e":
 			repoPath := v.repoPath
 			if repoPath == "" && v.proj != nil && len(v.proj.Repos) > 0 {
@@ -553,11 +556,11 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 				}
 			}
 			v.selectedWTIdx = 0
-			v.workflowStep = workflowStepSelectWT
+			v.wfStep = workflowStepSelectWT
 		case "esc", "q":
 			v.showWorkflowConfirm = false
 			v.workflowIssue = nil
-			v.workflowStep = ""
+			v.wfStep = workflowStepNone
 		}
 
 	case workflowStepNewConfirm:
@@ -575,7 +578,7 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 				return startJiraWorkflow(issue, branch, eng, proj, repoPath, jiraURL, extraMsg)
 			}
 		case "esc":
-			v.workflowStep = workflowStepChoose
+			v.wfStep = workflowStepChoose
 			v.workflowExtraMsg = ""
 		case "ctrl+w":
 			v.workflowExtraMsg = components.DeleteWordEnd(v.workflowExtraMsg)
@@ -608,10 +611,10 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 			if len(v.existingWTs) > 0 {
 				v.workflowBranch = v.existingWTs[v.selectedWTIdx].Branch
 				v.workflowExtraMsg = ""
-				v.workflowStep = workflowStepExistConfirm
+				v.wfStep = workflowStepExistConfirm
 			}
 		case "esc":
-			v.workflowStep = workflowStepChoose
+			v.wfStep = workflowStepChoose
 		}
 
 	case workflowStepExistConfirm:
@@ -628,7 +631,7 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 				}
 			}
 		case "esc":
-			v.workflowStep = workflowStepSelectWT
+			v.wfStep = workflowStepSelectWT
 			v.workflowExtraMsg = ""
 		case "ctrl+w":
 			v.workflowExtraMsg = components.DeleteWordEnd(v.workflowExtraMsg)
@@ -1006,7 +1009,7 @@ func (v *JiraView) renderWorkflowModal() string {
 	mw := modalWidth(v.width)
 	issue := v.workflowIssue
 
-	switch v.workflowStep {
+	switch v.wfStep {
 	case workflowStepChoose:
 		return renderModal("Start Workflow", []string{
 			fmt.Sprintf("Ticket: %s – %s", issue.Key, truncate(issue.Summary, mw-20)),
