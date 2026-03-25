@@ -458,7 +458,7 @@ func (v *WorktreeView) handleNewBranchInput(msg tea.KeyMsg) tea.Cmd {
 
 // createWorktree creates a new worktree.
 func (v *WorktreeView) createWorktree(path, branch string, createBranch bool) {
-	err := git.CreateWorktree(v.repoPath, path, branch, createBranch)
+	err := git.CreateWorktree(v.repoPath, path, branch, createBranch, "")
 	if err != nil {
 		v.err = fmt.Errorf("failed to create worktree: %w", err)
 		return

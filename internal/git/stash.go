@@ -212,12 +212,17 @@ func GetWorktrees(repoPath string) ([]Worktree, error) {
 	return worktrees, nil
 }
 
-// CreateWorktree creates a new worktree
-func CreateWorktree(repoPath, worktreePath, branch string, createBranch bool) error {
+// CreateWorktree creates a new worktree.
+// When createBranch is true and startPoint is non-empty, the new branch is based on startPoint
+// (e.g. "origin/main") instead of HEAD.
+func CreateWorktree(repoPath, worktreePath, branch string, createBranch bool, startPoint string) error {
 	args := []string{"-C", repoPath, "worktree", "add"}
 
 	if createBranch {
 		args = append(args, "-b", branch, worktreePath)
+		if startPoint != "" {
+			args = append(args, startPoint)
+		}
 	} else {
 		args = append(args, worktreePath, branch)
 	}

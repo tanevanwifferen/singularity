@@ -645,8 +645,12 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 			jiraURL := v.cfg.BaseURL + "/browse/" + issue.Key
 			extraMsg := v.workflowExtraMsg
 			v.workflowFromExisting = false
+			defBranch := "main"
+			if proj != nil && len(proj.Repos) > 0 {
+				defBranch = proj.Repos[0].DefaultBranch
+			}
 			return func() tea.Msg {
-				return startJiraWorkflow(issue, branch, eng, proj, repoPath, jiraURL, extraMsg)
+				return startJiraWorkflow(issue, branch, eng, proj, repoPath, jiraURL, extraMsg, defBranch)
 			}
 		case "esc":
 			v.wfStep = workflowStepChoose
@@ -726,7 +730,7 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 }
 
 // startJiraWorkflow creates worktrees and spawns an agent.
-func startJiraWorkflow(issue *jira.Issue, branch string, eng *engine.Engine, proj *project.Project, repoPath string, jiraURL string, extraMsg string) jiraWorkflowDoneMsg {
+func startJiraWorkflow(issue *jira.Issue, branch string, eng *engine.Engine, proj *project.Project, repoPath string, jiraURL string, extraMsg string, defaultBranch string) jiraWorkflowDoneMsg {
 	if eng == nil {
 		return jiraWorkflowDoneMsg{err: fmt.Errorf("agent engine not available")}
 	}
@@ -764,7 +768,8 @@ func startJiraWorkflow(issue *jira.Issue, branch string, eng *engine.Engine, pro
 		return jiraWorkflowDoneMsg{err: fmt.Errorf("no repository configured")}
 	}
 	worktreePath := filepath.Join(filepath.Dir(repoPath), branch)
-	if err := git.CreateWorktree(repoPath, worktreePath, branch, true); err != nil {
+	startPoint := "origin/" + defaultBranch
+	if err := git.CreateWorktree(repoPath, worktreePath, branch, true, startPoint); err != nil {
 		return jiraWorkflowDoneMsg{err: fmt.Errorf("create worktree: %w", err)}
 	}
 	id, err := eng.StartAgent(worktreePath, agentPrompt, engine.AgentOptions{SmartRoute: true})
