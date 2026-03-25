@@ -1138,7 +1138,6 @@ func (v *WorkflowsView) renderModals() string {
 		s.WriteString("\n")
 	}
 
-<<<<<<< HEAD
 	if v.showDetachWorkflowConfirm {
 		if wf := v.currentWorkflow(); wf != nil {
 			lines := []string{
