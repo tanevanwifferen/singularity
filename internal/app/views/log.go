@@ -1099,23 +1099,7 @@ func (v *LogView) renderDetailFileList(width int) string {
 	}
 
 	// Calculate visible range for scrolling
-	visibleLines := v.height - 12
-	if visibleLines < 1 {
-		visibleLines = 1
-	}
-
-	startIdx := v.detailFileIdx - visibleLines/2
-	if startIdx < 0 {
-		startIdx = 0
-	}
-	endIdx := startIdx + visibleLines
-	if endIdx > len(v.detailFiles) {
-		endIdx = len(v.detailFiles)
-		startIdx = endIdx - visibleLines
-		if startIdx < 0 {
-			startIdx = 0
-		}
-	}
+	startIdx, endIdx := calcViewport(v.height, 12, v.detailFileIdx, len(v.detailFiles))
 
 	// Render files
 	for i := startIdx; i < endIdx && i < len(v.detailFiles); i++ {
@@ -1185,7 +1169,7 @@ func (v *LogView) renderDetailFileList(width int) string {
 	}
 
 	// Scroll indicator
-	if len(v.detailFiles) > visibleLines {
+	if endIdx-startIdx < len(v.detailFiles) {
 		scrollInfo := fmt.Sprintf(" %d-%d of %d ", startIdx+1, endIdx, len(v.detailFiles))
 		s.WriteString(th.Help.Render(scrollInfo))
 	}

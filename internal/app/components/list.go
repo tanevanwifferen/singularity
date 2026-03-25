@@ -22,8 +22,8 @@ type ListStyles struct {
 	StatusBarText lipgloss.Style
 }
 
-// DefaultListStyles returns default styles for a dark theme list.
-func DefaultListStyles() ListStyles {
+// defaultListStyles returns default styles for a dark theme list.
+func defaultListStyles() ListStyles {
 	return ListStyles{
 		Item: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("86")),
@@ -82,7 +82,7 @@ func NewList[T any](items []T, renderer ItemRenderer[T]) *List[T] {
 		Offset:          0,
 		Height:          20,
 		Renderer:        renderer,
-		Styles:          DefaultListStyles(),
+		Styles:          defaultListStyles(),
 		ShowStatusBar:   true,
 		statusBarHeight: 1,
 	}

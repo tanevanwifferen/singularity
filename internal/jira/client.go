@@ -141,7 +141,7 @@ func (c *Client) post(path string, payload interface{}) ([]byte, error) {
 
 	body, code, err := c.doRequest(http.MethodPost, path, bytes.NewReader(data))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("jira POST %s: %w", path, err)
 	}
 	if code == http.StatusOK || code == http.StatusCreated {
 		return body, nil
@@ -158,7 +158,7 @@ func (c *Client) put(path string, payload interface{}) ([]byte, error) {
 
 	body, code, err := c.doRequest(http.MethodPut, path, bytes.NewReader(data))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("jira PUT %s: %w", path, err)
 	}
 	if code == http.StatusOK || code == http.StatusNoContent {
 		return body, nil
@@ -224,7 +224,7 @@ func (c *Client) LinkIssues(inwardKey, outwardKey, linkType string) error {
 func (c *Client) get(path string) ([]byte, error) {
 	body, code, err := c.doRequest(http.MethodGet, path, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("jira GET %s: %w", path, err)
 	}
 	if code == http.StatusOK {
 		return body, nil
