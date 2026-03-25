@@ -174,6 +174,100 @@ func buildCreatePrompt(issue *Issue, rawText string, project string, repoPath st
 	return b.String()
 }
 
+// RefineProposalWithContext launches an agent that reviews an existing proposal
+// alongside the Jira ticket and codebase, then rewrites the proposal to improve it.
+// The existing actions are passed as context so the agent can build on prior work.
+func RefineProposalWithContext(eng *engine.Engine, issue *Issue, existingActions []JiraAction, repoPath string, actionsFile string) (string, error) {
+	if actionsFile == "" {
+		actionsFile = fmt.Sprintf(".jira-actions-%s.json", issue.Key)
+	}
+	prompt := buildRefineProposalWithContextPrompt(issue, existingActions, repoPath, actionsFile)
+	return eng.StartAgent(repoPath, prompt, engine.AgentOptions{
+		Model:        "sonnet",
+		MaxTurns:     15,
+		AllowedTools: []string{"Read", "Grep", "Glob", "Bash"},
+		Summary:      fmt.Sprintf("Refine: %s", issue.Key),
+	})
+}
+
+// buildRefineProposalWithContextPrompt builds a prompt for iterating on an existing proposal.
+func buildRefineProposalWithContextPrompt(issue *Issue, existingActions []JiraAction, repoPath string, actionsFile string) string {
+	var b strings.Builder
+
+	b.WriteString("You are reviewing and improving an existing Jira ticket proposal.\n\n")
+
+	b.WriteString("## Ticket\n\n")
+	fmt.Fprintf(&b, "Key:         %s\n", issue.Key)
+	fmt.Fprintf(&b, "Summary:     %s\n", issue.Summary)
+	fmt.Fprintf(&b, "Type:        %s\n", issue.Type)
+	fmt.Fprintf(&b, "Priority:    %s\n", issue.Priority)
+	fmt.Fprintf(&b, "Status:      %s\n", issue.Status)
+	if len(issue.Labels) > 0 {
+		fmt.Fprintf(&b, "Labels:      %s\n", strings.Join(issue.Labels, ", "))
+	}
+	b.WriteString("\n### Description\n\n")
+	if issue.Description != "" {
+		b.WriteString(issue.Description)
+	} else {
+		b.WriteString("(no description provided)")
+	}
+	b.WriteString("\n\n")
+
+	fmt.Fprintf(&b, "## Repository\n\nPath: %s\n\n", repoPath)
+
+	b.WriteString("## Existing Proposal\n\n")
+	b.WriteString("A previous agent already produced the following proposed actions. Use these as a\n")
+	b.WriteString("starting point — keep what is correct and improve what is incomplete or inaccurate.\n\n")
+	for i, action := range existingActions {
+		fmt.Fprintf(&b, "### Action %d: %s\n", i+1, action.Type)
+		if action.IssueKey != "" {
+			fmt.Fprintf(&b, "Issue:  %s\n", action.IssueKey)
+		}
+		if action.Summary != "" {
+			fmt.Fprintf(&b, "Summary: %s\n", action.Summary)
+		}
+		if action.Body != "" {
+			fmt.Fprintf(&b, "Body:\n%s\n", action.Body)
+		}
+		if action.Reason != "" {
+			fmt.Fprintf(&b, "Reason: %s\n", action.Reason)
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("## Your Task\n\n")
+	b.WriteString("Explore the codebase to verify and improve the existing proposal. Specifically:\n\n")
+	b.WriteString("1. Re-read the relevant files referenced in the proposal to verify accuracy.\n")
+	b.WriteString("2. Check whether any referenced files, functions, or modules have changed.\n")
+	b.WriteString("3. Identify gaps: missing acceptance criteria, unhandled edge cases, unclear steps.\n")
+	b.WriteString("4. Improve descriptions so a developer can implement without additional context.\n")
+	b.WriteString("5. If the proposal is already excellent, output it unchanged.\n\n")
+
+	projectKey := issue.Key
+	if idx := strings.Index(issue.Key, "-"); idx > 0 {
+		projectKey = issue.Key[:idx]
+	}
+
+	b.WriteString("## Output\n\n")
+	fmt.Fprintf(&b, "Write the improved proposal to `%s` in the current directory.\n", actionsFile)
+	b.WriteString("Use the Bash tool:\n\n")
+	fmt.Fprintf(&b, "```\ncat > %s << 'ACTIONS_EOF'\n[\n  ...\n]\nACTIONS_EOF\n```\n\n", actionsFile)
+	b.WriteString("The file must be a JSON array of action objects. Supported types:\n\n")
+
+	b.WriteString("**Update the ticket description:**\n")
+	fmt.Fprintf(&b, "```json\n{\"type\": \"update_field\", \"issue_key\": \"%s\", \"fields\": {\"description\": \"new description...\"}, \"reason\": \"why you're changing this\"}\n```\n\n", issue.Key)
+
+	b.WriteString("**Add a comment:**\n")
+	fmt.Fprintf(&b, "```json\n{\"type\": \"comment\", \"issue_key\": \"%s\", \"body\": \"comment text\", \"reason\": \"why\"}\n```\n\n", issue.Key)
+
+	b.WriteString("**Create sub-tickets:**\n")
+	fmt.Fprintf(&b, "```json\n{\"type\": \"create_issue\", \"project\": \"%s\", \"issue_type\": \"Task\", \"summary\": \"...\", \"description\": \"...\", \"priority\": \"Medium\", \"link_to\": \"%s\", \"link_type\": \"is_child_of\", \"reason\": \"why\", \"order\": 1, \"depends_on_order\": []}\n```\n\n", projectKey, issue.Key)
+
+	b.WriteString("Always output at least one action. Do not leave the file empty.\n")
+
+	return b.String()
+}
+
 // summarize returns a short label for the agent summary line.
 func summarize(issue *Issue, rawText string) string {
 	if issue != nil {
