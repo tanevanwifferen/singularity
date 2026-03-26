@@ -895,10 +895,15 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						v.approvalView = NewApprovalView(actions, v.jiraClient)
 						v.approvalView.SetSize(v.width, v.height)
 						v.approvalAgent = v.selectedAgent.ID
+						return v, nil
 					}
 				}
 			}
 		}
+		// Fall through to open the new agent input modal
+		v.showNewAgent = true
+		v.newAgentTask = ""
+		v.recalcLayout()
 		return v, nil
 
 	case "R":
