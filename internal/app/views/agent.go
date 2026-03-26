@@ -729,7 +729,7 @@ func (v *AgentView) handleOutputPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		v.outputAutoScroll = false
 		v.outputViewport.HalfViewUp()
 		return v, nil
-	case "a":
+	case "A":
 		// Open approval view for completed Jira refine/create agents
 		if v.selectedAgent != nil && v.jiraAgentMeta != nil {
 			if meta, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
@@ -886,6 +886,12 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "a":
+		v.showNewAgent = true
+		v.newAgentTask = ""
+		v.recalcLayout()
+		return v, nil
+
+	case "A":
 		// Open approval view for completed Jira refine/create agents
 		if v.selectedAgent != nil && v.jiraAgentMeta != nil {
 			if meta, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
@@ -895,15 +901,10 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						v.approvalView = NewApprovalView(actions, v.jiraClient)
 						v.approvalView.SetSize(v.width, v.height)
 						v.approvalAgent = v.selectedAgent.ID
-						return v, nil
 					}
 				}
 			}
 		}
-		// Fall through to open the new agent input modal
-		v.showNewAgent = true
-		v.newAgentTask = ""
-		v.recalcLayout()
 		return v, nil
 
 	case "R":
@@ -1061,7 +1062,7 @@ func (v *AgentView) View() string {
 		if v.selectedAgent != nil && v.jiraAgentMeta != nil {
 			if _, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
 				if v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentError || v.selectedAgent.State == engine.AgentKilled {
-					proposalHint = "  a:review  R:re-run"
+					proposalHint = "  A:review  R:re-run"
 				}
 			}
 		}
@@ -1181,7 +1182,7 @@ func (v *AgentView) View() string {
 		if v.jiraAgentMeta != nil {
 			if _, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
 				if v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentError || v.selectedAgent.State == engine.AgentKilled {
-					reviewBtn = "  " + lipgloss.NewStyle().Foreground(th.Accent).Bold(true).Render("[ a: Review Proposal ]")
+					reviewBtn = "  " + lipgloss.NewStyle().Foreground(th.Accent).Bold(true).Render("[ A: Review Proposal ]")
 				}
 			}
 		}
@@ -1222,7 +1223,7 @@ func (v *AgentView) View() string {
 			if v.selectedAgent != nil && v.jiraAgentMeta != nil {
 				if _, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
 					if v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentError || v.selectedAgent.State == engine.AgentKilled {
-						hint += "  a:review actions"
+						hint += "  A:review actions"
 					}
 				}
 			}
@@ -1232,7 +1233,7 @@ func (v *AgentView) View() string {
 			if v.selectedAgent != nil && v.jiraAgentMeta != nil {
 				if _, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
 					if v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentError || v.selectedAgent.State == engine.AgentKilled {
-						hint += "  a:review proposal"
+						hint += "  A:review proposal"
 					}
 				}
 			}
