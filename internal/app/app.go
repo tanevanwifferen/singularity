@@ -204,6 +204,28 @@ func (m *Model) registerCommonViews(router *Router, repoPath string, startFKey i
 	branchesView := views.NewBranchesView(repoPath)
 	router.Register("Branches", branchesView, fkey(startFKey))
 
+	// Build repo list for branch diff view.
+	// In project mode, include all project repos; in repo mode, just the single repo.
+	var diffRepos []views.BranchDiffRepoEntry
+	if m.proj != nil {
+		for _, r := range m.proj.Repos {
+			diffRepos = append(diffRepos, views.BranchDiffRepoEntry{
+				Name:          r.Name,
+				Path:          r.Path,
+				DefaultBranch: r.DefaultBranch,
+			})
+		}
+	} else {
+		diffRepos = []views.BranchDiffRepoEntry{{
+			Name: filepath.Base(repoPath),
+			Path: repoPath,
+		}}
+	}
+	branchDiffView := views.NewBranchDiffView()
+	router.Register("BranchDiff", branchDiffView)
+	router.submenuViews["BranchDiff"] = true
+	branchesView.SetBranchDiffView(branchDiffView, diffRepos)
+
 	commitView := views.NewCommitView(repoPath)
 	router.Register("Commit", commitView, fkey(startFKey+1))
 

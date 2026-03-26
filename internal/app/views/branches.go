@@ -24,10 +24,9 @@ type BranchesView struct {
 	loading  bool
 	err      error
 
-	// Comparison panel state
-	showCompare   bool
-	compareBranch *git.BranchInfo
-	comparison    *git.BranchComparison
+	// Drill-down diff view (wired at init time)
+	branchDiffView *BranchDiffView
+	diffRepos      []BranchDiffRepoEntry
 
 	// Modal state for delete confirmation
 	showDeleteConfirm bool
@@ -44,6 +43,13 @@ type BranchesView struct {
 	cacheTime     time.Time
 	cacheDuration time.Duration
 	ciLoading     bool
+}
+
+// SetBranchDiffView wires the drill-down diff view and the repo list to use when
+// navigating into a branch's full diff.
+func (v *BranchesView) SetBranchDiffView(dv *BranchDiffView, repos []BranchDiffRepoEntry) {
+	v.branchDiffView = dv
+	v.diffRepos = repos
 }
 
 // NewBranchesView creates a new branches view.
@@ -130,10 +136,6 @@ func (v *BranchesView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.showNewBranch {
 			return v, v.handleNewBranchInput(msg)
 		}
-		if v.showCompare {
-			return v, v.handleCompareKey(msg)
-		}
-
 		// Main view keys
 		switch msg.String() {
 		case "r":
@@ -154,11 +156,12 @@ func (v *BranchesView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				v.filter.Update(msg)
 			}
 		case "enter":
-			// Open comparison panel for selected branch
-			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				v.compareBranch = &item
-				v.showCompare = true
-				v.loadComparison()
+			// Open branch diff view for selected branch
+			if item, idx := v.filter.SelectedItem(); idx >= 0 && v.branchDiffView != nil {
+				v.branchDiffView.SetBranch(item.Name, v.diffRepos)
+				return v, func() tea.Msg {
+					return ViewChangeMsg{ViewName: "BranchDiff"}
+				}
 			}
 		case "c":
 			// Checkout selected branch
@@ -265,31 +268,6 @@ func (v *BranchesView) handleNewBranchInput(msg tea.KeyMsg) tea.Cmd {
 		}
 	}
 	return nil
-}
-
-// handleCompareKey handles key events during comparison view.
-func (v *BranchesView) handleCompareKey(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
-	case "esc":
-		v.showCompare = false
-		v.compareBranch = nil
-		v.comparison = nil
-	}
-	return nil
-}
-
-// loadComparison loads branch comparison data.
-func (v *BranchesView) loadComparison() {
-	if v.compareBranch == nil || v.repo == nil || v.repo.CurrentBranch == "" {
-		return
-	}
-
-	comparison, err := git.CompareBranches(v.repoPath, v.repo.CurrentBranch, v.compareBranch.Name)
-	if err != nil {
-		v.err = err
-		return
-	}
-	v.comparison = comparison
 }
 
 // checkoutBranch checks out the specified branch.
@@ -483,40 +461,6 @@ func (v *BranchesView) View() string {
 		s.WriteString(th.Help.Render(" Press / to search • ↑/k: Select • Enter: Compare • c: Checkout • d: Delete • n: New • R: Refresh CI "))
 		s.WriteString("\n\n")
 		s.WriteString(v.filter.View())
-	}
-
-	// Comparison panel
-	if v.showCompare && v.compareBranch != nil {
-		s.WriteString("\n")
-		s.WriteString(renderSeparator())
-		s.WriteString(th.DashboardTitle.Render(" Branch Comparison "))
-		s.WriteString("\n\n")
-
-		if v.repo != nil && v.repo.CurrentBranch != "" {
-			s.WriteString(fmt.Sprintf(" %s %s...%s\n",
-				th.BranchStyle.Render("Comparing:"),
-				th.StatsStyle.Render(v.repo.CurrentBranch),
-				th.StatsStyle.Render(v.compareBranch.Name)))
-		}
-
-		if v.comparison != nil {
-			s.WriteString("\n")
-			if v.comparison.Diverged {
-				s.WriteString(th.DashboardAccentStyle.Render(fmt.Sprintf("  Diverged: %d ahead, %d behind",
-					v.comparison.Ahead, v.comparison.Behind)))
-			} else if v.comparison.Ahead > 0 {
-				s.WriteString(th.DashboardAccentStyle.Render(fmt.Sprintf("  Ahead by %d commits", v.comparison.Ahead)))
-			} else if v.comparison.Behind > 0 {
-				s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf("  Behind by %d commits", v.comparison.Behind)))
-			} else {
-				s.WriteString(th.StatsStyle.Render("  Branches are identical"))
-			}
-		} else if v.err != nil {
-			s.WriteString(th.DashboardErrorStyle.Render(fmt.Sprintf("  Error: %v", v.err)))
-		}
-
-		s.WriteString("\n\n")
-		s.WriteString(th.Help.Render(" ESC: Close comparison "))
 	}
 
 	// Delete confirmation modal
