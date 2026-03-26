@@ -93,6 +93,10 @@ func DeleteRemoteBranch(repoPath, remote, branch string) error {
 		if strings.Contains(msg, "remote ref does not exist") || strings.Contains(msg, "error: unable to delete") {
 			return nil
 		}
+		// Not an error if the remote is archived/read-only (e.g. GitLab archived project)
+		if strings.Contains(msg, "archived") || strings.Contains(msg, "returned error: 403") {
+			return nil
+		}
 		return fmt.Errorf("delete remote branch failed: %s", msg)
 	}
 	return nil
