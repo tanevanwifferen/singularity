@@ -409,13 +409,16 @@ func (m *Model) initProjectRouter() {
 	projectDiffView := views.NewProjectDiffView(m.proj)
 	router.Register("ProjectDiff", projectDiffView)
 
+	projectStashView := views.NewProjectStashView(m.proj)
+	router.Register("ProjectStash", projectStashView)
+
 	// Build git submenu items (project-specific items first, then shared)
 	projGitItems := []components.SubmenuItem{
 		{Key: "a", Label: "Sync All Repos", ViewName: "ProjectSync"},
 		{Key: "d", Label: "Project Diff (open changes)", ViewName: "ProjectDiff"},
 		{Key: "s", Label: "Sync (push/pull/fetch)", ViewName: "Sync"},
 		{Key: "b", Label: "Branch Compare", ViewName: "BranchCompare"},
-		{Key: "t", Label: "Stashes", ViewName: "Stashes"},
+		{Key: "t", Label: "Project Stashes", ViewName: "ProjectStash"},
 		{Key: "r", Label: "Rebase", ViewName: "Rebase"},
 		{Key: "w", Label: "Worktrees", ViewName: "Worktrees"},
 		{Key: "p", Label: "Pipeline", ViewName: "Pipeline"},
