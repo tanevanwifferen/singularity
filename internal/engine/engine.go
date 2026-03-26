@@ -20,6 +20,7 @@ type AgentOptions struct {
 	SmartRoute   bool          // Use Haiku to classify prompt and pick model (opus for planning, sonnet for implementation)
 	UseWorktree  bool          // Create a git worktree for isolation; merge back on completion
 	Summary      string        // One-line summary for display in agent list (auto-generated if empty)
+	WorkflowID   string        // Optional workflow ID (branch name) this agent belongs to
 }
 
 // Engine manages a pool of Claude Code agent subprocesses
@@ -69,6 +70,10 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 	agent := newAgent(id, projectPath, task, opts)
 	e.agents[id] = agent
 	e.mu.Unlock()
+
+	if opts.WorkflowID != "" {
+		agent.appendOutput("system", fmt.Sprintf("Workflow: %s", opts.WorkflowID))
+	}
 
 	// Set up worktree isolation if requested
 	if opts.UseWorktree {

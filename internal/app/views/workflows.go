@@ -235,6 +235,7 @@ func (v *WorkflowsView) spawnAgentForWorkflow(task string) {
 	id, err := v.engine.StartAgent(wf.WorkflowDir(), fullTask, engine.AgentOptions{
 		ContextFiles: ctxFiles,
 		SmartRoute:   true,
+		WorkflowID:   wf.BranchName,
 	})
 	if err != nil {
 		v.workflowStatusMsg = fmt.Sprintf("Agent spawn failed: %v", err)
@@ -583,6 +584,7 @@ func (v *WorkflowsView) startWorkflowFromJira(issue *jira.Issue, extraMsg string
 		id, err := eng.StartAgent(wf.WorkflowDir(), fullTask, engine.AgentOptions{
 			ContextFiles: ctxFiles,
 			SmartRoute:   true,
+			WorkflowID:   wf.BranchName,
 		})
 		if err != nil {
 			v.workflowStatusMsg = fmt.Sprintf("Agent spawn failed: %v", err)
@@ -616,6 +618,7 @@ func (v *WorkflowsView) startWorkflowFromJiraOnExisting(issue *jira.Issue, wf *p
 		id, err := eng.StartAgent(wf.WorkflowDir(), fullTask, engine.AgentOptions{
 			ContextFiles: ctxFiles,
 			SmartRoute:   true,
+			WorkflowID:   wf.BranchName,
 		})
 		if err != nil {
 			v.workflowStatusMsg = fmt.Sprintf("Agent spawn failed: %v", err)

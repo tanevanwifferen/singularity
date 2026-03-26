@@ -755,7 +755,7 @@ func startJiraWorkflow(issue *jira.Issue, branch string, eng *engine.Engine, pro
 				}
 			}
 		}
-		id, err := eng.StartAgent(workDir, agentPrompt, engine.AgentOptions{SmartRoute: true})
+		id, err := eng.StartAgent(workDir, agentPrompt, engine.AgentOptions{SmartRoute: true, WorkflowID: fw.BranchName})
 		if err != nil {
 			return jiraWorkflowDoneMsg{err: fmt.Errorf("start agent: %w", err)}
 		}
