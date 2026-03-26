@@ -732,7 +732,7 @@ func (m Model) handleAppWSMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.router.SwitchTo("Agents")
 		}
 		if av := m.getAgentView(); av != nil {
-			av.AgentTickCmd() // load immediately; tick chain reschedules itself
+			av.LoadAgents() // load immediately; timer chain handles rescheduling
 		}
 		return m, nil
 	case WSAgentEventMsg:
@@ -740,7 +740,7 @@ func (m Model) handleAppWSMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.router.SwitchTo("Agents")
 		}
 		if av := m.getAgentView(); av != nil {
-			av.AgentTickCmd() // load immediately; tick chain reschedules itself
+			av.LoadAgents() // load immediately; timer chain handles rescheduling
 		}
 		return m, nil
 	case WSProjectUpdateMsg:

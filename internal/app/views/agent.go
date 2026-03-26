@@ -89,6 +89,10 @@ type AgentView struct {
 	mdRenderer      *glamour.TermRenderer
 	mdRendererWidth int
 
+	// Output rebuild cache: skip expensive glamour re-render when nothing changed
+	outputLastLen   int
+	outputLastWidth int
+
 	// Refresh ticker
 	refreshInterval time.Duration
 	lastRefresh     time.Time
@@ -207,6 +211,12 @@ func (v *AgentView) AgentTickCmd() tea.Cmd {
 // Used by the app-level Init to seed the tick chain.
 func (v *AgentView) AgentTickStart() tea.Cmd {
 	return v.streamTickCmd()
+}
+
+// LoadAgents is the public entry point for an immediate agent refresh
+// without rescheduling the tick (used by WS event handlers).
+func (v *AgentView) LoadAgents() {
+	v.loadAgents()
 }
 
 // loadAgents loads the current list of agents from the engine.
@@ -358,6 +368,12 @@ func (v *AgentView) refreshSelectedAgentOutput() {
 	if err != nil {
 		return
 	}
+
+	// Skip expensive glamour re-render when entry count and width are unchanged.
+	if len(entries) == v.outputLastLen && v.width == v.outputLastWidth {
+		return
+	}
+
 	v.outputEntries = entries
 	v.rebuildOutputViewport()
 }
@@ -452,6 +468,8 @@ func (v *AgentView) rebuildOutputViewport() {
 
 	content := strings.Join(lines, "\n")
 	v.outputViewport.SetContent(content)
+	v.outputLastLen = len(v.outputEntries)
+	v.outputLastWidth = w
 
 	if v.outputAutoScroll {
 		v.outputViewport.GotoBottom()
@@ -471,6 +489,7 @@ func (v *AgentView) syncPreview() {
 func (v *AgentView) selectAgent(info AgentInfo) {
 	v.selectedAgent = &info
 	v.outputAutoScroll = true
+	v.outputLastLen = -1 // force rebuild for the newly selected agent
 	v.recalcLayout()
 	v.refreshSelectedAgentOutput()
 }
