@@ -1048,6 +1048,13 @@ func (v *AgentView) View() string {
 	// Divider
 	divider := strings.Repeat("─", v.width)
 
+	// Kill confirmation modal
+	if v.killConfirm.Visible {
+		s.WriteString("\n")
+		s.WriteString(v.killConfirm.Render(modalWidth(v.width)))
+		return s.String()
+	}
+
 	// Jira picker overlay
 	if v.jiraPicker.IsOpen() {
 		s.WriteString("\n")
@@ -1207,12 +1214,6 @@ func (v *AgentView) View() string {
 			}
 			s.WriteString(th.Help.Render(hint))
 		}
-	}
-
-	// Kill confirmation modal
-	if v.killConfirm.Visible {
-		s.WriteString("\n")
-		s.WriteString(v.killConfirm.Render(modalWidth(v.width)))
 	}
 
 	// Error display
