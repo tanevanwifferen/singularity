@@ -9,6 +9,12 @@ import (
 	"strings"
 )
 
+// SoundConfig holds sound notification settings for agent completion
+type SoundConfig struct {
+	Enabled bool   `json:"enabled"`        // play sound when an agent finishes
+	File    string `json:"file,omitempty"` // path to audio file; empty = terminal bell (\a)
+}
+
 // Config holds the application configuration
 type Config struct {
 	Version       string             `json:"version"`
@@ -17,6 +23,7 @@ type Config struct {
 	Forge         ForgeConfig        `json:"forge"`
 	AI            AIConfig           `json:"ai"`
 	Jira          JiraConfig         `json:"jira"`
+	Sound         SoundConfig        `json:"sound"`
 	Profiles      map[string]Profile `json:"profiles"`
 	ActiveProfile string             `json:"active_profile"`
 }

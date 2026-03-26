@@ -264,6 +264,7 @@ func (m *Model) initRouter() {
 	if m.engine == nil {
 		m.engine = engine.New(10)
 	}
+	m.engine.SetSoundConfig(m.cfg.Sound)
 
 	m.registerCommonViews(router, m.repoPath, 2)
 
@@ -341,6 +342,7 @@ func (m *Model) initProjectRouter() {
 	if m.engine == nil {
 		m.engine = engine.New(10)
 	}
+	m.engine.SetSoundConfig(m.cfg.Sound)
 
 	// Create the project overview view as the first view (landing page)
 	projectView := views.NewProjectView(m.proj)

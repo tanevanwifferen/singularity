@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"gitlab.com/tanevanwifferen1/singularity/internal/config"
 )
 
 // AgentOptions configures an agent's behavior
@@ -29,6 +31,7 @@ type Engine struct {
 	mu        sync.RWMutex
 	idSeq     atomic.Int64
 	maxAgents int
+	soundCfg  config.SoundConfig
 }
 
 // New creates a new agent engine
@@ -40,6 +43,13 @@ func New(maxAgents int) *Engine {
 		agents:    make(map[string]*Agent),
 		maxAgents: maxAgents,
 	}
+}
+
+// SetSoundConfig configures sound notifications for agent completion.
+func (e *Engine) SetSoundConfig(cfg config.SoundConfig) {
+	e.mu.Lock()
+	e.soundCfg = cfg
+	e.mu.Unlock()
 }
 
 // StartAgent creates and starts a new agent working on the given task
@@ -68,6 +78,7 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 
 	id := e.generateID()
 	agent := newAgent(id, projectPath, task, opts)
+	agent.soundCfg = e.soundCfg
 	e.agents[id] = agent
 	e.mu.Unlock()
 

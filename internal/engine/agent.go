@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"gitlab.com/tanevanwifferen1/singularity/internal/config"
 )
 
 // AgentState represents the lifecycle state of an agent
@@ -95,6 +97,9 @@ type Agent struct {
 	sourceRepoPath string // original repo path (for merge-back)
 	sourceBranch   string // branch to merge back into
 	MergeResult    string `json:"merge_result,omitempty"` // result of merge-back ("merged", "conflict", "no-changes", "")
+
+	// Sound notification config (copied from Engine at start time)
+	soundCfg config.SoundConfig
 }
 
 // OutputEntry represents a single output chunk from the agent.
@@ -434,6 +439,8 @@ func (a *Agent) processResultEvent(event map[string]interface{}) {
 		// useWorktree && !isError: state stays AgentRunning until merge completes
 	}
 	a.mu.Unlock()
+
+	playSound(a.soundCfg)
 
 	if isError {
 		errMsg := result
