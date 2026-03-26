@@ -64,7 +64,7 @@ func NewConfigView(cfg *config.Config) *ConfigView {
 }
 
 func (v *ConfigView) buildTabs() []configTab {
-	return []configTab{
+	tabs := []configTab{
 		{
 			name: "Jira",
 			fields: []configField{
@@ -158,6 +158,29 @@ func (v *ConfigView) buildTabs() []configTab {
 			},
 		},
 	}
+
+	// --- Sound ---
+	tabs = append(tabs, configTab{
+		name: "Sound",
+		fields: []configField{
+			{
+				label: "Enabled",
+				kind:  configFieldBool,
+				get:   func(c *config.Config) string { return fmt.Sprintf("%t", c.Sound.Enabled) },
+				set: func(c *config.Config, val string) {
+					c.Sound.Enabled = val == "true"
+				},
+			},
+			{
+				label: "File (empty=bell)",
+				kind:  configFieldText,
+				get:   func(c *config.Config) string { return c.Sound.File },
+				set:   func(c *config.Config, val string) { c.Sound.File = val },
+			},
+		},
+	})
+
+	return tabs
 }
 
 // Init initializes the config view.
@@ -229,6 +252,16 @@ func (v *ConfigView) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 	case "enter", " ":
 		field := v.activeField()
 		if field != nil {
+			if field.kind == configFieldBool {
+				// Toggle boolean fields directly
+				cur := field.get(v.cfg)
+				if cur == "true" {
+					field.set(v.cfg, "false")
+				} else {
+					field.set(v.cfg, "true")
+				}
+				return v.saveConfig()
+			}
 			v.editing = true
 			v.editBuf = field.get(v.cfg)
 		}
@@ -365,6 +398,13 @@ func (v *ConfigView) View() string {
 					valStr = strings.Repeat("*", len(v.editBuf)) + "█"
 				} else {
 					valStr = v.editBuf + "█"
+				}
+			} else if field.kind == configFieldBool {
+				raw := field.get(v.cfg)
+				if raw == "true" {
+					valStr = "[x] on"
+				} else {
+					valStr = "[ ] off"
 				}
 			} else {
 				raw := field.get(v.cfg)
