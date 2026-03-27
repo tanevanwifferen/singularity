@@ -905,9 +905,14 @@ func (v *WorkflowsView) workflowTickCmd() tea.Cmd {
 }
 
 func (v *WorkflowsView) hasRunningAgents() bool {
+	return v.runningAgentCount() > 0
+}
+
+func (v *WorkflowsView) runningAgentCount() int {
 	if v.engine == nil {
-		return false
+		return 0
 	}
+	count := 0
 	for _, wf := range v.workflows {
 		agentID := wf.GetWorkflowAgentID()
 		if agentID == "" {
@@ -919,10 +924,10 @@ func (v *WorkflowsView) hasRunningAgents() bool {
 		}
 		snap := agent.Snapshot()
 		if snap.State == engine.AgentRunning || snap.State == engine.AgentStarting || snap.State == engine.AgentRouting {
-			return true
+			count++
 		}
 	}
-	return false
+	return count
 }
 
 // refreshBranchStatusCmd returns a command that refreshes branch ahead/behind status for all workflows.
@@ -1045,6 +1050,9 @@ func (v *WorkflowsView) View() string {
 	s.WriteString(th.DashboardTitle.Render(" Feature Workflows "))
 	if v.proj != nil {
 		s.WriteString(th.MutedTextStyle.Render(fmt.Sprintf("  %s", v.proj.Name)))
+	}
+	if n := v.runningAgentCount(); n > 0 {
+		s.WriteString(th.DashboardAccentStyle.Render(fmt.Sprintf("  %d agent(s) running", n)))
 	}
 	if v.jiraPicker.IsAvailable() {
 		s.WriteString(th.MutedTextStyle.Render("  J: Jira ticket"))
