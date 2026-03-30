@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -274,7 +273,7 @@ func (v *LogView) loadDetailFileDiff(idx int) {
 		v.detailDiffLines = nil
 	} else {
 		v.detailDiffRaw = raw
-		v.detailDiffLines = v.parseDiff(raw)
+		v.detailDiffLines = ParseDiffLines(raw)
 	}
 	v.detailDiffScroll = 0
 	v.detailLoadingDiff = false
@@ -301,7 +300,7 @@ func (v *LogView) openFullDiff(commit *LogCommit) {
 	if err != nil {
 		v.fullDiffLines = nil
 	} else {
-		v.fullDiffLines = v.parseDiff(raw)
+		v.fullDiffLines = ParseDiffLines(raw)
 	}
 }
 
@@ -358,8 +357,7 @@ func (v *LogView) handleFullDiffKey(msg tea.KeyMsg) tea.Cmd {
 
 // fullDiffVisibleLines returns the number of diff lines visible in the full diff view.
 func (v *LogView) fullDiffVisibleLines() int {
-	// Header (~5 lines) + footer (~1 line)
-	visible := v.height - 6
+	visible := v.height - 6 // 5 header lines + 1 footer line
 	if visible < 5 {
 		visible = 5
 	}
@@ -393,88 +391,8 @@ func (v *LogView) renderFullDiffView() string {
 		return s.String()
 	}
 
-	gutterWidth := 6
-	diffWidth := v.width - gutterWidth - 1
-	if diffWidth < 10 {
-		diffWidth = 10
-	}
-
-	visibleLines := v.fullDiffVisibleLines()
-	startIdx := v.fullDiffScroll
-	endIdx := startIdx + visibleLines
-	if endIdx > len(v.fullDiffLines) {
-		endIdx = len(v.fullDiffLines)
-		startIdx = endIdx - visibleLines
-		if startIdx < 0 {
-			startIdx = 0
-		}
-	}
-
-	for i := startIdx; i < endIdx; i++ {
-		line := v.fullDiffLines[i]
-		gutter := ""
-		lineStyle := th.Help
-
-		switch line.LineType {
-		case "+":
-			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
-			if line.NewLineNum > 0 {
-				gutter = fmt.Sprintf(" %4d ", line.NewLineNum)
-			} else {
-				gutter = "      "
-			}
-		case "-":
-			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-			if line.OldLineNum > 0 {
-				gutter = fmt.Sprintf(" %4d ", line.OldLineNum)
-			} else {
-				gutter = "      "
-			}
-		case "@":
-			lineStyle = th.InfoStyle
-			gutter = "      "
-		case "H":
-			lineStyle = th.Help
-			gutter = "      "
-		case " ":
-			lineStyle = th.Help
-			if line.NewLineNum > 0 {
-				gutter = fmt.Sprintf(" %4d ", line.NewLineNum)
-			} else if line.OldLineNum > 0 {
-				gutter = fmt.Sprintf(" %4d ", line.OldLineNum)
-			} else {
-				gutter = "      "
-			}
-		default:
-			lineStyle = th.Help
-			gutter = "      "
-		}
-
-		content := line.Content
-		if len(content) > diffWidth-2 {
-			content = content[:diffWidth-5] + "..."
-		}
-
-		prefix := " "
-		if line.LineType == "+" {
-			prefix = "+"
-		} else if line.LineType == "-" {
-			prefix = "-"
-		}
-
-		s.WriteString(th.Help.Render(gutter))
-		s.WriteString(lineStyle.Render(prefix + content))
-		s.WriteString("\n")
-	}
-
-	totalLines := len(v.fullDiffLines)
-	if totalLines > visibleLines {
-		scrollInfo := fmt.Sprintf(" %d-%d of %d lines ", startIdx+1, endIdx, totalLines)
-		s.WriteString(th.Help.Render(scrollInfo + "[j/k scroll, ctrl+d/u half-page, g/G top/bottom, Esc: close]"))
-	} else {
-		s.WriteString(th.Help.Render(" j/k: Scroll   g/G: Top/Bottom   Esc/q: Close"))
-	}
-	s.WriteString("\n")
+	// 5 header lines (title, hash, subject, divider) + 1 footer line
+	s.WriteString(renderDiffWithGutter(v.fullDiffLines, v.fullDiffScroll, v.width, v.height, 5, 1, false, "[j/k scroll, ctrl+d/u half-page, g/G top/bottom, Esc: close]"))
 
 	return s.String()
 }
@@ -890,65 +808,6 @@ func (v *LogView) detailDiffVisibleLines() int {
 	return visible
 }
 
-// parseDiff parses raw diff output into structured DiffLine slices with line numbers.
-// Reuses the same logic as DiffView.parseDiff.
-func (v *LogView) parseDiff(rawDiff string) []DiffLine {
-	var lines []DiffLine
-	var oldLineNum, newLineNum int
-
-	for _, line := range strings.Split(rawDiff, "\n") {
-		diffLine := DiffLine{Content: line}
-
-		if strings.HasPrefix(line, "@@") {
-			diffLine.LineType = "@"
-			parts := strings.Fields(line)
-			for _, p := range parts {
-				if strings.HasPrefix(p, "-") && !strings.HasPrefix(p, "--") {
-					numStr := strings.TrimPrefix(p, "-")
-					if idx := strings.Index(numStr, ","); idx > 0 {
-						numStr = numStr[:idx]
-					}
-					if n, err := strconv.Atoi(numStr); err == nil {
-						oldLineNum = n
-					}
-				} else if strings.HasPrefix(p, "+") && !strings.HasPrefix(p, "++") {
-					numStr := strings.TrimPrefix(p, "+")
-					if idx := strings.Index(numStr, ","); idx > 0 {
-						numStr = numStr[:idx]
-					}
-					if n, err := strconv.Atoi(numStr); err == nil {
-						newLineNum = n
-					}
-				}
-			}
-		} else if strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++") {
-			diffLine.LineType = "H"
-			oldLineNum = 0
-			newLineNum = 0
-		} else if strings.HasPrefix(line, "+") {
-			diffLine.LineType = "+"
-			diffLine.NewLineNum = newLineNum
-			newLineNum++
-		} else if strings.HasPrefix(line, "-") {
-			diffLine.LineType = "-"
-			diffLine.OldLineNum = oldLineNum
-			oldLineNum++
-		} else if strings.HasPrefix(line, " ") {
-			diffLine.LineType = " "
-			diffLine.OldLineNum = oldLineNum
-			diffLine.NewLineNum = newLineNum
-			oldLineNum++
-			newLineNum++
-		} else {
-			diffLine.LineType = ""
-		}
-
-		lines = append(lines, diffLine)
-	}
-
-	return lines
-}
-
 // renderCommitItem renders a single commit item in the list.
 func (v *LogView) renderCommitItem(commit LogCommit, index int, selected bool) string {
 	th := theme.GetTheme()
@@ -1362,93 +1221,12 @@ func (v *LogView) renderDetailDiffPanel(width int) string {
 		return s.String()
 	}
 
-	// Render scrollable diff with gutter
-	gutterWidth := 6
-	diffWidth := width - gutterWidth - 1
-	if diffWidth < 10 {
-		diffWidth = 10
+	// 9 header lines (outer commit info ~7 + panel title + divider) + 1 footer line = 10 overhead
+	scrollHint := "[j/k scroll, g/G top/bottom]"
+	if v.detailFocusFiles {
+		scrollHint = "[Tab to navigate]"
 	}
-
-	visibleLines := v.detailDiffVisibleLines()
-
-	startIdx := v.detailDiffScroll
-	endIdx := startIdx + visibleLines
-	if endIdx > len(v.detailDiffLines) {
-		endIdx = len(v.detailDiffLines)
-		startIdx = endIdx - visibleLines
-		if startIdx < 0 {
-			startIdx = 0
-		}
-	}
-
-	for i := startIdx; i < endIdx; i++ {
-		line := v.detailDiffLines[i]
-		gutter := ""
-		lineStyle := th.Help
-
-		switch line.LineType {
-		case "+":
-			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
-			if line.NewLineNum > 0 {
-				gutter = fmt.Sprintf(" %4d ", line.NewLineNum)
-			} else {
-				gutter = "      "
-			}
-		case "-":
-			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-			if line.OldLineNum > 0 {
-				gutter = fmt.Sprintf(" %4d ", line.OldLineNum)
-			} else {
-				gutter = "      "
-			}
-		case "@":
-			lineStyle = th.InfoStyle
-			gutter = "      "
-		case "H":
-			lineStyle = th.Help
-			gutter = "      "
-		case " ":
-			lineStyle = th.Help
-			if line.NewLineNum > 0 {
-				gutter = fmt.Sprintf(" %4d ", line.NewLineNum)
-			} else if line.OldLineNum > 0 {
-				gutter = fmt.Sprintf(" %4d ", line.OldLineNum)
-			} else {
-				gutter = "      "
-			}
-		default:
-			lineStyle = th.Help
-			gutter = "      "
-		}
-
-		content := line.Content
-		if len(content) > diffWidth-2 {
-			content = content[:diffWidth-5] + "..."
-		}
-
-		prefix := " "
-		if line.LineType == "+" {
-			prefix = "+"
-		} else if line.LineType == "-" {
-			prefix = "-"
-		}
-
-		s.WriteString(th.Help.Render(gutter))
-		s.WriteString(lineStyle.Render(prefix + content))
-		s.WriteString("\n")
-	}
-
-	// Scroll indicator
-	totalLines := len(v.detailDiffLines)
-	if totalLines > visibleLines {
-		scrollInfo := fmt.Sprintf(" %d-%d of %d lines ", startIdx+1, endIdx, totalLines)
-		if !v.detailFocusFiles {
-			s.WriteString(th.Help.Render(scrollInfo + "[j/k scroll, g/G top/bottom]"))
-		} else {
-			s.WriteString(th.Help.Render(scrollInfo + "[Tab to navigate]"))
-		}
-		s.WriteString("\n")
-	}
+	s.WriteString(renderDiffWithGutter(v.detailDiffLines, v.detailDiffScroll, width, v.height, 9, 1, false, scrollHint))
 
 	return s.String()
 }
