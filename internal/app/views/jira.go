@@ -109,6 +109,7 @@ type JiraView struct {
 	aiAgentID       string
 	aiOutputEntries []engine.OutputEntry
 	aiOutputOffset  int
+	aiViewOffset    int // display scroll offset (index of first visible entry)
 	approvalView    *ApprovalView
 	refineIssue     *jira.Issue // issue being refined, kept for iterate
 
@@ -245,8 +246,19 @@ func (v *JiraView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case jiraAIOutputMsg:
 		if len(msg.entries) > 0 {
+			visible := v.height - 4
+			prevLen := len(v.aiOutputEntries)
+			atBottom := prevLen == 0 || v.aiViewOffset >= prevLen-visible
 			v.aiOutputEntries = append(v.aiOutputEntries, msg.entries...)
 			v.aiOutputOffset += len(msg.entries)
+			// Auto-scroll to bottom if we were already there
+			if atBottom {
+				max := len(v.aiOutputEntries) - visible
+				if max < 0 {
+					max = 0
+				}
+				v.aiViewOffset = max
+			}
 		}
 		if msg.done {
 			if msg.parseErr != nil {
@@ -272,6 +284,7 @@ func (v *JiraView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.aiMode = ""
 		v.aiAgentID = ""
 		v.aiOutputEntries = nil
+		v.aiViewOffset = 0
 		v.selectedIssues = make(map[string]bool)
 		if msg.Executed {
 			v.workflowStatusMsg = "Actions executed successfully"
@@ -289,6 +302,7 @@ func (v *JiraView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.aiAgentID = ""
 			v.aiOutputEntries = nil
 			v.aiOutputOffset = 0
+			v.aiViewOffset = 0
 			return v, v.startAIIterateMode(actions, msg.Feedback)
 		}
 		return v, nil
@@ -314,15 +328,50 @@ func (v *JiraView) handleJiraKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return v, cmd
 	}
 
-	// AI agent running - allow Esc to cancel
+	// AI agent running - allow Esc to cancel and up/down to scroll
 	if v.aiMode != "" && v.approvalView == nil {
-		if msg.String() == "esc" {
+		switch msg.String() {
+		case "esc":
 			if v.aiAgentID != "" && v.eng != nil {
 				v.eng.KillAgent(v.aiAgentID)
 			}
 			v.aiMode = ""
 			v.aiAgentID = ""
 			v.aiOutputEntries = nil
+			v.aiViewOffset = 0
+			return v, nil
+		case "up", "k":
+			if v.aiViewOffset > 0 {
+				v.aiViewOffset--
+			}
+			return v, nil
+		case "down", "j":
+			visible := v.height - 4
+			max := len(v.aiOutputEntries) - visible
+			if max < 0 {
+				max = 0
+			}
+			if v.aiViewOffset < max {
+				v.aiViewOffset++
+			}
+			return v, nil
+		case "pgup", "ctrl+u":
+			visible := v.height - 4
+			v.aiViewOffset -= visible
+			if v.aiViewOffset < 0 {
+				v.aiViewOffset = 0
+			}
+			return v, nil
+		case "pgdown", "ctrl+d":
+			visible := v.height - 4
+			max := len(v.aiOutputEntries) - visible
+			if max < 0 {
+				max = 0
+			}
+			v.aiViewOffset += visible
+			if v.aiViewOffset > max {
+				v.aiViewOffset = max
+			}
 			return v, nil
 		}
 		return v, nil // swallow other keys while agent runs
@@ -539,6 +588,7 @@ func (v *JiraView) startAIMode(mode string, issue *jira.Issue, focus ...string) 
 	v.aiAgentID = ""
 	v.aiOutputEntries = nil
 	v.aiOutputOffset = 0
+	v.aiViewOffset = 0
 	v.approvalView = nil
 	if mode == "refine" {
 		v.refineIssue = issue
@@ -960,6 +1010,7 @@ func (v *JiraView) startAIFromText(text string) tea.Cmd {
 	v.aiAgentID = ""
 	v.aiOutputEntries = nil
 	v.aiOutputOffset = 0
+	v.aiViewOffset = 0
 	v.approvalView = nil
 
 	eng := v.eng
@@ -985,6 +1036,7 @@ func (v *JiraView) startMultiReview(instruction string) tea.Cmd {
 	v.aiAgentID = ""
 	v.aiOutputEntries = nil
 	v.aiOutputOffset = 0
+	v.aiViewOffset = 0
 	v.approvalView = nil
 
 	eng := v.eng
@@ -1038,12 +1090,20 @@ func (v *JiraView) View() string {
 		}
 		s.WriteString(th.InfoStyle.Render(fmt.Sprintf(" %s... (Esc to cancel)", modeLabel)))
 		s.WriteString("\n\n")
-		// Show last few output entries
-		start := 0
-		if len(v.aiOutputEntries) > 15 {
-			start = len(v.aiOutputEntries) - 15
+		// Show output entries with scroll support
+		visible := v.height - 4
+		if visible < 1 {
+			visible = 1
 		}
-		for _, entry := range v.aiOutputEntries[start:] {
+		start := v.aiViewOffset
+		if start < 0 {
+			start = 0
+		}
+		end := start + visible
+		if end > len(v.aiOutputEntries) {
+			end = len(v.aiOutputEntries)
+		}
+		for _, entry := range v.aiOutputEntries[start:end] {
 			prefix := ""
 			switch entry.Source {
 			case "tool_use":
@@ -1062,6 +1122,14 @@ func (v *JiraView) View() string {
 				line = line[:v.width-7] + "..."
 			}
 			s.WriteString(prefix + line + "\n")
+		}
+		// Scroll indicator
+		if len(v.aiOutputEntries) > visible {
+			scrollPct := 0
+			if max := len(v.aiOutputEntries) - visible; max > 0 {
+				scrollPct = v.aiViewOffset * 100 / max
+			}
+			s.WriteString(th.Help.Render(fmt.Sprintf(" ↑↓/jk: scroll · pgup/pgdn: page · %d%%", scrollPct)))
 		}
 		return s.String()
 	}
