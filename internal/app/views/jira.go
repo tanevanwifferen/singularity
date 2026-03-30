@@ -146,8 +146,10 @@ func (v *JiraView) SetEngine(eng *engine.Engine) { v.eng = eng }
 func (v *JiraView) SetProject(proj *project.Project) { v.proj = proj }
 
 // CapturesInput reports whether the view is consuming all keyboard input.
+// Note: aiMode (refine/create agent running) is intentionally excluded so the
+// user can switch views while a ticket is being refined in the background.
 func (v *JiraView) CapturesInput() bool {
-	return v.searchMode || v.showTextInput || v.showFocusInput || v.showReviewInput || v.showWorkflowConfirm || v.aiMode != "" || v.approvalView != nil
+	return v.searchMode || v.showTextInput || v.showFocusInput || v.showReviewInput || v.showWorkflowConfirm || v.approvalView != nil
 }
 
 // Init loads issues on first display.
