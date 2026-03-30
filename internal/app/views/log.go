@@ -61,6 +61,12 @@ type LogView struct {
 	detailDiffRaw     string
 	detailLoadingDiff bool
 
+	// Full diff view state
+	showFullDiff   bool
+	fullDiffLines  []DiffLine
+	fullDiffScroll int
+	fullDiffCommit *LogCommit
+
 	// Filter mode (author vs message)
 	filterMode string // "" or "author" or "message"
 
@@ -285,6 +291,194 @@ func (v *LogView) closeDetail() {
 	v.detailDiffRaw = ""
 }
 
+// openFullDiff opens the full diff view for a commit.
+func (v *LogView) openFullDiff(commit *LogCommit) {
+	v.fullDiffCommit = commit
+	v.fullDiffScroll = 0
+	v.showFullDiff = true
+
+	raw, err := git.GetCommitFullDiff(v.repoPath, commit.Hash)
+	if err != nil {
+		v.fullDiffLines = nil
+	} else {
+		v.fullDiffLines = v.parseDiff(raw)
+	}
+}
+
+// handleFullDiffKey handles key events in the full diff view.
+func (v *LogView) handleFullDiffKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "esc", "q":
+		v.showFullDiff = false
+		v.fullDiffCommit = nil
+		v.fullDiffLines = nil
+
+	case "up", "k":
+		if v.fullDiffScroll > 0 {
+			v.fullDiffScroll--
+		}
+
+	case "down", "j":
+		maxScroll := len(v.fullDiffLines) - v.fullDiffVisibleLines()
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		if v.fullDiffScroll < maxScroll {
+			v.fullDiffScroll++
+		}
+
+	case "g":
+		v.fullDiffScroll = 0
+
+	case "G":
+		maxScroll := len(v.fullDiffLines) - v.fullDiffVisibleLines()
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		v.fullDiffScroll = maxScroll
+
+	case "ctrl+d":
+		v.fullDiffScroll += v.fullDiffVisibleLines() / 2
+		maxScroll := len(v.fullDiffLines) - v.fullDiffVisibleLines()
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		if v.fullDiffScroll > maxScroll {
+			v.fullDiffScroll = maxScroll
+		}
+
+	case "ctrl+u":
+		v.fullDiffScroll -= v.fullDiffVisibleLines() / 2
+		if v.fullDiffScroll < 0 {
+			v.fullDiffScroll = 0
+		}
+	}
+	return nil
+}
+
+// fullDiffVisibleLines returns the number of diff lines visible in the full diff view.
+func (v *LogView) fullDiffVisibleLines() int {
+	// Header (~5 lines) + footer (~1 line)
+	visible := v.height - 6
+	if visible < 5 {
+		visible = 5
+	}
+	return visible
+}
+
+// renderFullDiffView renders the full diff for a commit.
+func (v *LogView) renderFullDiffView() string {
+	th := theme.GetTheme()
+	var s strings.Builder
+
+	s.WriteString(th.DashboardTitle.Render(" Commit Diff "))
+	s.WriteString("\n")
+
+	s.WriteString(fmt.Sprintf(" %s %s",
+		th.BranchStyle.Render("Hash:"),
+		th.InfoStyle.Render(v.fullDiffCommit.ShortHash)))
+	if v.fullDiffCommit.Refs != "" {
+		s.WriteString(fmt.Sprintf("  %s", th.DashboardAccentStyle.Render(v.fullDiffCommit.Refs)))
+	}
+	s.WriteString("\n")
+	s.WriteString(fmt.Sprintf(" %s %s\n",
+		th.BranchStyle.Render("Subject:"),
+		th.StatsStyle.Render(v.fullDiffCommit.Subject)))
+	s.WriteString(th.StatsStyle.Render(fmt.Sprintf(" %s\n", strings.Repeat("─", v.width-2))))
+
+	if len(v.fullDiffLines) == 0 {
+		s.WriteString(th.Help.Render(" No diff available"))
+		s.WriteString("\n")
+		s.WriteString(th.Help.Render(" Esc/q: Close"))
+		return s.String()
+	}
+
+	gutterWidth := 6
+	diffWidth := v.width - gutterWidth - 1
+	if diffWidth < 10 {
+		diffWidth = 10
+	}
+
+	visibleLines := v.fullDiffVisibleLines()
+	startIdx := v.fullDiffScroll
+	endIdx := startIdx + visibleLines
+	if endIdx > len(v.fullDiffLines) {
+		endIdx = len(v.fullDiffLines)
+		startIdx = endIdx - visibleLines
+		if startIdx < 0 {
+			startIdx = 0
+		}
+	}
+
+	for i := startIdx; i < endIdx; i++ {
+		line := v.fullDiffLines[i]
+		gutter := ""
+		lineStyle := th.Help
+
+		switch line.LineType {
+		case "+":
+			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
+			if line.NewLineNum > 0 {
+				gutter = fmt.Sprintf(" %4d ", line.NewLineNum)
+			} else {
+				gutter = "      "
+			}
+		case "-":
+			lineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+			if line.OldLineNum > 0 {
+				gutter = fmt.Sprintf(" %4d ", line.OldLineNum)
+			} else {
+				gutter = "      "
+			}
+		case "@":
+			lineStyle = th.InfoStyle
+			gutter = "      "
+		case "H":
+			lineStyle = th.Help
+			gutter = "      "
+		case " ":
+			lineStyle = th.Help
+			if line.NewLineNum > 0 {
+				gutter = fmt.Sprintf(" %4d ", line.NewLineNum)
+			} else if line.OldLineNum > 0 {
+				gutter = fmt.Sprintf(" %4d ", line.OldLineNum)
+			} else {
+				gutter = "      "
+			}
+		default:
+			lineStyle = th.Help
+			gutter = "      "
+		}
+
+		content := line.Content
+		if len(content) > diffWidth-2 {
+			content = content[:diffWidth-5] + "..."
+		}
+
+		prefix := " "
+		if line.LineType == "+" {
+			prefix = "+"
+		} else if line.LineType == "-" {
+			prefix = "-"
+		}
+
+		s.WriteString(th.Help.Render(gutter))
+		s.WriteString(lineStyle.Render(prefix + content))
+		s.WriteString("\n")
+	}
+
+	totalLines := len(v.fullDiffLines)
+	if totalLines > visibleLines {
+		scrollInfo := fmt.Sprintf(" %d-%d of %d lines ", startIdx+1, endIdx, totalLines)
+		s.WriteString(th.Help.Render(scrollInfo + "[j/k scroll, ctrl+d/u half-page, g/G top/bottom, Esc: close]"))
+	} else {
+		s.WriteString(th.Help.Render(" j/k: Scroll   g/G: Top/Bottom   Esc/q: Close"))
+	}
+	s.WriteString("\n")
+
+	return s.String()
+}
+
 // Update handles update events.
 func (v *LogView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -347,6 +541,11 @@ func (v *LogView) handleLogKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return v, v.handleRewordEditor(msg)
 	}
 
+	// Handle full diff view
+	if v.showFullDiff {
+		return v, v.handleFullDiffKey(msg)
+	}
+
 	// Handle detail panel
 	if v.showDetail {
 		return v, v.handleDetailKey(msg)
@@ -384,6 +583,12 @@ func (v *LogView) handleListKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			v.messageFilter = ""
 		} else {
 			v.filterMode = "message"
+		}
+
+	case "d":
+		// Show full diff for selected commit
+		if item, idx := v.filter.SelectedItem(); idx >= 0 {
+			v.openFullDiff(&item)
 		}
 
 	case "enter":
@@ -790,6 +995,11 @@ func truncate(s string, maxLen int) string {
 func (v *LogView) View() string {
 	th := theme.GetTheme()
 
+	// If full diff view is active, render it
+	if v.showFullDiff && v.fullDiffCommit != nil {
+		return v.renderFullDiffView()
+	}
+
 	// If detail view is active, render split-panel detail instead
 	if v.showDetail && v.detailCommit != nil {
 		return v.renderDetailView()
@@ -844,7 +1054,7 @@ func (v *LogView) View() string {
 		if v.filter.IsActive() {
 			s.WriteString(v.filter.View())
 		} else {
-			helpText := " a: Author   s: Search   Enter: Detail   y: Copy   c: Cherry-pick   w: Reword   x: Reset   g: More"
+			helpText := " a: Author   s: Search   Enter: Detail   d: Diff   y: Copy   c: Cherry-pick   w: Reword   x: Reset   g: More"
 			if v.hasMore {
 				helpText += "   ↑↓: Navigate"
 			}
@@ -885,7 +1095,7 @@ func (v *LogView) View() string {
 	// Footer
 	s.WriteString("\n")
 	s.WriteString(renderSeparator())
-	footerText := " r: Refresh   a: Author   s: Search   Enter: Detail   y: Copy hash   c: Cherry-pick   w: Reword   x: Reset"
+	footerText := " r: Refresh   a: Author   s: Search   Enter: Detail   d: Diff   y: Copy hash   c: Cherry-pick   w: Reword   x: Reset"
 	if v.hasMore {
 		footerText += "   g: More"
 	}
@@ -1248,7 +1458,10 @@ func (v *LogView) ShortHelp() string {
 	if v.showDetail {
 		return "j/k: Navigate  Tab: Switch panel  Enter: View diff  g/G: Top/Bottom  Esc: Close"
 	}
-	return "a: Author  s: Search  Enter: Detail  y: Copy hash  c: Cherry-pick  w: Reword  x: Reset  r: Refresh"
+	if v.showFullDiff {
+		return "j/k: Scroll   ctrl+d/u: Half-page   g/G: Top/Bottom   Esc/q: Close"
+	}
+	return "a: Author  s: Search  Enter: Detail  d: Diff  y: Copy hash  c: Cherry-pick  w: Reword  x: Reset  r: Refresh"
 }
 
 // headerFooterLines returns the number of lines used by the view chrome

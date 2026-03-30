@@ -620,6 +620,22 @@ func GetCommitFileDiff(repoPath, hash, filePath string) (string, error) {
 	return string(output), nil
 }
 
+// GetCommitFullDiff returns the full unified diff for a commit (all files).
+// Works for merge commits and initial commits.
+func GetCommitFullDiff(repoPath, hash string) (string, error) {
+	cmd := exec.Command("git", "-C", repoPath, "diff-tree", "-p", "--no-commit-id", "-r", hash)
+	output, err := cmd.Output()
+	if err != nil || len(strings.TrimSpace(string(output))) == 0 {
+		// Fallback for initial commits or merge commits
+		cmd = exec.Command("git", "-C", repoPath, "show", "--format=", hash)
+		output, err = cmd.Output()
+		if err != nil {
+			return "", fmt.Errorf("failed to get commit full diff: %w", err)
+		}
+	}
+	return string(output), nil
+}
+
 // DiffHunk represents a single hunk in a unified diff
 type DiffHunk struct {
 	Header   string     // The @@ header line
