@@ -1382,7 +1382,7 @@ func (v *WorkflowsView) renderFooterHelp() string {
 		jiraHint = "  J Jira"
 	}
 	if len(v.workflows) > 0 {
-		return th.Help.Render(" w New" + jiraHint + "  a Agent  d Diff  p Push  M MRs  D Cleanup  H Detach  I Import  ↑↓ Select  r Refresh")
+		return th.Help.Render(" w New" + jiraHint + "  a Agent  d Diff  p Push  P Force Push  M MRs  D Cleanup  H Detach  I Import  ↑↓ Select  r Refresh")
 	}
 	return th.Help.Render(" w New Workflow  I Import  r Refresh" + jiraHint)
 }
@@ -1402,7 +1402,7 @@ func (v *WorkflowsView) ShortHelp() string {
 		if v.jiraPicker.IsAvailable() {
 			jiraHint = "  J Jira ticket"
 		}
-		return fmt.Sprintf("Workflow: %s  w New%s  a Agent  d Diff  p Push  M MRs  D Cleanup  H Detach  I Import", wfLabel, jiraHint)
+		return fmt.Sprintf("Workflow: %s  w New%s  a Agent  d Diff  p Push  P Force Push  M MRs  D Cleanup  H Detach  I Import", wfLabel, jiraHint)
 	}
 	jiraHint := ""
 	if v.jiraPicker.IsAvailable() {
@@ -1422,7 +1422,7 @@ func (v *WorkflowsView) CapturesInput() bool {
 // CapturesKey returns true for keys this view handles directly.
 func (v *WorkflowsView) CapturesKey(key string) bool {
 	switch key {
-	case "r", "w", "a", "p", "d", "D", "H", "I", "M", "J", "j", "k", "up", "down", "/":
+	case "r", "w", "a", "p", "P", "d", "D", "H", "I", "M", "J", "j", "k", "up", "down", "/":
 		return true
 	}
 	return false
