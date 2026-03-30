@@ -177,11 +177,13 @@ func buildCreatePrompt(issue *Issue, rawText string, project string, repoPath st
 // RefineProposalWithContext launches an agent that reviews an existing proposal
 // alongside the Jira ticket and codebase, then rewrites the proposal to improve it.
 // The existing actions are passed as context so the agent can build on prior work.
-func RefineProposalWithContext(eng *engine.Engine, issue *Issue, existingActions []JiraAction, repoPath string, actionsFile string) (string, error) {
+// userFeedback is optional; when non-empty it is included in the prompt so the agent
+// can address specific concerns raised by the user.
+func RefineProposalWithContext(eng *engine.Engine, issue *Issue, existingActions []JiraAction, userFeedback string, repoPath string, actionsFile string) (string, error) {
 	if actionsFile == "" {
 		actionsFile = fmt.Sprintf(".jira-actions-%s.json", issue.Key)
 	}
-	prompt := buildRefineProposalWithContextPrompt(issue, existingActions, repoPath, actionsFile)
+	prompt := buildRefineProposalWithContextPrompt(issue, existingActions, userFeedback, repoPath, actionsFile)
 	return eng.StartAgent(repoPath, prompt, engine.AgentOptions{
 		Model:        "sonnet",
 		MaxTurns:     15,
@@ -191,7 +193,7 @@ func RefineProposalWithContext(eng *engine.Engine, issue *Issue, existingActions
 }
 
 // buildRefineProposalWithContextPrompt builds a prompt for iterating on an existing proposal.
-func buildRefineProposalWithContextPrompt(issue *Issue, existingActions []JiraAction, repoPath string, actionsFile string) string {
+func buildRefineProposalWithContextPrompt(issue *Issue, existingActions []JiraAction, userFeedback string, repoPath string, actionsFile string) string {
 	var b strings.Builder
 
 	b.WriteString("You are reviewing and improving an existing Jira ticket proposal.\n\n")
@@ -235,13 +237,25 @@ func buildRefineProposalWithContextPrompt(issue *Issue, existingActions []JiraAc
 		b.WriteString("\n")
 	}
 
+	if userFeedback != "" {
+		b.WriteString("## User Feedback\n\n")
+		b.WriteString("The user has reviewed the existing proposal and provided the following feedback.\n")
+		b.WriteString("Prioritize addressing this feedback in your improved proposal:\n\n")
+		fmt.Fprintf(&b, "> %s\n\n", userFeedback)
+	}
+
 	b.WriteString("## Your Task\n\n")
 	b.WriteString("Explore the codebase to verify and improve the existing proposal. Specifically:\n\n")
 	b.WriteString("1. Re-read the relevant files referenced in the proposal to verify accuracy.\n")
 	b.WriteString("2. Check whether any referenced files, functions, or modules have changed.\n")
 	b.WriteString("3. Identify gaps: missing acceptance criteria, unhandled edge cases, unclear steps.\n")
 	b.WriteString("4. Improve descriptions so a developer can implement without additional context.\n")
-	b.WriteString("5. If the proposal is already excellent, output it unchanged.\n\n")
+	if userFeedback != "" {
+		b.WriteString("5. Address the user feedback above — this takes priority over all other improvements.\n")
+	} else {
+		b.WriteString("5. If the proposal is already excellent, output it unchanged.\n")
+	}
+	b.WriteString("\n")
 
 	projectKey := issue.Key
 	if idx := strings.Index(issue.Key, "-"); idx > 0 {

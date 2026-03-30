@@ -1468,7 +1468,7 @@ func (v *AgentView) startRefineProposalFromSaved(meta *jiraAgentMeta) tea.Cmd {
 		}
 		// Write to the same file so the proposal is updated in place
 		relFile := fmt.Sprintf(".jira-actions-%s.json", issueKey)
-		id, err := jira.RefineProposalWithContext(eng, issue, existingActions, repoPath, relFile)
+		id, err := jira.RefineProposalWithContext(eng, issue, existingActions, "", repoPath, relFile)
 		if err != nil {
 			return AgentCreatedMsg{Err: err}
 		}

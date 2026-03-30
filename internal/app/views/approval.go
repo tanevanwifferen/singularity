@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
 	"gitlab.com/tanevanwifferen1/singularity/internal/jira"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
@@ -39,6 +40,11 @@ type approvalExecDoneMsg struct {
 	err     error
 }
 
+// ApprovalIterateMsg is sent when the user wants to re-run the agent with feedback.
+type ApprovalIterateMsg struct {
+	Feedback string
+}
+
 // ApprovalView presents JiraActions for review and execution.
 type ApprovalView struct {
 	viewBase
@@ -52,6 +58,10 @@ type ApprovalView struct {
 	results      []ActionResult
 	executionErr error
 	done         bool
+
+	// Iterate input
+	inputMode bool
+	inputText string
 }
 
 // NewApprovalView creates an ApprovalView from a list of JiraActions.
@@ -83,6 +93,15 @@ func (v *ApprovalView) Init() tea.Cmd {
 	return nil
 }
 
+// Actions returns all actions in the view (for passing to iterate agent).
+func (v *ApprovalView) Actions() []jira.JiraAction {
+	actions := make([]jira.JiraAction, len(v.items))
+	for i, item := range v.items {
+		actions[i] = item.Action
+	}
+	return actions
+}
+
 // Update implements tea.Model.
 func (v *ApprovalView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -98,6 +117,33 @@ func (v *ApprovalView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		// If execution is in progress, ignore key input
 		if v.executing {
+			return v, nil
+		}
+
+		// Input mode: collect iterate feedback
+		if v.inputMode {
+			switch msg.String() {
+			case "enter":
+				feedback := strings.TrimSpace(v.inputText)
+				v.inputMode = false
+				v.inputText = ""
+				return v, func() tea.Msg { return ApprovalIterateMsg{Feedback: feedback} }
+			case "esc":
+				v.inputMode = false
+				v.inputText = ""
+			case "ctrl+w":
+				v.inputText = components.DeleteWordEnd(v.inputText)
+			case "backspace":
+				if len(v.inputText) > 0 {
+					v.inputText = v.inputText[:len(v.inputText)-1]
+				}
+			default:
+				if msg.Paste && len(msg.Runes) > 0 {
+					v.inputText += string(msg.Runes)
+				} else if len(msg.Runes) == 1 && msg.Runes[0] >= 32 {
+					v.inputText += string(msg.Runes[0])
+				}
+			}
 			return v, nil
 		}
 
@@ -145,6 +191,10 @@ func (v *ApprovalView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				v.items[i].Selected = !allSelected
 			}
 
+		case "i":
+			v.inputMode = true
+			v.inputText = ""
+
 		case "x", "ctrl+x":
 			if v.selectedCount() > 0 {
 				v.executing = true
@@ -181,6 +231,15 @@ func (v *ApprovalView) View() string {
 		sb.WriteString(v.renderResults(t))
 	} else {
 		sb.WriteString(v.renderItems(t))
+	}
+
+	// Iterate input field
+	if v.inputMode {
+		sb.WriteString("\n")
+		sb.WriteString(t.DashboardAccentStyle.Render("Iterate: "))
+		sb.WriteString(v.inputText)
+		sb.WriteString("_")
+		sb.WriteString("\n")
 	}
 
 	// Hint bar
@@ -548,5 +607,8 @@ func (v *ApprovalView) CapturesInput() bool { return true }
 
 // ShortHelp returns the keybinding hint string.
 func (v *ApprovalView) ShortHelp() string {
-	return "↑↓: Navigate  Space: Toggle  a: Toggle all  Enter: Expand  x: Execute  Esc: Cancel"
+	if v.inputMode {
+		return "Enter: Send  Esc: Cancel"
+	}
+	return "↑↓: Navigate  Space: Toggle  a: Toggle all  Enter: Expand  i: Iterate  x: Execute  Esc: Cancel"
 }

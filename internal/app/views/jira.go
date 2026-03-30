@@ -105,11 +105,12 @@ type JiraView struct {
 	workflowFromExisting bool // true if coming from existing-worktree path
 
 	// Refine / Create agent mode
-	aiMode          string // "", "refine", "create"
+	aiMode          string // "", "refine", "create", "iterate"
 	aiAgentID       string
 	aiOutputEntries []engine.OutputEntry
 	aiOutputOffset  int
 	approvalView    *ApprovalView
+	refineIssue     *jira.Issue // issue being refined, kept for iterate
 
 	// Text-input for create mode without a ticket
 	showTextInput bool
@@ -277,6 +278,18 @@ func (v *JiraView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Err != nil {
 				v.workflowStatusMsg = fmt.Sprintf("Actions executed with errors: %v", msg.Err)
 			}
+		}
+		return v, nil
+
+	case ApprovalIterateMsg:
+		if v.approvalView != nil && v.refineIssue != nil {
+			actions := v.approvalView.Actions()
+			v.approvalView = nil
+			v.aiMode = "iterate"
+			v.aiAgentID = ""
+			v.aiOutputEntries = nil
+			v.aiOutputOffset = 0
+			return v, v.startAIIterateMode(actions, msg.Feedback)
 		}
 		return v, nil
 
@@ -527,6 +540,9 @@ func (v *JiraView) startAIMode(mode string, issue *jira.Issue, focus ...string) 
 	v.aiOutputEntries = nil
 	v.aiOutputOffset = 0
 	v.approvalView = nil
+	if mode == "refine" {
+		v.refineIssue = issue
+	}
 
 	eng := v.eng
 	repoPath := v.repoPath
@@ -561,6 +577,24 @@ func (v *JiraView) startAIMode(mode string, issue *jira.Issue, focus ...string) 
 			id, err = jira.CreateStories(eng, &issueCopy, "", project, repoPath, "")
 		}
 		return jiraAIStartedMsg{agentID: id, mode: mode, err: err}
+	}
+}
+
+// startAIIterateMode re-runs the refine agent with existing actions and user feedback.
+func (v *JiraView) startAIIterateMode(existingActions []jira.JiraAction, feedback string) tea.Cmd {
+	eng := v.eng
+	repoPath := v.repoPath
+	if repoPath == "" && v.proj != nil && len(v.proj.Repos) > 0 {
+		repoPath = v.proj.Repos[0].Path
+	}
+	issueCopy := *v.refineIssue
+
+	return func() tea.Msg {
+		if eng == nil {
+			return jiraAIStartedMsg{err: fmt.Errorf("agent engine not available"), mode: "iterate"}
+		}
+		id, err := jira.RefineProposalWithContext(eng, &issueCopy, existingActions, feedback, repoPath, ".jira-actions.json")
+		return jiraAIStartedMsg{agentID: id, mode: "iterate", err: err}
 	}
 }
 
@@ -999,6 +1033,8 @@ func (v *JiraView) View() string {
 			modeLabel = "Creating stories"
 		} else if v.aiMode == "review" {
 			modeLabel = "Reviewing tickets"
+		} else if v.aiMode == "iterate" {
+			modeLabel = "Iterating on proposal"
 		}
 		s.WriteString(th.InfoStyle.Render(fmt.Sprintf(" %s... (Esc to cancel)", modeLabel)))
 		s.WriteString("\n\n")
