@@ -298,7 +298,8 @@ func (fw *FeatureWorkflow) ReposNeedingPush() []string {
 
 // PushAll pushes all repos that have worktrees concurrently.
 // Repos without an upstream get one set automatically via SetUpstreamAndPush.
-func (fw *FeatureWorkflow) PushAll() error {
+// When force is true, --force-with-lease is used for repos that already have an upstream.
+func (fw *FeatureWorkflow) PushAll(force bool) error {
 	fw.mu.Lock()
 	fw.State = WorkflowPushingAll
 	fw.mu.Unlock()
@@ -332,11 +333,11 @@ func (fw *FeatureWorkflow) PushAll() error {
 			// branch to its own remote ref, not to the default branch.
 			upstreamIsDefault := status.Upstream == "origin/"+base
 			if status.Upstream != "" && !upstreamIsDefault {
-				// Has a proper feature-branch upstream: only push if ahead
-				if status.Ahead == 0 {
+				// Has a proper feature-branch upstream: only push if ahead (or force)
+				if status.Ahead == 0 && !force {
 					return // nothing to push
 				}
-				_, err = git.Push(wr.WorktreePath, false)
+				_, err = git.Push(wr.WorktreePath, force)
 			} else {
 				// No upstream (or upstream is just the default branch): check
 				// commits vs default and push to a new remote feature branch.

@@ -20,7 +20,10 @@ import (
 )
 
 // pushCheckDoneMsg carries the list of repos that need pushing.
-type pushCheckDoneMsg struct{ repos []string }
+type pushCheckDoneMsg struct {
+	repos []string
+	force bool
+}
 
 // pushDoneMsg signals that batch push has completed.
 type pushDoneMsg struct{}
@@ -374,7 +377,9 @@ func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cm
 	case "a":
 		v.handleStartAgent()
 	case "p":
-		return v, v.handleStartPush()
+		return v, v.handleStartPush(false)
+	case "P":
+		return v, v.handleStartPush(true)
 	case "M":
 		v.handleStartBatchMR()
 	case "d":
@@ -441,8 +446,14 @@ func (v *WorkflowsView) handleWorkflowsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			v.pushableRepos = msg.repos
 			sort.Strings(v.pushableRepos)
-			v.pushConfirm.ShowWithCancel("Push All Repos",
-				fmt.Sprintf("Push %d repo(s) to remote?", len(v.pushableRepos)),
+			force := msg.force
+			title := "Push All Repos"
+			prompt := fmt.Sprintf("Push %d repo(s) to remote?", len(v.pushableRepos))
+			if force {
+				title = "Force Push All Repos"
+				prompt = fmt.Sprintf("Force push (--force-with-lease) %d repo(s) to remote?", len(v.pushableRepos))
+			}
+			v.pushConfirm.ShowWithCancel(title, prompt,
 				func() tea.Cmd {
 					wf := v.currentWorkflow()
 					v.pushableRepos = nil
@@ -450,7 +461,7 @@ func (v *WorkflowsView) handleWorkflowsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return nil
 					}
 					return func() tea.Msg {
-						wf.PushAll()
+						wf.PushAll(force)
 						return pushDoneMsg{}
 					}
 				},
@@ -814,7 +825,7 @@ func (v *WorkflowsView) handleStartAgent() {
 	}
 }
 
-func (v *WorkflowsView) handleStartPush() tea.Cmd {
+func (v *WorkflowsView) handleStartPush(force bool) tea.Cmd {
 	wf := v.currentWorkflow()
 	if wf == nil {
 		v.pushResults = "No active workflow"
@@ -833,7 +844,7 @@ func (v *WorkflowsView) handleStartPush() tea.Cmd {
 	}
 	// Check async which repos actually have commits to push
 	return func() tea.Msg {
-		return pushCheckDoneMsg{repos: wf.ReposNeedingPush()}
+		return pushCheckDoneMsg{repos: wf.ReposNeedingPush(), force: force}
 	}
 }
 
@@ -1438,6 +1449,7 @@ func (v *WorkflowsView) KeyBindings() []components.KeyBinding {
 		{Key: "w", Description: "Start new feature workflow"},
 		{Key: "a", Description: "Spawn agent for selected workflow"},
 		{Key: "p", Description: "Push all repos in selected workflow"},
+		{Key: "P", Description: "Force push (--force-with-lease) all repos in selected workflow"},
 		{Key: "M", Description: "Create MRs/PRs for all pushed repos"},
 		{Key: "D", Description: "Cleanup selected workflow (remove worktrees)"},
 		{Key: "H", Description: "Sync main dir repos to worktree HEADs (detached)"},
