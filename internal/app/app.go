@@ -589,6 +589,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, av.AgentTickCmd()
 		}
 		return m, nil
+	case views.AgentUpdateMsg:
+		// Engine notified us of an agent state/output change -- refresh immediately.
+		if av := m.getAgentView(); av != nil {
+			av.LoadAgents()
+		}
+		return m, nil
 	case WSConnectionMsg, WSRepoUpdateMsg, WSBranchUpdateMsg, WSPipelineUpdateMsg,
 		WSAgentOutputMsg, WSAgentEventMsg, WSProjectUpdateMsg:
 		return m.handleAppWSMsg(msg)
@@ -893,6 +899,14 @@ func (m *Model) Run() error {
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
+
+	// Register engine observer to push agent updates into the Bubble Tea event loop.
+	if m.engine != nil {
+		m.engine.OnAgentUpdate(func(agentID string) {
+			p.Send(views.AgentUpdateMsg{AgentID: agentID})
+		})
+	}
+
 	_, err := p.Run()
 	return err
 }

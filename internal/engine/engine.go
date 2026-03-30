@@ -32,6 +32,13 @@ type Engine struct {
 	idSeq     atomic.Int64
 	maxAgents int
 	soundCfg  config.SoundConfig
+
+	// Observer callback: fired when any agent's state or output changes.
+	// Called from agent goroutines -- must be non-blocking.
+	onUpdate    func(agentID string)
+	updateMu    sync.RWMutex
+	updateTimer *time.Timer
+	timerMu     sync.Mutex
 }
 
 // New creates a new agent engine
@@ -79,6 +86,7 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 	id := e.generateID()
 	agent := newAgent(id, projectPath, task, opts)
 	agent.soundCfg = e.soundCfg
+	agent.notify = func() { e.notifyUpdate(id) }
 	e.agents[id] = agent
 	e.mu.Unlock()
 
@@ -324,4 +332,34 @@ func (e *Engine) getAgent(id string) *Agent {
 func (e *Engine) generateID() string {
 	seq := e.idSeq.Add(1)
 	return fmt.Sprintf("agent-%d-%d", time.Now().Unix(), seq)
+}
+
+// OnAgentUpdate registers a callback that fires whenever an agent's state
+// or output changes. The callback receives the agent ID and must be
+// non-blocking. Only one callback is supported; subsequent calls replace
+// the previous one.
+func (e *Engine) OnAgentUpdate(fn func(agentID string)) {
+	e.updateMu.Lock()
+	e.onUpdate = fn
+	e.updateMu.Unlock()
+}
+
+// notifyUpdate fires the registered observer callback, debounced to coalesce
+// rapid bursts of output into a single notification every 50ms.
+func (e *Engine) notifyUpdate(agentID string) {
+	e.updateMu.RLock()
+	fn := e.onUpdate
+	e.updateMu.RUnlock()
+	if fn == nil {
+		return
+	}
+
+	e.timerMu.Lock()
+	if e.updateTimer != nil {
+		e.updateTimer.Stop()
+	}
+	e.updateTimer = time.AfterFunc(50*time.Millisecond, func() {
+		fn(agentID)
+	})
+	e.timerMu.Unlock()
 }

@@ -122,7 +122,7 @@ func NewAgentView(repoPath string, eng *engine.Engine, contextFiles ...[]string)
 		viewBase:         viewBase{repoPath: repoPath, width: 80, height: 24},
 		engine:           eng,
 		contextFiles:     ctxFiles,
-		refreshInterval:  500 * time.Millisecond,
+		refreshInterval:  2 * time.Second,
 		outputAutoScroll: true,
 		focus:            focusList,
 	}
@@ -1486,6 +1486,11 @@ func (v *AgentView) startRefineProposalFromSaved(meta *jiraAgentMeta) tea.Cmd {
 
 // StreamTickMsg is sent periodically to refresh streaming output.
 type StreamTickMsg struct{}
+
+// AgentUpdateMsg is sent when the engine notifies that an agent's state or output changed.
+type AgentUpdateMsg struct {
+	AgentID string
+}
 
 // AgentCreatedMsg is sent when a new agent has been started (or failed to start).
 type AgentCreatedMsg struct {

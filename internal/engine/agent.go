@@ -100,6 +100,9 @@ type Agent struct {
 
 	// Sound notification config (copied from Engine at start time)
 	soundCfg config.SoundConfig
+
+	// notify is called after output or state changes to signal the engine's observer.
+	notify func()
 }
 
 // OutputEntry represents a single output chunk from the agent.
@@ -526,6 +529,9 @@ func (a *Agent) waitForExit() {
 
 	if exitErrMsg != "" {
 		a.appendOutput("error", fmt.Sprintf("Process exit: %s", exitErrMsg))
+	} else if a.notify != nil {
+		// State changed to Complete without appending output; notify explicitly.
+		a.notify()
 	}
 
 	close(a.done)
@@ -609,13 +615,19 @@ func (a *Agent) sendInput(message string) error {
 // The process stays alive and can still receive messages until RemoveAgent is called.
 func (a *Agent) softClose() {
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	changed := false
 	if a.State == AgentRunning || a.State == AgentStarting || a.State == AgentComplete {
 		a.State = AgentKilled
 		now := time.Now()
 		if a.EndedAt == nil {
 			a.EndedAt = &now
 		}
+		changed = true
+	}
+	a.mu.Unlock()
+
+	if changed && a.notify != nil {
+		a.notify()
 	}
 }
 
@@ -701,23 +713,31 @@ func (a *Agent) getFullOutput() string {
 // appendOutput appends an output entry (thread-safe)
 func (a *Agent) appendOutput(source, content string) {
 	a.outputMu.Lock()
-	defer a.outputMu.Unlock()
 	a.output = append(a.output, OutputEntry{
 		Timestamp: time.Now(),
 		Source:    source,
 		Content:   content,
 	})
+	a.outputMu.Unlock()
+
+	if a.notify != nil {
+		a.notify()
+	}
 }
 
 // appendOutputLocked appends output when mu is already held (uses outputMu only)
 func (a *Agent) appendOutputLocked(source, content string) {
 	a.outputMu.Lock()
-	defer a.outputMu.Unlock()
 	a.output = append(a.output, OutputEntry{
 		Timestamp: time.Now(),
 		Source:    source,
 		Content:   content,
 	})
+	a.outputMu.Unlock()
+
+	if a.notify != nil {
+		a.notify()
+	}
 }
 
 // setState changes state (caller must hold mu)
