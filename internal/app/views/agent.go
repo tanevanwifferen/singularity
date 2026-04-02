@@ -200,11 +200,18 @@ func (v *AgentView) streamTickCmd() tea.Cmd {
 	})
 }
 
-// AgentTickCmd loads the latest agents and returns the next tick command.
+// AgentTickCmd schedules the next tick and loads agents asynchronously.
 // Called by the app-level update loop so the tick survives view switches.
+// loadAgents runs in a goroutine to avoid blocking the Bubble Tea event loop
+// (glamour rendering on large outputs can take hundreds of milliseconds).
 func (v *AgentView) AgentTickCmd() tea.Cmd {
-	v.loadAgents()
-	return v.streamTickCmd()
+	return tea.Batch(
+		v.streamTickCmd(),
+		func() tea.Msg {
+			v.loadAgents()
+			return RefreshDoneMsg{}
+		},
+	)
 }
 
 // AgentTickStart returns the initial tick command without loading agents.
