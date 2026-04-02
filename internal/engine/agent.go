@@ -390,6 +390,9 @@ func (a *Agent) processAssistantEvent(event map[string]interface{}) {
 			a.outputMu.Lock()
 			a.output = append(a.output, entry)
 			a.outputMu.Unlock()
+			if a.notify != nil {
+				a.notify()
+			}
 
 		case "tool_result":
 			content, _ := blockMap["content"].(string)
@@ -406,6 +409,9 @@ func (a *Agent) processAssistantEvent(event map[string]interface{}) {
 			a.outputMu.Lock()
 			a.output = append(a.output, entry)
 			a.outputMu.Unlock()
+			if a.notify != nil {
+				a.notify()
+			}
 		}
 	}
 }
