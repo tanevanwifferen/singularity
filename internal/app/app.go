@@ -590,9 +590,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case views.AgentUpdateMsg:
-		// Engine notified us of an agent state/output change -- refresh immediately.
+		// Engine notified us of an agent state/output change.
+		// Run the refresh in a goroutine so glamour rendering doesn't block the event loop.
 		if av := m.getAgentView(); av != nil {
-			av.LoadAgents()
+			return m, func() tea.Msg {
+				av.LoadAgents()
+				return views.RefreshDoneMsg{}
+			}
 		}
 		return m, nil
 	case WSConnectionMsg, WSRepoUpdateMsg, WSBranchUpdateMsg, WSPipelineUpdateMsg,
