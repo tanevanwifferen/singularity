@@ -716,8 +716,17 @@ func (a *Agent) getFullOutput() string {
 	return strings.Join(parts, "\n")
 }
 
-// appendOutput appends an output entry (thread-safe)
+// appendOutput appends an output entry (thread-safe).
+// Output is suppressed after the agent has been killed to prevent stale
+// subprocess output from trickling into the UI.
 func (a *Agent) appendOutput(source, content string) {
+	a.mu.Lock()
+	killed := a.State == AgentKilled
+	a.mu.Unlock()
+	if killed {
+		return
+	}
+
 	a.outputMu.Lock()
 	a.output = append(a.output, OutputEntry{
 		Timestamp: time.Now(),
