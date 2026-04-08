@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -195,6 +196,44 @@ func (e *Engine) SendInput(sessionID string, message string) error {
 		return fmt.Errorf("agent not found: %s", sessionID)
 	}
 	return agent.sendInput(message)
+}
+
+// ResumeWithHistory creates a new agent that includes the conversation history
+// from a crashed/errored agent, plus an optional new user message.
+// Returns the new agent ID.
+func (e *Engine) ResumeWithHistory(oldAgentID string, userMessage string, opts AgentOptions) (string, error) {
+	oldAgent := e.getAgent(oldAgentID)
+	if oldAgent == nil {
+		return "", fmt.Errorf("agent not found: %s", oldAgentID)
+	}
+
+	history := oldAgent.GetConversationHistory()
+	oldAgent.mu.Lock()
+	originalTask := oldAgent.Task
+	workDir := oldAgent.WorkDir
+	oldAgent.mu.Unlock()
+
+	// Build the resumed task with history context
+	var task strings.Builder
+	task.WriteString("You are resuming a conversation that was interrupted by a crash. ")
+	task.WriteString("Below is the original task and the conversation history from before the crash.\n\n")
+	task.WriteString("=== ORIGINAL TASK ===\n")
+	task.WriteString(originalTask)
+	task.WriteString("\n\n=== CONVERSATION HISTORY (before crash) ===\n")
+	task.WriteString(history)
+	task.WriteString("\n\n=== END OF HISTORY ===\n\n")
+	if userMessage != "" {
+		task.WriteString("The user says: ")
+		task.WriteString(userMessage)
+	} else {
+		task.WriteString("Please continue where you left off.")
+	}
+
+	if opts.Summary == "" {
+		opts.Summary = "[resumed] " + extractSummary(originalTask)
+	}
+
+	return e.StartAgent(workDir, task.String(), opts)
 }
 
 // RemoveAgent kills the subprocess and removes the agent from the engine.

@@ -798,6 +798,36 @@ type AgentSnapshot struct {
 	MergeResult  string
 }
 
+// GetConversationHistory returns the agent's conversation formatted as a transcript
+// suitable for injecting into a new agent's prompt to resume the conversation.
+func (a *Agent) GetConversationHistory() string {
+	a.outputMu.Lock()
+	defer a.outputMu.Unlock()
+
+	var parts []string
+	for _, entry := range a.output {
+		switch entry.Source {
+		case "text":
+			parts = append(parts, entry.Content)
+		case "tool_use":
+			parts = append(parts, fmt.Sprintf("[Tool: %s] %s", entry.ToolName, entry.Content))
+		case "tool_result":
+			if entry.Content != "" {
+				prefix := "[Tool Result]"
+				if entry.IsError {
+					prefix = "[Tool Error]"
+				}
+				parts = append(parts, fmt.Sprintf("%s %s", prefix, entry.Content))
+			}
+		case "user_input":
+			parts = append(parts, fmt.Sprintf("[User Message] %s", entry.Content))
+		case "error":
+			parts = append(parts, fmt.Sprintf("[Error] %s", entry.Content))
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
 // Done returns a channel that closes when the agent exits
 func (a *Agent) Done() <-chan struct{} {
 	return a.done
