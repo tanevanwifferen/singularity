@@ -629,6 +629,25 @@ func (v *AgentView) handleNewAgentInput(msg tea.KeyMsg) tea.Cmd {
 func (v *AgentView) handleMessageInput(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
+		// For errored agents, resume with history in a new agent (empty message OK)
+		if v.engine != nil && v.selectedAgent != nil && v.selectedAgent.State == engine.AgentError {
+			eng := v.engine
+			agentID := v.selectedAgent.ID
+			userMsg := v.messageInput
+			ctxFiles := v.contextFiles
+			v.showMessageInput = false
+			v.messageInput = ""
+			v.focus = focusOutput
+			v.recalcLayout()
+			return func() tea.Msg {
+				id, err := eng.ResumeWithHistory(agentID, userMsg, engine.AgentOptions{
+					ContextFiles: ctxFiles,
+					SmartRoute:   true,
+					UseWorktree:  true,
+				})
+				return AgentCreatedMsg{ID: id, Err: err}
+			}
+		}
 		if v.messageInput != "" && v.engine != nil && v.selectedAgent != nil {
 			err := v.engine.SendInput(v.selectedAgent.ID, v.messageInput)
 			if err != nil {
@@ -753,7 +772,7 @@ func (v *AgentView) handleOutputPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return v, nil
 	case "i":
 		if v.selectedAgent != nil &&
-			(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting || v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentKilled) {
+			(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting || v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentKilled || v.selectedAgent.State == engine.AgentError) {
 			v.showMessageInput = true
 			v.messageInput = ""
 			v.focus = focusInput
@@ -819,7 +838,7 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "i":
 		if v.selectedAgent != nil &&
-			(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting || v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentKilled) {
+			(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting || v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentKilled || v.selectedAgent.State == engine.AgentError) {
 			v.showMessageInput = true
 			v.messageInput = ""
 			v.focus = focusInput
@@ -1212,9 +1231,17 @@ func (v *AgentView) View() string {
 
 		// Message input modal
 		if v.showMessageInput {
-			msgLines := wrapText("Message: "+v.messageInput+"█", modalWidth(v.width)-4)
-			msgLines = append(msgLines, "", "Enter: send   Esc: cancel")
-			s.WriteString(renderModal("Send Message", msgLines, modalWidth(v.width)))
+			title := "Send Message"
+			prompt := "Message: "
+			hint := "Enter: send   Esc: cancel"
+			if v.selectedAgent != nil && v.selectedAgent.State == engine.AgentError {
+				title = "Resume with History"
+				prompt = "Message (optional): "
+				hint = "Enter: resume in new session   Esc: cancel"
+			}
+			msgLines := wrapText(prompt+v.messageInput+"█", modalWidth(v.width)-4)
+			msgLines = append(msgLines, "", hint)
+			s.WriteString(renderModal(title, msgLines, modalWidth(v.width)))
 		}
 
 		// Output pane hint
@@ -1225,6 +1252,8 @@ func (v *AgentView) View() string {
 			if v.selectedAgent != nil &&
 				(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting || v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentKilled) {
 				hint += "  i:send message"
+			} else if v.selectedAgent != nil && v.selectedAgent.State == engine.AgentError {
+				hint += "  i:resume with history"
 			}
 			// Show actions hint for completed Jira refine/create agents
 			if v.selectedAgent != nil && v.jiraAgentMeta != nil {
