@@ -540,7 +540,7 @@ func (v *WorkflowsView) handleJiraWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 		v.jiraConfirmIssue = nil
 		v.jiraExtraInput.Clear()
 		return v.startWorkflowFromJira(issue, extraMsg)
-	case "e":
+	case "ctrl+e":
 		wf := v.currentWorkflow()
 		if wf != nil {
 			issue := v.jiraConfirmIssue
@@ -1111,7 +1111,7 @@ func (v *WorkflowsView) renderJiraConfirmModal() string {
 	}
 	if wf := v.currentWorkflow(); wf != nil {
 		lines = append(lines,
-			fmt.Sprintf("  e: Use selected workflow (%s)", th.MutedTextStyle.Render(wf.BranchName)),
+			fmt.Sprintf("  ctrl+e: Use selected workflow (%s)", th.MutedTextStyle.Render(wf.BranchName)),
 		)
 	}
 	lines = append(lines, "  Enter: New worktrees  Esc: Cancel")
