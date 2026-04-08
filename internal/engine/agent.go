@@ -207,9 +207,9 @@ func (a *Agent) start() error {
 	a.State = AgentRunning
 
 	if a.RouteResult != nil {
-		a.appendOutput("system", fmt.Sprintf("Routed → model=%s effort=%s (%s: %s)", a.RouteResult.Model, a.RouteResult.Effort, a.RouteResult.Category, a.RouteResult.Reason))
+		a.appendOutputLocked("system", fmt.Sprintf("Routed → model=%s effort=%s (%s: %s)", a.RouteResult.Model, a.RouteResult.Effort, a.RouteResult.Category, a.RouteResult.Reason))
 	}
-	a.appendOutput("system", fmt.Sprintf("Agent %s started with task: %s", a.ID, a.Task))
+	a.appendOutputLocked("system", fmt.Sprintf("Agent %s started with task: %s", a.ID, a.Task))
 
 	// Stream structured JSON output
 	go a.streamJSON(a.stdout)

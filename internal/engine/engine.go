@@ -325,6 +325,19 @@ func (e *Engine) Shutdown() {
 	e.agents = make(map[string]*Agent)
 }
 
+// PruneStaleWorktrees cleans up agent worktrees from previous sessions that
+// don't correspond to any currently active agent. Safe to call on startup.
+func (e *Engine) PruneStaleWorktrees(repoPath string) {
+	e.mu.RLock()
+	active := make(map[string]bool, len(e.agents))
+	for id := range e.agents {
+		active[id] = true
+	}
+	e.mu.RUnlock()
+
+	go CleanupStaleWorktrees(repoPath, active)
+}
+
 // Stats returns engine statistics
 func (e *Engine) Stats() EngineStats {
 	e.mu.RLock()

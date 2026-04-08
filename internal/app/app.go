@@ -287,6 +287,7 @@ func (m *Model) initRouter() {
 		m.engine = engine.New(10)
 	}
 	m.engine.SetSoundConfig(m.cfg.Sound)
+	m.engine.PruneStaleWorktrees(m.repoPath)
 
 	m.registerCommonViews(router, m.repoPath, 2)
 
@@ -365,6 +366,11 @@ func (m *Model) initProjectRouter() {
 		m.engine = engine.New(10)
 	}
 	m.engine.SetSoundConfig(m.cfg.Sound)
+	if m.proj != nil {
+		for _, repo := range m.proj.Repos {
+			m.engine.PruneStaleWorktrees(repo.Path)
+		}
+	}
 
 	// Create the project overview view as the first view (landing page)
 	projectView := views.NewProjectView(m.proj)
@@ -538,6 +544,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case components.ConfirmResult:
 			if msg.ID == "quit" && msg.Confirmed {
 				m.quitting = true
+				if m.engine != nil {
+					m.engine.Shutdown()
+				}
 				if m.wsClient != nil {
 					m.wsClient.Disconnect()
 				}

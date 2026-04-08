@@ -318,6 +318,158 @@ func sanitizeCommitMsg(msg string) string {
 	return ""
 }
 
+// CleanupStaleWorktrees removes agent worktrees from previous sessions that
+// don't correspond to any currently active agent. Preserves worktrees that
+// have uncommitted changes or unmerged commits to avoid losing work.
+// Runs in the background — safe to call from startup.
+func CleanupStaleWorktrees(repoPath string, activeAgentIDs map[string]bool) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+
+	// Parse git worktree list --porcelain to find all registered worktrees
+	cmd := exec.Command("git", "-C", repoPath, "worktree", "list", "--porcelain")
+	out, err := cmd.Output()
+	if err != nil {
+		return
+	}
+
+	type wtInfo struct {
+		path   string
+		branch string
+	}
+	var worktrees []wtInfo
+	var current wtInfo
+	for _, line := range strings.Split(string(out), "\n") {
+		if line == "" {
+			if current.path != "" {
+				worktrees = append(worktrees, current)
+			}
+			current = wtInfo{}
+			continue
+		}
+		if strings.HasPrefix(line, "worktree ") {
+			current.path = strings.TrimPrefix(line, "worktree ")
+		}
+		if strings.HasPrefix(line, "branch refs/heads/") {
+			current.branch = strings.TrimPrefix(line, "branch refs/heads/")
+		}
+	}
+	if current.path != "" {
+		worktrees = append(worktrees, current)
+	}
+
+	agentWtPrefix := filepath.Join(home, ".worktrees")
+
+	// Determine the main branch to check merge status against
+	mainBranch := gitMainBranch(repoPath)
+
+	for _, wt := range worktrees {
+		// Only touch agent worktrees under ~/.worktrees/
+		if !strings.HasPrefix(wt.path, agentWtPrefix) {
+			continue
+		}
+		dirName := filepath.Base(wt.path)
+		if !strings.HasPrefix(dirName, "agent-") {
+			continue
+		}
+
+		// Skip worktrees belonging to active agents
+		agentID := strings.TrimPrefix(dirName, "agent-")
+		if activeAgentIDs[agentID] {
+			continue
+		}
+
+		// Skip if worktree has uncommitted changes
+		if worktreeHasUncommittedChanges(wt.path) {
+			continue
+		}
+
+		// Skip if branch has unmerged commits relative to main
+		if wt.branch != "" {
+			hasNew, err := branchHasNewCommits(repoPath, mainBranch, wt.branch)
+			if err == nil && hasNew {
+				continue // unmerged work, keep it
+			}
+		}
+
+		cleanupWorktree(repoPath, wt.path, wt.branch)
+	}
+
+	// Also clean up orphaned directories on disk that git no longer tracks
+	// (e.g. from a crash where git worktree remove never ran).
+	// Check both ~/.worktrees/ (legacy) and ~/.worktrees/<repoName>/ (current).
+	cleanupOrphanedWorktreeDirs(repoPath, agentWtPrefix, activeAgentIDs)
+	repoName := filepath.Base(repoPath)
+	repoSubdir := filepath.Join(agentWtPrefix, repoName)
+	if repoSubdir != agentWtPrefix {
+		cleanupOrphanedWorktreeDirs(repoPath, repoSubdir, activeAgentIDs)
+	}
+
+	// Final prune to clear any remaining stale git references
+	pruneCmd := exec.Command("git", "-C", repoPath, "worktree", "prune")
+	pruneCmd.Run()
+}
+
+// worktreeHasUncommittedChanges returns true if the worktree has any staged,
+// unstaged, or untracked changes.
+func worktreeHasUncommittedChanges(wtPath string) bool {
+	cmd := exec.Command("git", "-C", wtPath, "status", "--porcelain")
+	out, err := cmd.Output()
+	if err != nil {
+		return true // assume dirty on error to be safe
+	}
+	return strings.TrimSpace(string(out)) != ""
+}
+
+// gitMainBranch returns "main" or "master" depending on what exists in the repo.
+func gitMainBranch(repoPath string) string {
+	cmd := exec.Command("git", "-C", repoPath, "rev-parse", "--verify", "refs/heads/main")
+	if err := cmd.Run(); err == nil {
+		return "main"
+	}
+	return "master"
+}
+
+// cleanupOrphanedWorktreeDirs removes agent-* directories under baseDir that
+// are no longer registered as git worktrees (leftover from crashes).
+func cleanupOrphanedWorktreeDirs(repoPath, baseDir string, activeAgentIDs map[string]bool) {
+	entries, err := os.ReadDir(baseDir)
+	if err != nil {
+		return
+	}
+
+	// Build set of paths git still knows about
+	cmd := exec.Command("git", "-C", repoPath, "worktree", "list", "--porcelain")
+	out, err := cmd.Output()
+	if err != nil {
+		return
+	}
+	knownPaths := make(map[string]bool)
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "worktree ") {
+			knownPaths[strings.TrimPrefix(line, "worktree ")] = true
+		}
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "agent-") {
+			continue
+		}
+		agentID := strings.TrimPrefix(entry.Name(), "agent-")
+		if activeAgentIDs[agentID] {
+			continue
+		}
+		fullPath := filepath.Join(baseDir, entry.Name())
+		if knownPaths[fullPath] {
+			continue // git still tracks it, handled above
+		}
+		// Orphaned directory — remove it
+		os.RemoveAll(fullPath)
+	}
+}
+
 // sanitizeBranch makes a string safe for use in git branch names.
 func sanitizeBranch(s string) string {
 	r := strings.NewReplacer(
