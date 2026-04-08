@@ -338,6 +338,12 @@ func (e *Engine) PruneStaleWorktrees(repoPath string) {
 	go CleanupStaleWorktrees(repoPath, active)
 }
 
+// MaxAgents returns the maximum number of concurrent agents allowed.
+// This value is set at construction and never changes.
+func (e *Engine) MaxAgents() int {
+	return e.maxAgents
+}
+
 // Stats returns engine statistics
 func (e *Engine) Stats() EngineStats {
 	e.mu.RLock()

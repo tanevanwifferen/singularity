@@ -356,7 +356,12 @@ func (v *AgentView) loadAgents() {
 				break
 			}
 		}
-		v.refreshSelectedAgentOutput()
+		// Skip viewport rebuild while user is composing a message — the goroutine
+		// writing to v.outputViewport races with View() reading it, and the output
+		// pane is not visible while the modal is active.
+		if !v.showMessageInput {
+			v.refreshSelectedAgentOutput()
+		}
 	} else if len(v.agents) > 0 {
 		// Auto-preview the agent under the cursor
 		v.syncPreview()
@@ -1069,11 +1074,22 @@ func (v *AgentView) View() string {
 	th := theme.GetTheme()
 	var s strings.Builder
 
-	// Stats line
+	// Stats line — computed from v.agents (already loaded) to avoid per-agent
+	// mutex acquisition on the render path, which would block the event loop.
 	if v.engine != nil {
-		stats := v.engine.Stats()
+		var active, done, errored int
+		for _, a := range v.agents {
+			switch a.State {
+			case engine.AgentRunning, engine.AgentStarting, engine.AgentRouting:
+				active++
+			case engine.AgentComplete:
+				done++
+			case engine.AgentError:
+				errored++
+			}
+		}
 		s.WriteString(th.StatsStyle.Render(fmt.Sprintf(" Agents: %d/%d active  %d done  %d errors",
-			stats.Active, stats.MaxAgents, stats.Completed, stats.Errored)))
+			active, v.engine.MaxAgents(), done, errored)))
 	}
 
 	// Help hint
