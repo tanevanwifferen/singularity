@@ -34,6 +34,12 @@ type mrDoneMsg struct{}
 // branchStatusDoneMsg signals that branch status refresh has completed.
 type branchStatusDoneMsg struct{}
 
+// worktreesCreatedMsg signals that worktree creation for a workflow completed.
+type worktreesCreatedMsg struct{}
+
+// worktreesRemovedMsg signals that worktree removal for a workflow completed.
+type worktreesRemovedMsg struct{}
+
 // WorkflowTickMsg is sent periodically to refresh workflow agent status.
 type WorkflowTickMsg struct{}
 
@@ -365,7 +371,7 @@ func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cm
 					}
 					return func() tea.Msg {
 						wf.RemoveAllWorktrees()
-						return RefreshDoneMsg{}
+						return worktreesRemovedMsg{}
 					}
 				})
 		}
@@ -417,22 +423,28 @@ func (v *WorkflowsView) handleWorkflowsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case RefreshDoneMsg:
 		v.refreshWorkflowAgentSnap()
+
+	case worktreesCreatedMsg:
+		v.refreshWorkflowAgentSnap()
 		wf := v.currentWorkflow()
 		if wf != nil {
-			st := wf.Status()
-			switch st.State {
-			case project.WorkflowActive:
-				created := 0
-				for _, wr := range wf.Repos {
-					if wr.WorktreeCreated {
-						created++
-					}
+			created := 0
+			for _, wr := range wf.Repos {
+				if wr.WorktreeCreated {
+					created++
 				}
-				v.workflowStatusMsg = fmt.Sprintf(" Worktrees created for '%s' across %d repos\n   Next: press 'a' to spawn an agent, or start working in the worktrees", wf.BranchName, created)
-			case project.WorkflowDone:
-				v.workflowStatusMsg = fmt.Sprintf("Worktrees and branches for '%s' removed", wf.BranchName)
-				v.removeCurrentWorkflow()
 			}
+			v.workflowStatusMsg = fmt.Sprintf(" Worktrees created for '%s' across %d repos\n   Next: press 'a' to spawn an agent, or start working in the worktrees", wf.BranchName, created)
+		}
+		v.saveWorkflows()
+		return v, v.refreshBranchStatusCmd()
+
+	case worktreesRemovedMsg:
+		v.refreshWorkflowAgentSnap()
+		wf := v.currentWorkflow()
+		if wf != nil {
+			v.workflowStatusMsg = fmt.Sprintf("Worktrees and branches for '%s' removed", wf.BranchName)
+			v.removeCurrentWorkflow()
 		}
 		v.saveWorkflows()
 		return v, v.refreshBranchStatusCmd()
@@ -581,12 +593,12 @@ func (v *WorkflowsView) startWorkflowFromJira(issue *jira.Issue, extraMsg string
 	return func() tea.Msg {
 		if err := wf.CreateAllWorktrees(); err != nil {
 			v.workflowStatusMsg = fmt.Sprintf("Worktree creation failed: %v", err)
-			return RefreshDoneMsg{}
+			return worktreesCreatedMsg{}
 		}
 
 		if eng == nil {
 			v.workflowStatusMsg = "Agent engine not available"
-			return RefreshDoneMsg{}
+			return worktreesCreatedMsg{}
 		}
 
 		// Build full task with commit instructions
@@ -603,7 +615,7 @@ func (v *WorkflowsView) startWorkflowFromJira(issue *jira.Issue, extraMsg string
 			wf.SetWorkflowAgentID(id)
 			v.workflowStatusMsg = fmt.Sprintf("Agent started for %s (%s)", issue.Key, branchName)
 		}
-		return RefreshDoneMsg{}
+		return worktreesCreatedMsg{}
 	}
 }
 
@@ -692,7 +704,7 @@ func (v *WorkflowsView) handleWorkflowStartInput(msg tea.KeyMsg) tea.Cmd {
 			v.rebuildFilter()
 			return func() tea.Msg {
 				wf.CreateAllWorktrees()
-				return RefreshDoneMsg{}
+				return worktreesCreatedMsg{}
 			}
 		}
 		v.showWorkflowStart = false
