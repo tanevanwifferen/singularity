@@ -409,6 +409,9 @@ func (v *AgentView) markdownRenderer(width int) *glamour.TermRenderer {
 
 // rebuildOutputViewport rebuilds the viewport content from output entries.
 func (v *AgentView) rebuildOutputViewport() {
+	if v.width <= 0 {
+		return
+	}
 	th := theme.GetTheme()
 	var lines []string
 	w := v.width
