@@ -453,6 +453,16 @@ func cleanupOrphanedWorktreeDirs(repoPath, baseDir string, activeAgentIDs map[st
 		}
 	}
 
+	// Resolve the canonical git dir so we can verify worktree ownership below.
+	mainGitDir := ""
+	if gdOut, gdErr := exec.Command("git", "-C", repoPath, "rev-parse", "--git-dir").Output(); gdErr == nil {
+		gd := strings.TrimSpace(string(gdOut))
+		if !filepath.IsAbs(gd) {
+			gd = filepath.Join(repoPath, gd)
+		}
+		mainGitDir = gd
+	}
+
 	for _, entry := range entries {
 		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "agent-") {
 			continue
@@ -465,9 +475,38 @@ func cleanupOrphanedWorktreeDirs(repoPath, baseDir string, activeAgentIDs map[st
 		if knownPaths[fullPath] {
 			continue // git still tracks it, handled above
 		}
+		// Only remove directories that belong to the current repo.
+		// Directories whose .git file points to a different repo are from
+		// another project and must not be touched.
+		if mainGitDir != "" && !worktreeBelongsToRepo(fullPath, mainGitDir) {
+			continue
+		}
 		// Orphaned directory — remove it
 		os.RemoveAll(fullPath)
 	}
+}
+
+// worktreeBelongsToRepo returns true if the worktree directory was created for
+// the repo whose git dir is mainGitDir. It reads the worktree's .git file,
+// which contains "gitdir: <path>/worktrees/<name>", and checks that the path
+// is rooted under mainGitDir. If the .git file is absent the directory is
+// treated as a true orphan belonging to this repo (safe to remove).
+func worktreeBelongsToRepo(wtPath, mainGitDir string) bool {
+	data, err := os.ReadFile(filepath.Join(wtPath, ".git"))
+	if err != nil {
+		// No .git file — truly orphaned, treat as belonging to this repo.
+		return true
+	}
+	content := strings.TrimSpace(string(data))
+	if !strings.HasPrefix(content, "gitdir: ") {
+		return false
+	}
+	gitdirRef := strings.TrimPrefix(content, "gitdir: ")
+	if !filepath.IsAbs(gitdirRef) {
+		gitdirRef = filepath.Join(wtPath, gitdirRef)
+	}
+	gitdirRef = filepath.Clean(gitdirRef)
+	return strings.HasPrefix(gitdirRef, mainGitDir)
 }
 
 // sanitizeBranch makes a string safe for use in git branch names.
