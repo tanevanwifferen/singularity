@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,9 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrMRAlreadyExists is returned when a merge/pull request already exists for the branch.
+var ErrMRAlreadyExists = errors.New("a merge request already exists for this branch")
 
 // MergeRequest represents a merge/pull request
 type MergeRequest struct {
@@ -445,17 +449,19 @@ func makeGitLabRequest(method, url, token string, body map[string]interface{}) (
 	}
 	defer resp.Body.Close()
 
+	buf := new(strings.Builder)
+	_, _ = io.Copy(buf, resp.Body)
+	respBody := buf.String()
+
 	if resp.StatusCode >= 400 {
+		if strings.Contains(strings.ToLower(respBody), "already exists") ||
+			strings.Contains(strings.ToLower(respBody), "another open merge request") {
+			return nil, ErrMRAlreadyExists
+		}
 		return nil, fmt.Errorf("GitLab API error: %d", resp.StatusCode)
 	}
 
-	buf := new(strings.Builder)
-	_, err = io.Copy(buf, resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	return []byte(buf.String()), nil
+	return []byte(respBody), nil
 }
 
 func makeGitHubRequest(method, url, token string, body map[string]interface{}) ([]byte, error) {
@@ -485,15 +491,17 @@ func makeGitHubRequest(method, url, token string, body map[string]interface{}) (
 	}
 	defer resp.Body.Close()
 
+	buf := new(strings.Builder)
+	_, _ = io.Copy(buf, resp.Body)
+	respBody := buf.String()
+
 	if resp.StatusCode >= 400 {
+		if strings.Contains(strings.ToLower(respBody), "already exists") ||
+			strings.Contains(strings.ToLower(respBody), "a pull request already exists") {
+			return nil, ErrMRAlreadyExists
+		}
 		return nil, fmt.Errorf("GitHub API error: %d", resp.StatusCode)
 	}
 
-	buf := new(strings.Builder)
-	_, err = io.Copy(buf, resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	return []byte(buf.String()), nil
+	return []byte(respBody), nil
 }

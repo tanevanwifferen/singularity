@@ -1,6 +1,7 @@
 package views
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -536,7 +537,12 @@ func (v *PRView) createPR() {
 		mr, err := git.CreateMR(v.repoPath, sourceBranch, targetBranch, v.title, v.description, nil)
 		if err != nil {
 			v.isCreating = false
-			v.errorMsg = fmt.Sprintf("Failed to create MR: %v", err)
+			if errors.Is(err, git.ErrMRAlreadyExists) {
+				v.successMsg = "A merge request already exists for this branch."
+				v.showSuccess = true
+			} else {
+				v.errorMsg = fmt.Sprintf("Failed to create MR: %v", err)
+			}
 			return
 		}
 
@@ -715,6 +721,13 @@ func (v *PRView) View() string {
 // renderSuccessView renders the success view after PR/MR creation.
 func (v *PRView) renderSuccessView(th theme.Theme) string {
 	var s strings.Builder
+
+	if v.createdMR == nil {
+		s.WriteString(th.InfoStyle.Render(v.successMsg))
+		s.WriteString("\n\n")
+		s.WriteString(th.MutedTextStyle.Render("Press [esc] or [enter] to continue..."))
+		return s.String()
+	}
 
 	s.WriteString(th.Title.Render("✓ PR/MR Created Successfully!"))
 	s.WriteString("\n\n")
