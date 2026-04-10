@@ -453,11 +453,10 @@ func makeGitLabRequest(method, url, token string, body map[string]interface{}) (
 	_, _ = io.Copy(buf, resp.Body)
 	respBody := buf.String()
 
+	if resp.StatusCode == http.StatusConflict {
+		return nil, ErrMRAlreadyExists
+	}
 	if resp.StatusCode >= 400 {
-		if strings.Contains(strings.ToLower(respBody), "already exists") ||
-			strings.Contains(strings.ToLower(respBody), "another open merge request") {
-			return nil, ErrMRAlreadyExists
-		}
 		return nil, fmt.Errorf("GitLab API error: %d", resp.StatusCode)
 	}
 
@@ -495,11 +494,10 @@ func makeGitHubRequest(method, url, token string, body map[string]interface{}) (
 	_, _ = io.Copy(buf, resp.Body)
 	respBody := buf.String()
 
+	if resp.StatusCode == http.StatusConflict {
+		return nil, ErrMRAlreadyExists
+	}
 	if resp.StatusCode >= 400 {
-		if strings.Contains(strings.ToLower(respBody), "already exists") ||
-			strings.Contains(strings.ToLower(respBody), "a pull request already exists") {
-			return nil, ErrMRAlreadyExists
-		}
 		return nil, fmt.Errorf("GitHub API error: %d", resp.StatusCode)
 	}
 
