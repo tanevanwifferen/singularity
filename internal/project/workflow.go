@@ -243,6 +243,32 @@ func (fw *FeatureWorkflow) RemoveAllWorktrees() error {
 	return nil
 }
 
+// HasOpenMRs returns true if any repo in this workflow has an MR URL set,
+// indicating there may be an open merge request that hasn't been merged yet.
+func (fw *FeatureWorkflow) HasOpenMRs() bool {
+	fw.mu.RLock()
+	defer fw.mu.RUnlock()
+	for _, wr := range fw.Repos {
+		if wr.MRURL != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// HasUnmergedBranches returns true if any repo's branch has commits ahead of
+// the default branch. Uses the runtime AheadDefault field populated by RefreshBranchStatuses.
+func (fw *FeatureWorkflow) HasUnmergedBranches() bool {
+	fw.mu.RLock()
+	defer fw.mu.RUnlock()
+	for _, wr := range fw.Repos {
+		if wr.AheadDefault > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // ReposNeedingPush returns the names of repos that have commits to push.
 // Uses the same logic as PushAll to determine eligibility.
 func (fw *FeatureWorkflow) ReposNeedingPush() []string {

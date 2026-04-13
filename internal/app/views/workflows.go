@@ -362,8 +362,35 @@ func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cm
 	case "D":
 		wf := v.currentWorkflow()
 		if wf != nil {
+			var reasons []string
+			if wf.HasOpenMRs() {
+				reasons = append(reasons, "open MRs")
+			}
+			if wf.HasUnmergedBranches() {
+				reasons = append(reasons, "unmerged commits")
+			}
+			if len(reasons) > 0 {
+				v.workflowStatusMsg = fmt.Sprintf("Cannot delete '%s': has %s. Use X to force delete.", wf.BranchName, strings.Join(reasons, " and "))
+				return v, nil
+			}
 			v.cleanupConfirm.Show("Remove Worktrees",
 				fmt.Sprintf("Branch: %s\nThis will remove all worktrees and delete\nthe '%s' branch from all repos.", wf.BranchName, wf.BranchName),
+				func() tea.Cmd {
+					wf := v.currentWorkflow()
+					if wf == nil {
+						return nil
+					}
+					return func() tea.Msg {
+						wf.RemoveAllWorktrees()
+						return worktreesRemovedMsg{}
+					}
+				})
+		}
+	case "X":
+		wf := v.currentWorkflow()
+		if wf != nil {
+			v.cleanupConfirm.Show("Force Delete Workflow",
+				fmt.Sprintf("Branch: %s\nThis workflow may have open MRs or unmerged commits.\nAll worktrees and branches will be permanently deleted.", wf.BranchName),
 				func() tea.Cmd {
 					wf := v.currentWorkflow()
 					if wf == nil {
@@ -1394,7 +1421,7 @@ func (v *WorkflowsView) renderFooterHelp() string {
 		jiraHint = "  J Jira"
 	}
 	if len(v.workflows) > 0 {
-		return th.Help.Render(" w New" + jiraHint + "  a Agent  d Diff  p Push  P Force Push  M MRs  D Cleanup  H Detach  I Import  ↑↓ Select  r Refresh")
+		return th.Help.Render(" w New" + jiraHint + "  a Agent  d Diff  p Push  P Force Push  M MRs  D Delete  X Force Delete  H Detach  I Import  ↑↓ Select  r Refresh")
 	}
 	return th.Help.Render(" w New Workflow  I Import  r Refresh" + jiraHint)
 }
@@ -1414,7 +1441,7 @@ func (v *WorkflowsView) ShortHelp() string {
 		if v.jiraPicker.IsAvailable() {
 			jiraHint = "  J Jira ticket"
 		}
-		return fmt.Sprintf("Workflow: %s  w New%s  a Agent  d Diff  p Push  P Force Push  M MRs  D Cleanup  H Detach  I Import", wfLabel, jiraHint)
+		return fmt.Sprintf("Workflow: %s  w New%s  a Agent  d Diff  p Push  P Force Push  M MRs  D Delete  X Force Delete  H Detach  I Import", wfLabel, jiraHint)
 	}
 	jiraHint := ""
 	if v.jiraPicker.IsAvailable() {
@@ -1434,7 +1461,7 @@ func (v *WorkflowsView) CapturesInput() bool {
 // CapturesKey returns true for keys this view handles directly.
 func (v *WorkflowsView) CapturesKey(key string) bool {
 	switch key {
-	case "r", "w", "a", "p", "P", "d", "D", "H", "I", "M", "J", "j", "k", "up", "down", "/":
+	case "r", "w", "a", "p", "P", "d", "D", "X", "H", "I", "M", "J", "j", "k", "up", "down", "/":
 		return true
 	}
 	return false
@@ -1463,7 +1490,8 @@ func (v *WorkflowsView) KeyBindings() []components.KeyBinding {
 		{Key: "p", Description: "Push all repos in selected workflow"},
 		{Key: "P", Description: "Force push (--force-with-lease) all repos in selected workflow"},
 		{Key: "M", Description: "Create MRs/PRs for all pushed repos"},
-		{Key: "D", Description: "Cleanup selected workflow (remove worktrees)"},
+		{Key: "D", Description: "Delete selected workflow (blocked if open MRs or unmerged branches)"},
+		{Key: "X", Description: "Force delete selected workflow (removes everything regardless of MR/merge status)"},
 		{Key: "H", Description: "Sync main dir repos to worktree HEADs (detached)"},
 		{Key: "I", Description: "Import workflows from existing worktrees"},
 		{Key: "↑/k", Description: "Select previous workflow"},
