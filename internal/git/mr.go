@@ -220,10 +220,16 @@ func GenerateMRContent(repoPath, baseBranch string) (*MRContent, error) {
 		baseBranch = "main"
 	}
 
-	// Collect commit log
+	// Fetch origin to ensure we compare against the latest remote state
+	_ = exec.Command("git", "-C", repoPath, "fetch", "origin", baseBranch).Run()
+
+	// Use origin/branch to compare against the remote, not a potentially stale local ref
+	originBase := fmt.Sprintf("origin/%s", baseBranch)
+
+	// Collect commit log: commits on HEAD not yet on the base branch
 	logCmd := exec.Command("git", "-C", repoPath, "log",
 		"--oneline", "--no-decorate",
-		fmt.Sprintf("%s..HEAD", baseBranch))
+		fmt.Sprintf("%s..HEAD", originBase))
 	logOut, err := logCmd.Output()
 	if err != nil || strings.TrimSpace(string(logOut)) == "" {
 		// Nothing to describe
@@ -231,9 +237,11 @@ func GenerateMRContent(repoPath, baseBranch string) (*MRContent, error) {
 	}
 	commits := strings.TrimSpace(string(logOut))
 
-	// Collect diff stat (file-level summary, not full diff)
+	// Collect diff stat using three-dot notation to compare from the merge base,
+	// not the tip of the base branch. This avoids showing unrelated changes on
+	// the base branch as removals, keeping the scope accurate.
 	statCmd := exec.Command("git", "-C", repoPath, "diff", "--stat",
-		fmt.Sprintf("%s..HEAD", baseBranch))
+		fmt.Sprintf("%s...HEAD", originBase))
 	statOut, _ := statCmd.Output()
 	stat := strings.TrimSpace(string(statOut))
 
