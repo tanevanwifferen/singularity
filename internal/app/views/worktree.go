@@ -266,7 +266,16 @@ func (v *WorktreeView) handleRemoveConfirm(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "y":
 		if v.removeWorktree != nil {
-			v.removeWorktreeCmd(v.removeWorktree.Path, v.removeForce)
+			v.loading = true
+			path := v.removeWorktree.Path
+			force := v.removeForce
+			v.showRemoveConfirm = false
+			v.removeWorktree = nil
+			v.removeForce = false
+			return func() tea.Msg {
+				v.removeWorktreeCmd(path, force)
+				return RefreshDoneMsg{}
+			}
 		}
 		v.showRemoveConfirm = false
 		v.removeWorktree = nil
@@ -274,7 +283,15 @@ func (v *WorktreeView) handleRemoveConfirm(msg tea.KeyMsg) tea.Cmd {
 	case "f":
 		// Force remove without confirmation
 		if v.removeWorktree != nil {
-			v.removeWorktreeCmd(v.removeWorktree.Path, true)
+			v.loading = true
+			path := v.removeWorktree.Path
+			v.showRemoveConfirm = false
+			v.removeWorktree = nil
+			v.removeForce = false
+			return func() tea.Msg {
+				v.removeWorktreeCmd(path, true)
+				return RefreshDoneMsg{}
+			}
 		}
 		v.showRemoveConfirm = false
 		v.removeWorktree = nil
@@ -291,8 +308,12 @@ func (v *WorktreeView) handleRemoveConfirm(msg tea.KeyMsg) tea.Cmd {
 func (v *WorktreeView) handlePruneConfirm(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "y", "enter":
-		v.pruneWorktrees()
+		v.loading = true
 		v.showPruneConfirm = false
+		return func() tea.Msg {
+			v.pruneWorktrees()
+			return RefreshDoneMsg{}
+		}
 	case "n", "esc":
 		v.showPruneConfirm = false
 	}
@@ -304,18 +325,23 @@ func (v *WorktreeView) handleDetachAllConfirm(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "y", "enter":
 		v.showDetachAllConfirm = false
-		var errs []string
-		for _, wt := range v.worktrees {
-			if err := git.CheckoutDetached(wt.Path); err != nil {
-				errs = append(errs, fmt.Sprintf("%s: %v", filepath.Base(wt.Path), err))
+		v.loading = true
+		worktrees := v.worktrees
+		return func() tea.Msg {
+			var errs []string
+			for _, wt := range worktrees {
+				if err := git.CheckoutDetached(wt.Path); err != nil {
+					errs = append(errs, fmt.Sprintf("%s: %v", filepath.Base(wt.Path), err))
+				}
 			}
+			if len(errs) > 0 {
+				v.detachAllResult = fmt.Sprintf("✗ %s", strings.Join(errs, "; "))
+			} else {
+				v.detachAllResult = fmt.Sprintf("✓ Detached %d worktree(s)", len(worktrees))
+			}
+			v.loadData()
+			return RefreshDoneMsg{}
 		}
-		if len(errs) > 0 {
-			v.detachAllResult = fmt.Sprintf("✗ %s", strings.Join(errs, "; "))
-		} else {
-			v.detachAllResult = fmt.Sprintf("✓ Detached %d worktree(s)", len(v.worktrees))
-		}
-		v.loadData()
 	case "n", "esc":
 		v.showDetachAllConfirm = false
 	}
@@ -412,7 +438,19 @@ func (v *WorktreeView) handleCreateInput(msg tea.KeyMsg) tea.Cmd {
 	case "enter":
 		// If we have a branch selected, create the worktree
 		if v.newWorktreePath != "" && v.newWorktreeBranch != "" {
-			v.createWorktree(v.newWorktreePath, v.newWorktreeBranch, v.createNewBranch)
+			v.loading = true
+			path := v.newWorktreePath
+			branch := v.newWorktreeBranch
+			createBranch := v.createNewBranch
+			v.showCreate = false
+			v.newWorktreePath = ""
+			v.newWorktreeBranch = ""
+			v.createNewBranch = false
+			v.showBranchPicker = false
+			return func() tea.Msg {
+				v.createWorktree(path, branch, createBranch)
+				return RefreshDoneMsg{}
+			}
 		}
 		v.showCreate = false
 		v.newWorktreePath = ""

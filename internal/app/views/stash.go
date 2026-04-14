@@ -133,7 +133,12 @@ func (v *StashView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "a":
 			// Apply selected stash
 			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				v.applyStash(item.Index)
+				v.loading = true
+				index := item.Index
+				return v, func() tea.Msg {
+					v.applyStash(index)
+					return RefreshDoneMsg{}
+				}
 			}
 		case "p":
 			// Show pop confirmation
@@ -227,7 +232,14 @@ func (v *StashView) handlePopConfirm(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "y", "enter":
 		if v.popStashIndex >= 0 {
-			v.popStash(v.popStashIndex)
+			v.loading = true
+			index := v.popStashIndex
+			v.showPopConfirm = false
+			v.popStashIndex = -1
+			return func() tea.Msg {
+				v.popStash(index)
+				return RefreshDoneMsg{}
+			}
 		}
 		v.showPopConfirm = false
 		v.popStashIndex = -1
@@ -243,7 +255,16 @@ func (v *StashView) handleNewStashInput(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
 		if v.newStashMessage != "" {
-			v.createStash(v.newStashMessage, v.newStashUntracked)
+			v.loading = true
+			stashMessage := v.newStashMessage
+			includeUntracked := v.newStashUntracked
+			v.showNewStash = false
+			v.newStashMessage = ""
+			v.newStashUntracked = false
+			return func() tea.Msg {
+				v.createStash(stashMessage, includeUntracked)
+				return RefreshDoneMsg{}
+			}
 		}
 		v.showNewStash = false
 		v.newStashMessage = ""

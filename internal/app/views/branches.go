@@ -146,9 +146,12 @@ func (v *BranchesView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "R":
 			// Force refresh CI statuses (clear cache)
-			v.cacheTime = time.Time{} // Force cache refresh
-			v.loadCIPipelineStatuses()
-			return v, nil
+			v.cacheTime = time.Time{}
+			v.ciLoading = true
+			return v, func() tea.Msg {
+				v.loadCIPipelineStatuses()
+				return RefreshDoneMsg{}
+			}
 		case "/":
 			// Activate filter mode
 			if v.filter != nil {
@@ -166,7 +169,12 @@ func (v *BranchesView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "c":
 			// Checkout selected branch
 			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				v.checkoutBranch(item.Name)
+				v.loading = true
+				name := item.Name
+				return v, func() tea.Msg {
+					v.checkoutBranch(name)
+					return RefreshDoneMsg{}
+				}
 			}
 		case "d":
 			// Show delete confirmation
@@ -223,13 +231,27 @@ func (v *BranchesView) handleDeleteConfirm(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "l", "y", "enter":
 		if v.deleteBranch != nil {
-			v.deleteBranchCmd(v.deleteBranch.Name, false)
+			v.loading = true
+			name := v.deleteBranch.Name
+			v.showDeleteConfirm = false
+			v.deleteBranch = nil
+			return func() tea.Msg {
+				v.deleteBranchCmd(name, false)
+				return RefreshDoneMsg{}
+			}
 		}
 		v.showDeleteConfirm = false
 		v.deleteBranch = nil
 	case "r":
 		if v.deleteBranch != nil {
-			v.deleteBranchCmd(v.deleteBranch.Name, true)
+			v.loading = true
+			name := v.deleteBranch.Name
+			v.showDeleteConfirm = false
+			v.deleteBranch = nil
+			return func() tea.Msg {
+				v.deleteBranchCmd(name, true)
+				return RefreshDoneMsg{}
+			}
 		}
 		v.showDeleteConfirm = false
 		v.deleteBranch = nil
