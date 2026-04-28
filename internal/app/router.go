@@ -264,6 +264,17 @@ func (r *Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, r.active.Init()
 	}
 
+	// F-keys switch views regardless of whether the active view captures input.
+	// This ensures view navigation always works even when e.g. the agent output
+	// pane is focused (which sets CapturesInput=true to own j/k/Tab etc.).
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		if viewName, mapped := r.keyToView[keyMsg.String()]; mapped {
+			if err := r.SwitchTo(viewName); err == nil {
+				return r, r.active.Init()
+			}
+		}
+	}
+
 	// Handle key-based navigation (skip when active view is capturing input)
 	if keyMsg, ok := msg.(tea.KeyMsg); ok && !r.ActiveViewCapturesInput() {
 		return r.handleRouterKeyMsg(keyMsg)
