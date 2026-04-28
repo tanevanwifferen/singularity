@@ -266,11 +266,16 @@ func (v *BranchesView) handleDeleteConfirm(msg tea.KeyMsg) tea.Cmd {
 func (v *BranchesView) handleNewBranchInput(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
-		if v.newBranchName != "" {
-			v.createBranch(v.newBranchName)
-		}
+		name := v.newBranchName
 		v.showNewBranch = false
 		v.newBranchName = ""
+		if name != "" {
+			v.loading = true
+			return func() tea.Msg {
+				v.createBranch(name)
+				return RefreshDoneMsg{}
+			}
+		}
 	case "esc":
 		v.showNewBranch = false
 		v.newBranchName = ""

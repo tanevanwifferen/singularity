@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
@@ -109,6 +110,18 @@ type AgentView struct {
 	savedProposals []string                  // issue keys for orphaned .jira-actions-*.json files
 	approvalView   *ApprovalView
 	approvalAgent  string // agentID of the agent whose approval is shown
+
+	loadMu sync.Mutex // serializes concurrent loadAgents calls
+}
+
+// AgentsReloadedMsg is sent after an async loadAgents completes.
+type AgentsReloadedMsg struct {
+	selectID string // optional: agent ID to select after the reload
+}
+
+// messageSendDoneMsg is sent after SendInput completes.
+type messageSendDoneMsg struct {
+	err error
 }
 
 // NewAgentView creates a new agent console view. The engine no longer
@@ -222,6 +235,8 @@ func (v *AgentView) LoadAgents() {
 
 // loadAgents loads the current list of agents from the engine.
 func (v *AgentView) loadAgents() {
+	v.loadMu.Lock()
+	defer v.loadMu.Unlock()
 	v.err = nil
 
 	if v.services == nil {
@@ -543,14 +558,27 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.jiraMeta != nil && v.jiraAgentMeta != nil {
 				v.jiraAgentMeta[msg.ID] = msg.jiraMeta
 			}
-			v.loadAgents()
+			selectID := msg.ID
+			return v, func() tea.Msg {
+				v.loadAgents()
+				return AgentsReloadedMsg{selectID: selectID}
+			}
+		}
+
+	case AgentsReloadedMsg:
+		if msg.selectID != "" {
 			for i, a := range v.agents {
-				if a.ID == msg.ID {
+				if a.ID == msg.selectID {
 					v.filter.SelectAt(i)
 					v.selectAgent(a)
 					break
 				}
 			}
+		}
+
+	case messageSendDoneMsg:
+		if msg.err != nil {
+			v.err = fmt.Errorf("send input: %w", msg.err)
 		}
 
 	case approvalExecDoneMsg:
@@ -654,16 +682,21 @@ func (v *AgentView) handleMessageInput(msg tea.KeyMsg) tea.Cmd {
 				return AgentCreatedMsg{ID: id, Err: err}
 			}
 		}
+		var sendCmd tea.Cmd
 		if v.messageInput != "" && v.services != nil && v.selectedAgent != nil {
-			err := v.services.Agent.SendInput(v.ctx(), v.selectedAgent.ID, v.messageInput)
-			if err != nil {
-				v.err = fmt.Errorf("send input: %w", err)
+			svc := v.services
+			agentID := v.selectedAgent.ID
+			input := v.messageInput
+			ctx := v.ctx()
+			sendCmd = func() tea.Msg {
+				return messageSendDoneMsg{err: svc.Agent.SendInput(ctx, agentID, input)}
 			}
 		}
 		v.showMessageInput = false
 		v.messageInput = ""
 		v.focus = focusOutput
 		v.recalcLayout()
+		return sendCmd
 	case "esc":
 		v.showMessageInput = false
 		v.messageInput = ""

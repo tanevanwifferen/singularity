@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
+	"gitlab.com/tanevanwifferen1/singularity/internal/git"
 	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
@@ -87,17 +88,45 @@ func NewCommitView(repoPath string) *CommitView {
 // Init initializes the commit view.
 func (v *CommitView) Init() tea.Cmd {
 	v.loading = true
+	return v.loadFilesCmd(-1, -1)
+}
+
+// commitFilesLoadedMsg carries the result of an async loadFiles operation.
+type commitFilesLoadedMsg struct {
+	staged       []FileStatus
+	unstaged     []FileStatus
+	err          error
+	resetSection int // -1 = leave alone
+	resetIndex   int // -1 = leave alone
+}
+
+// loadFilesCmd returns a tea.Cmd that loads staged/unstaged files in a goroutine.
+func (v *CommitView) loadFilesCmd(resetSection, resetIndex int) tea.Cmd {
+	repoPath := v.repoPath
 	return func() tea.Msg {
-		v.loadFiles()
-		return RefreshDoneMsg{}
+		var msg commitFilesLoadedMsg
+		msg.resetSection = resetSection
+		msg.resetIndex = resetIndex
+		staged, err := parseDiffFiles(repoPath, true)
+		if err != nil {
+			msg.err = fmt.Errorf("failed to get staged files: %w", err)
+		} else {
+			msg.staged = staged
+		}
+		unstaged, err := parseDiffFiles(repoPath, false)
+		if err != nil {
+			msg.err = fmt.Errorf("failed to get unstaged files: %w", err)
+		} else {
+			msg.unstaged = unstaged
+		}
+		return msg
 	}
 }
 
-// loadFiles loads staged and unstaged files from git.
+// loadFiles loads staged and unstaged files from git (synchronous; used by Refresh).
 func (v *CommitView) loadFiles() {
 	v.err = nil
 
-	// Load staged files using git diff --cached --name-only --numstat
 	staged, err := v.getStagedFiles()
 	if err != nil {
 		v.err = fmt.Errorf("failed to get staged files: %w", err)
@@ -105,7 +134,6 @@ func (v *CommitView) loadFiles() {
 		v.stagedFiles = staged
 	}
 
-	// Load unstaged files using git diff --name-only --numstat
 	unstaged, err := v.getUnstagedFiles()
 	if err != nil {
 		v.err = fmt.Errorf("failed to get unstaged files: %w", err)
@@ -272,10 +300,7 @@ func (v *CommitView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "r":
 			v.loading = true
-			return v, func() tea.Msg {
-				v.loadFiles()
-				return RefreshDoneMsg{}
-			}
+			return v, v.loadFilesCmd(-1, -1)
 
 		case "tab":
 			// Switch between staged and unstaged sections
@@ -303,50 +328,64 @@ func (v *CommitView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case " ":
 			// Toggle stage/unstage selected file
 			if v.activeSection == 0 && v.selectedIndex < len(v.stagedFiles) {
-				// Unstage selected
 				path := v.stagedFiles[v.selectedIndex].Path
-				if err := v.unstageFile(path); err != nil {
-					v.err = err
-				}
-				v.loadFiles()
-				// Adjust selection if needed
-				if v.selectedIndex >= len(v.stagedFiles) && v.selectedIndex > 0 {
-					v.selectedIndex = len(v.stagedFiles) - 1
-				}
+				v.loading = true
+				repoPath := v.repoPath
+				return v, tea.Batch(
+					func() tea.Msg {
+						if err := exec.Command("git", "-C", repoPath, "restore", "--staged", path).Run(); err != nil {
+							return commitFilesLoadedMsg{err: fmt.Errorf("failed to unstage file: %w", err), resetSection: -1, resetIndex: -1}
+						}
+						return nil
+					},
+					v.loadFilesCmd(-1, -1),
+				)
 			} else if v.activeSection == 1 && v.selectedIndex < len(v.unstagedFiles) {
-				// Stage selected
 				path := v.unstagedFiles[v.selectedIndex].Path
-				if err := v.stageFile(path); err != nil {
-					v.err = err
-				}
-				v.loadFiles()
-				// Adjust selection if needed
-				if v.selectedIndex >= len(v.unstagedFiles) && v.selectedIndex > 0 {
-					v.selectedIndex = len(v.unstagedFiles) - 1
-				}
+				v.loading = true
+				repoPath := v.repoPath
+				return v, tea.Batch(
+					func() tea.Msg {
+						if err := exec.Command("git", "-C", repoPath, "add", path).Run(); err != nil {
+							return commitFilesLoadedMsg{err: fmt.Errorf("failed to stage file: %w", err), resetSection: -1, resetIndex: -1}
+						}
+						return nil
+					},
+					v.loadFilesCmd(-1, -1),
+				)
 			}
 
 		case "a":
 			// Stage all unstaged files
-			if err := v.stageAll(); err != nil {
-				v.err = err
-			}
-			v.loadFiles()
-			v.activeSection = 0
-			v.selectedIndex = 0
+			v.loading = true
+			repoPath := v.repoPath
+			return v, tea.Batch(
+				func() tea.Msg {
+					if err := exec.Command("git", "-C", repoPath, "add", "-A").Run(); err != nil {
+						return commitFilesLoadedMsg{err: fmt.Errorf("failed to stage all files: %w", err), resetSection: 0, resetIndex: 0}
+					}
+					return nil
+				},
+				v.loadFilesCmd(0, 0),
+			)
 
 		case "u":
 			// Unstage all staged files
-			if err := v.unstageAll(); err != nil {
-				v.err = err
-			}
-			v.loadFiles()
-			v.activeSection = 1
-			v.selectedIndex = 0
+			v.loading = true
+			repoPath := v.repoPath
+			return v, tea.Batch(
+				func() tea.Msg {
+					if err := exec.Command("git", "-C", repoPath, "restore", "--staged", ".").Run(); err != nil {
+						return commitFilesLoadedMsg{err: fmt.Errorf("failed to unstage all files: %w", err), resetSection: 1, resetIndex: 0}
+					}
+					return nil
+				},
+				v.loadFilesCmd(1, 0),
+			)
 
 		case "enter":
-			// Open hunk diff preview for the selected file
-			v.openHunkDiff()
+			// Open hunk diff preview for the selected file (async)
+			return v, v.openHunkDiffCmd()
 
 		case "c":
 			// Enter message editing mode if there are staged files
@@ -358,6 +397,46 @@ func (v *CommitView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case RefreshDoneMsg:
+		v.loading = false
+
+	case hunkDiffLoadedMsg:
+		if msg.err != nil {
+			v.err = msg.err
+		} else if !msg.skip {
+			v.hunkDiffRaw = msg.rawDiff
+			v.hunkList = msg.hunks
+			v.hunkIndex = 0
+			v.hunkScrollOff = 0
+			v.hunkIsStaged = msg.isStaged
+			v.hunkFilePath = msg.filePath
+			v.editMode = HunkDiffMode
+		}
+
+	case commitFilesLoadedMsg:
+		if msg.err != nil {
+			v.err = msg.err
+		} else {
+			v.err = nil
+			v.stagedFiles = msg.staged
+			v.unstagedFiles = msg.unstaged
+		}
+		if msg.resetSection >= 0 {
+			v.activeSection = msg.resetSection
+		}
+		if msg.resetIndex >= 0 {
+			v.selectedIndex = msg.resetIndex
+		}
+		// Clamp selection to bounds
+		curLen := len(v.unstagedFiles)
+		if v.activeSection == 0 {
+			curLen = len(v.stagedFiles)
+		}
+		if v.selectedIndex >= curLen && v.selectedIndex > 0 {
+			v.selectedIndex = curLen - 1
+			if v.selectedIndex < 0 {
+				v.selectedIndex = 0
+			}
+		}
 		v.loading = false
 
 	case AIGenDoneMsg:
@@ -375,10 +454,8 @@ func (v *CommitView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.commitMessage = ""
 		v.messageCursor = 0
 		v.editMode = StageEditMode
-		v.loadFiles()
-		// Switch to staged section and reset selection
-		v.activeSection = 0
-		v.selectedIndex = 0
+		v.loading = true
+		return v, v.loadFilesCmd(0, 0)
 
 	case CommitErrorMsg:
 		v.committing = false
@@ -553,6 +630,52 @@ type CommitSuccessMsg struct {
 // CommitErrorMsg is sent when commit fails
 type CommitErrorMsg struct {
 	Error string
+}
+
+// hunkDiffLoadedMsg carries the result of an async openHunkDiff operation.
+type hunkDiffLoadedMsg struct {
+	filePath string
+	rawDiff  string
+	hunks    []git.DiffHunk
+	isStaged bool
+	err      error
+	skip     bool // nothing to show (no selection or empty diff)
+}
+
+// openHunkDiffCmd runs git diff in a goroutine for the selected file.
+func (v *CommitView) openHunkDiffCmd() tea.Cmd {
+	var filePath string
+	var isStaged bool
+	if v.activeSection == 0 && v.selectedIndex < len(v.stagedFiles) {
+		filePath = v.stagedFiles[v.selectedIndex].Path
+		isStaged = true
+	} else if v.activeSection == 1 && v.selectedIndex < len(v.unstagedFiles) {
+		filePath = v.unstagedFiles[v.selectedIndex].Path
+		isStaged = false
+	} else {
+		return nil
+	}
+	repoPath := v.repoPath
+	return func() tea.Msg {
+		var rawDiff string
+		var err error
+		if isStaged {
+			rawDiff, err = git.GetStagedFileDiff(repoPath, filePath)
+		} else {
+			rawDiff, err = git.GetUnstagedFileDiff(repoPath, filePath)
+		}
+		if err != nil {
+			return hunkDiffLoadedMsg{err: err}
+		}
+		if rawDiff == "" {
+			return hunkDiffLoadedMsg{skip: true}
+		}
+		hunks := git.ParseHunks(rawDiff)
+		if len(hunks) == 0 {
+			return hunkDiffLoadedMsg{skip: true}
+		}
+		return hunkDiffLoadedMsg{filePath: filePath, rawDiff: rawDiff, hunks: hunks, isStaged: isStaged}
+	}
 }
 
 // openHunkDiff loads the diff for the currently selected file and enters hunk diff mode.
