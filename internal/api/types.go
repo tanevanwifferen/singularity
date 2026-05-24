@@ -1,128 +1,57 @@
+// Package api defines the wire types shared between the singularity daemon
+// (internal/server) and the TUI client SDK (internal/client). Every request,
+// response, and WS payload that crosses the HTTP+WS boundary is declared
+// here as a plain struct with snake_case JSON tags.
+//
+// Capability-specific types live in a per-capability file (repo.go, branch.go,
+// diff.go, ...). This file holds only the cross-cutting envelope types and a
+// handful of shared building blocks (RepoPathRequest, ProjectHandleRequest,
+// StreamStartResponse) that are referenced across capabilities.
 package api
 
-import "gitlab.com/tanevanwifferen1/singularity/internal/git"
-
-// API types shared between server and client
-
-// StatusResponse is the response for /api/status
-type StatusResponse struct {
-	Version  string        `json:"version"`
-	Server   string        `json:"server"`
-	RepoPath string        `json:"repo_path,omitempty"`
-	RepoInfo *git.RepoInfo `json:"repo_info,omitempty"`
-	Error    string        `json:"error,omitempty"`
-}
-
-// RepoRequest is the request for repo operations
-type RepoRequest struct {
-	Path string `json:"path"`
-}
-
-// BranchComparisonRequest is the request for branch comparison
-type BranchComparisonRequest struct {
-	RepoPath string `json:"repo_path"`
-	BranchA  string `json:"branch_a"`
-	BranchB  string `json:"branch_b"`
-}
-
-// BranchDiffRequest is the request for branch diff
-type BranchDiffRequest struct {
-	RepoPath string `json:"repo_path"`
-	BranchA  string `json:"branch_a"`
-	BranchB  string `json:"branch_b"`
-}
-
-// CommitMessageRequest is the request for commit message generation
-type CommitMessageRequest struct {
-	RepoPath string `json:"repo_path"`
-}
-
-// MRRequest is the request for creating a merge request
-type MRRequest struct {
-	RepoPath     string   `json:"repo_path"`
-	SourceBranch string   `json:"source_branch"`
-	TargetBranch string   `json:"target_branch"`
-	Title        string   `json:"title"`
-	Description  string   `json:"description"`
-	Reviewers    []string `json:"reviewers"`
-}
-
-// WSMessage represents a WebSocket message
-type WSMessage struct {
-	Type    string      `json:"type"`
-	Payload interface{} `json:"payload"`
-}
-
-// WSEvent types
-const (
-	WSEventBranchUpdate   = "branch_update"
-	WSEventRepoUpdate     = "repo_update"
-	WSEventPipelineUpdate = "pipeline_update"
-	WSEventError          = "error"
+import (
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 )
 
-// APIResponse is a generic API response
+// APIResponse is the canonical JSON envelope for every HTTP response. On
+// success Data carries the operation's payload (whose Go type is documented
+// in docs/design/WIRE-CONTRACT.md). On failure Error is a human-readable
+// message and Code is the stable string constant from errors.go that the
+// client maps back into a service sentinel.
 type APIResponse struct {
 	Success bool        `json:"success"`
 	Data    interface{} `json:"data,omitempty"`
 	Error   string      `json:"error,omitempty"`
+	Code    string      `json:"code,omitempty"`
 }
 
-// Agent Engine API types
-
-// AgentStartRequest is the request for starting a new agent
-type AgentStartRequest struct {
-	ProjectPath  string   `json:"project_path"`
-	Task         string   `json:"task"`
-	Model        string   `json:"model,omitempty"`
-	Effort       string   `json:"effort,omitempty"`
-	AllowedTools []string `json:"allowed_tools,omitempty"`
-	MaxTurns     int      `json:"max_turns,omitempty"`
-	TimeoutSecs  int      `json:"timeout_secs,omitempty"`
-	ContextFiles []string `json:"context_files,omitempty"`
-	SmartRoute   bool     `json:"smart_route,omitempty"`
+// RepoPathRequest is the common shape for endpoints that take only a repo
+// path. Every endpoint that needs a repo path uses this struct (or embeds it)
+// so the client SDK can share one helper.
+type RepoPathRequest struct {
+	RepoPath string `json:"repo_path"`
 }
 
-// AgentQueryRequest is the request for querying an agent
-type AgentQueryRequest struct {
-	SessionID string `json:"session_id"`
-	Offset    int    `json:"offset,omitempty"`
+// ProjectHandleRequest is the common shape for endpoints that operate on a
+// loaded project identified by its opaque ProjectHandle.
+type ProjectHandleRequest struct {
+	Handle service.ProjectHandle `json:"project_handle"`
 }
 
-// AgentInputRequest is the request for sending input to a running agent
-type AgentInputRequest struct {
-	SessionID string `json:"session_id"`
-	Message   string `json:"message"`
+// StreamStartResponse is the body returned (inside APIResponse.Data) from
+// every endpoint marked **stream** in WIRE-CONTRACT.md. The client opens a
+// WebSocket, sends SubscribeStreamPayload{StreamID}, and receives frames
+// typed "stream:<id>" until a terminal frame with Done=true.
+type StreamStartResponse struct {
+	StreamID string `json:"stream_id"`
 }
 
-// WSEvent types for agent engine
-const (
-	WSEventAgentStarted  = "agent_started"
-	WSEventAgentOutput   = "agent_output"
-	WSEventAgentComplete = "agent_complete"
-	WSEventAgentError    = "agent_error"
-)
-
-// WSEvent types for project updates
-const (
-	WSEventProjectUpdate = "project_update"
-)
-
-// Project API types
-
-// ProjectListResponse is the response for listing available projects
-type ProjectListResponse struct {
-	Projects []string `json:"projects"`
-	Loaded   []string `json:"loaded"`
-}
-
-// ProjectLoadRequest is the request for loading a project
-type ProjectLoadRequest struct {
-	Key string `json:"key"`
-}
-
-// ProjectBranchRequest is the request for cross-repo branch operations
-type ProjectBranchRequest struct {
-	Key    string `json:"key"`
-	Branch string `json:"branch"`
+// StatusResponse is the response for /api/status. Kept as a thin re-export
+// of legacy fields plus the now-explicit version + server name.
+type StatusResponse struct {
+	Version  string            `json:"version"`
+	Server   string            `json:"server"`
+	RepoPath string            `json:"repo_path,omitempty"`
+	RepoInfo *service.RepoInfo `json:"repo_info,omitempty"`
+	Error    string            `json:"error,omitempty"`
 }

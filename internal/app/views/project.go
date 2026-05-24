@@ -7,8 +7,7 @@ import (
 	"strings"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
-	"gitlab.com/tanevanwifferen1/singularity/internal/project"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -18,8 +17,8 @@ import (
 type treeNode struct {
 	IsRepo   bool
 	RepoIdx  int
-	Repo     *project.RepoStatus
-	Branch   *git.BranchInfo
+	Repo     *service.RepoStatus
+	Branch   *service.BranchInfo
 	RepoName string // set on branch nodes for context
 }
 
@@ -34,10 +33,10 @@ func (n treeNode) String() string {
 // ProjectView displays aggregate multi-repo project status.
 type ProjectView struct {
 	viewBase
-	proj *project.Project
+	proj *service.Project
 	// Fallback path if proj is nil
 	projectPath string
-	status      *project.ProjectStatus
+	status      *service.ProjectStatus
 	loading     bool
 	err         error
 
@@ -47,7 +46,7 @@ type ProjectView struct {
 	// Branch check state
 	showBranchCheck bool
 	branchCheckName string
-	branchExistence *project.BranchExistence
+	branchExistence *service.BranchExistence
 
 	// New branch creation state
 	showNewBranch   bool
@@ -88,7 +87,7 @@ type ProjectView struct {
 }
 
 // NewProjectView creates a new project view with an already-loaded project.
-func NewProjectView(proj *project.Project) *ProjectView {
+func NewProjectView(proj *service.Project) *ProjectView {
 	v := &ProjectView{
 		viewBase: viewBase{width: 80, height: 24},
 		proj:     proj,
@@ -117,26 +116,26 @@ func NewProjectViewWithPath(projectPath string) *ProjectView {
 }
 
 // SetProject updates the project reference.
-func (v *ProjectView) SetProject(proj *project.Project) {
+func (v *ProjectView) SetProject(proj *service.Project) {
 	v.proj = proj
 	v.loadData()
 }
 
 // discoverProject creates a project by auto-discovering git repos in a directory
-func discoverProject(dir string) *project.Project {
+func discoverProject(dir string) *service.Project {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
 
-	var repos []project.RepoDef
+	var repos []service.RepoDef
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		repoPath := filepath.Join(dir, entry.Name(), ".git")
 		if _, err := os.Stat(repoPath); err == nil {
-			repos = append(repos, project.RepoDef{
+			repos = append(repos, service.RepoDef{
 				Name:          entry.Name(),
 				Path:          filepath.Join(dir, entry.Name()),
 				DefaultBranch: "main",
@@ -148,7 +147,7 @@ func discoverProject(dir string) *project.Project {
 		return nil
 	}
 
-	proj := project.NewProject(project.ProjectDef{
+	proj := service.NewProject(service.ProjectDef{
 		Name:  filepath.Base(dir),
 		Repos: repos,
 	})
@@ -375,7 +374,7 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if v.newBranchName != "" && v.proj != nil {
 					var results []string
 					for _, repo := range v.proj.Repos {
-						err := git.CreateBranch(repo.Path, v.newBranchName, repo.DefaultBranch)
+						err := v.services.Branch.Create(v.ctx(), repo.Path, v.newBranchName, repo.DefaultBranch)
 						if err != nil {
 							results = append(results, fmt.Sprintf("✗ %s: %v", repo.Name, err))
 						} else {
@@ -420,7 +419,7 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.showMRConfirm {
 			switch msg.String() {
 			case "y", "enter":
-				provider := git.DetectRemoteProvider(v.mrConfirmPath)
+				provider, _ := v.services.Forge.DetectProvider(v.ctx(), v.mrConfirmPath)
 				baseBranch := "main"
 				if v.proj != nil {
 					for _, r := range v.proj.Repos {
@@ -430,7 +429,7 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 				}
-				result, err := git.CreateMergeRequestCLI(v.mrConfirmPath, provider, baseBranch)
+				result, err := v.services.MR.CreateCLI(v.ctx(), v.mrConfirmPath, provider, baseBranch)
 				if err != nil {
 					v.mrResult = fmt.Sprintf("MR creation failed: %v", err)
 				} else {
@@ -450,7 +449,7 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				var results []string
 				if v.proj != nil {
 					for _, repo := range v.proj.Repos {
-						err := git.ResetRepoToMain(repo.Path, repo.DefaultBranch)
+						err := service.ResetRepoToMain(repo.Path, repo.DefaultBranch)
 						if err != nil {
 							results = append(results, fmt.Sprintf("✗ %s: %v", repo.Name, err))
 						} else {
@@ -474,13 +473,13 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				var results []string
 				if v.proj != nil {
 					for _, repo := range v.proj.Repos {
-						worktrees, err := git.GetWorktrees(repo.Path)
+						worktrees, err := v.services.Worktree.List(v.ctx(), repo.Path)
 						if err != nil {
 							results = append(results, fmt.Sprintf("✗ %s: %v", repo.Name, err))
 							continue
 						}
 						for _, wt := range worktrees {
-							if err := git.CheckoutDetached(wt.Path); err != nil {
+							if err := v.services.Branch.CheckoutDetached(v.ctx(), wt.Path); err != nil {
 								results = append(results, fmt.Sprintf("✗ %s/%s: %v", repo.Name, filepath.Base(wt.Path), err))
 							} else {
 								results = append(results, fmt.Sprintf("✓ %s/%s: detached", repo.Name, filepath.Base(wt.Path)))
@@ -504,7 +503,7 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				var results []string
 				if v.proj != nil {
 					for _, repo := range v.proj.Repos {
-						worktrees, err := git.GetWorktrees(repo.Path)
+						worktrees, err := v.services.Worktree.List(v.ctx(), repo.Path)
 						if err != nil {
 							results = append(results, fmt.Sprintf("✗ %s: %v", repo.Name, err))
 							continue
@@ -518,7 +517,7 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							if wt.HEAD == "" {
 								continue
 							}
-							if err := git.CheckoutDetachedAt(mainPath, wt.HEAD); err != nil {
+							if err := v.services.Branch.CheckoutDetachedAt(v.ctx(), mainPath, wt.HEAD); err != nil {
 								results = append(results, fmt.Sprintf("✗ %s/%s: %v", repo.Name, filepath.Base(wt.Path), err))
 							} else {
 								results = append(results, fmt.Sprintf("✓ %s: main→%s (%s)", repo.Name, filepath.Base(wt.Path), wt.HEAD[:7]))
@@ -546,7 +545,7 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if branch == "" {
 							branch = "main"
 						}
-						if err := git.Checkout(repo.Path, branch); err != nil {
+						if err := v.services.Branch.Checkout(v.ctx(), repo.Path, branch); err != nil {
 							results = append(results, fmt.Sprintf("✗ %s: %v", repo.Name, err))
 						} else {
 							results = append(results, fmt.Sprintf("✓ %s: checked out '%s'", repo.Name, branch))
@@ -571,7 +570,7 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case tea.KeyEnter:
 				if v.checkoutByNameInput != "" && v.checkoutByNameRepo != "" {
-					err := git.Checkout(v.checkoutByNameRepo, v.checkoutByNameInput)
+					err := v.services.Branch.Checkout(v.ctx(), v.checkoutByNameRepo, v.checkoutByNameInput)
 					if err != nil {
 						v.checkoutByNameResult = fmt.Sprintf("✗ checkout '%s': %v", v.checkoutByNameInput, err)
 					} else {
@@ -632,7 +631,7 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Checkout the selected branch
 			node := v.selectedNode()
 			if node != nil && !node.IsRepo && node.Branch != nil {
-				err := git.Checkout(node.Repo.Path, node.Branch.Name)
+				err := v.services.Branch.Checkout(v.ctx(), node.Repo.Path, node.Branch.Name)
 				if err != nil {
 					v.newBranchResult = fmt.Sprintf("✗ %s: %v", node.Repo.Name, err)
 				} else {

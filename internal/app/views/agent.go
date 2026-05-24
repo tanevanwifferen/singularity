@@ -9,8 +9,7 @@ import (
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
 	"gitlab.com/tanevanwifferen1/singularity/internal/config"
-	"gitlab.com/tanevanwifferen1/singularity/internal/engine"
-	"gitlab.com/tanevanwifferen1/singularity/internal/jira"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -34,7 +33,7 @@ func savedProposalID(issueKey string) string {
 // AgentInfo holds agent summary info for display
 type AgentInfo struct {
 	ID          string
-	State       engine.AgentState
+	State       service.AgentState
 	Task        string
 	Summary     string
 	WorkDir     string
@@ -58,7 +57,6 @@ const (
 // AgentView displays the agent console with a split-pane layout.
 type AgentView struct {
 	viewBase
-	engine       *engine.Engine
 	contextFiles []string // Files to inject into agent prompts
 	agents       []AgentInfo
 	filter       *components.Filter[AgentInfo]
@@ -70,7 +68,7 @@ type AgentView struct {
 
 	// Selected agent output
 	selectedAgent    *AgentInfo
-	outputEntries    []engine.OutputEntry
+	outputEntries    []service.OutputEntry
 	outputViewport   viewport.Model
 	outputAutoScroll bool
 
@@ -99,28 +97,30 @@ type AgentView struct {
 
 	// Jira ticket picker
 	jiraPicker       *JiraPickerState
-	jiraConfirmIssue *jira.Issue // issue pending agent-start confirmation
-	jiraExtraMsg     string      // custom instructions for the jira agent
-	jiraConfirmMode  string      // "implement" (default), "refine", or "create"
+	jiraConfirmIssue *service.Issue // issue pending agent-start confirmation
+	jiraExtraMsg     string         // custom instructions for the jira agent
+	jiraConfirmMode  string         // "implement" (default), "refine", or "create"
 
-	// Jira refine/create agent tracking
+	// Jira refine/create agent tracking. JiraService lives on v.services;
+	// jiraCfg is kept for display (base URL etc.) but credentials are
+	// daemon-side after Phase D.
 	jiraCfg        config.JiraConfig
-	jiraClient     *jira.Client
 	jiraAgentMeta  map[string]*jiraAgentMeta // agentID -> metadata
 	savedProposals []string                  // issue keys for orphaned .jira-actions-*.json files
 	approvalView   *ApprovalView
 	approvalAgent  string // agentID of the agent whose approval is shown
 }
 
-// NewAgentView creates a new agent console view.
-func NewAgentView(repoPath string, eng *engine.Engine, contextFiles ...[]string) *AgentView {
+// NewAgentView creates a new agent console view. The engine no longer
+// crosses the view boundary; agent operations route through v.services.Agent
+// after the app wires it in via SetServices.
+func NewAgentView(repoPath string, contextFiles ...[]string) *AgentView {
 	var ctxFiles []string
 	if len(contextFiles) > 0 {
 		ctxFiles = contextFiles[0]
 	}
 	v := &AgentView{
 		viewBase:         viewBase{repoPath: repoPath, width: 80, height: 24},
-		engine:           eng,
 		contextFiles:     ctxFiles,
 		refreshInterval:  2 * time.Second,
 		outputAutoScroll: true,
@@ -168,15 +168,9 @@ func (v *AgentView) outputHeight() int {
 	return h
 }
 
-// SetEngine sets the agent engine (allows late binding)
-func (v *AgentView) SetEngine(eng *engine.Engine) {
-	v.engine = eng
-}
-
 // SetJiraConfig wires Jira configuration so the Jira ticket picker is available.
 func (v *AgentView) SetJiraConfig(cfg config.JiraConfig) {
 	v.jiraCfg = cfg
-	v.jiraClient = jira.NewClient(cfg.BaseURL, cfg.Email, cfg.APIToken)
 	v.jiraAgentMeta = make(map[string]*jiraAgentMeta)
 	v.jiraPicker = NewJiraPickerState(cfg)
 	if v.jiraPicker != nil {
@@ -230,16 +224,20 @@ func (v *AgentView) LoadAgents() {
 func (v *AgentView) loadAgents() {
 	v.err = nil
 
-	if v.engine == nil {
+	if v.services == nil {
 		v.loading = false
 		return
 	}
 
-	agentList := v.engine.ListAgents()
+	agentList, err := v.services.Agent.List(v.ctx())
+	if err != nil {
+		v.err = err
+		v.loading = false
+		return
+	}
 	v.agents = make([]AgentInfo, 0, len(agentList))
 
-	for _, a := range agentList {
-		snap := a.Snapshot()
+	for _, snap := range agentList {
 		info := AgentInfo{
 			ID:          snap.ID,
 			State:       snap.State,
@@ -326,7 +324,7 @@ func (v *AgentView) loadAgents() {
 					continue
 				}
 				actionsFile := filepath.Join(v.repoPath, name)
-				actions, err := jira.ParseJiraActions(actionsFile)
+				actions, err := v.parseJiraActions(actionsFile)
 				if err != nil || len(actions) == 0 {
 					continue
 				}
@@ -339,7 +337,7 @@ func (v *AgentView) loadAgents() {
 				}
 				v.agents = append(v.agents, AgentInfo{
 					ID:      syntheticID,
-					State:   engine.AgentComplete,
+					State:   service.AgentComplete,
 					Summary: fmt.Sprintf("Saved proposal: %s (%d actions)", issueKey, len(actions)),
 				})
 			}
@@ -372,11 +370,11 @@ func (v *AgentView) loadAgents() {
 
 // refreshSelectedAgentOutput updates output for the currently selected agent.
 func (v *AgentView) refreshSelectedAgentOutput() {
-	if v.selectedAgent == nil || v.engine == nil {
+	if v.selectedAgent == nil || v.services == nil {
 		return
 	}
 
-	entries, err := v.engine.GetOutputEntries(v.selectedAgent.ID, 0)
+	entries, err := v.services.Agent.Output(v.ctx(), v.selectedAgent.ID, 0)
 	if err != nil {
 		return
 	}
@@ -599,12 +597,12 @@ func (v *AgentView) handleNewAgentInput(msg tea.KeyMsg) tea.Cmd {
 		v.showNewAgent = false
 		v.newAgentTask = ""
 		v.recalcLayout()
-		if task != "" && v.engine != nil {
-			eng := v.engine
+		if task != "" && v.services != nil {
+			svc := v.services
 			repoPath := v.repoPath
 			ctxFiles := v.contextFiles
 			return func() tea.Msg {
-				id, err := eng.StartAgent(repoPath, task, engine.AgentOptions{
+				id, err := svc.Agent.Start(v.ctx(), repoPath, task, service.AgentOptions{
 					ContextFiles: ctxFiles,
 					SmartRoute:   true,
 					UseWorktree:  true,
@@ -638,8 +636,8 @@ func (v *AgentView) handleMessageInput(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
 		// For errored agents, resume with history in a new agent (empty message OK)
-		if v.engine != nil && v.selectedAgent != nil && v.selectedAgent.State == engine.AgentError {
-			eng := v.engine
+		if v.services != nil && v.selectedAgent != nil && v.selectedAgent.State == service.AgentError {
+			svc := v.services
 			agentID := v.selectedAgent.ID
 			userMsg := v.messageInput
 			ctxFiles := v.contextFiles
@@ -648,7 +646,7 @@ func (v *AgentView) handleMessageInput(msg tea.KeyMsg) tea.Cmd {
 			v.focus = focusOutput
 			v.recalcLayout()
 			return func() tea.Msg {
-				id, err := eng.ResumeWithHistory(agentID, userMsg, engine.AgentOptions{
+				id, err := svc.Agent.Resume(v.ctx(), agentID, userMsg, service.AgentOptions{
 					ContextFiles: ctxFiles,
 					SmartRoute:   true,
 					UseWorktree:  true,
@@ -656,8 +654,8 @@ func (v *AgentView) handleMessageInput(msg tea.KeyMsg) tea.Cmd {
 				return AgentCreatedMsg{ID: id, Err: err}
 			}
 		}
-		if v.messageInput != "" && v.engine != nil && v.selectedAgent != nil {
-			err := v.engine.SendInput(v.selectedAgent.ID, v.messageInput)
+		if v.messageInput != "" && v.services != nil && v.selectedAgent != nil {
+			err := v.services.Agent.SendInput(v.ctx(), v.selectedAgent.ID, v.messageInput)
 			if err != nil {
 				v.err = fmt.Errorf("send input: %w", err)
 			}
@@ -767,10 +765,10 @@ func (v *AgentView) handleOutputPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Open approval view for completed Jira refine/create agents
 		if v.selectedAgent != nil && v.jiraAgentMeta != nil {
 			if meta, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
-				if v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentError || v.selectedAgent.State == engine.AgentKilled {
-					actions, err := jira.ParseJiraActions(meta.ActionsFile)
-					if err == nil && len(actions) > 0 && v.jiraClient != nil {
-						v.approvalView = NewApprovalView(actions, v.jiraClient)
+				if v.selectedAgent.State == service.AgentComplete || v.selectedAgent.State == service.AgentError || v.selectedAgent.State == service.AgentKilled {
+					actions, err := v.parseJiraActionsRaw(meta.ActionsFile)
+					if err == nil && len(actions) > 0 && v.services != nil {
+						v.approvalView = NewApprovalView(actions)
 						v.approvalView.SetSize(v.width, v.height)
 						v.approvalAgent = v.selectedAgent.ID
 					}
@@ -780,7 +778,7 @@ func (v *AgentView) handleOutputPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return v, nil
 	case "i":
 		if v.selectedAgent != nil &&
-			(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting || v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentKilled || v.selectedAgent.State == engine.AgentError) {
+			(v.selectedAgent.State == service.AgentRunning || v.selectedAgent.State == service.AgentStarting || v.selectedAgent.State == service.AgentComplete || v.selectedAgent.State == service.AgentKilled || v.selectedAgent.State == service.AgentError) {
 			v.showMessageInput = true
 			v.messageInput = ""
 			v.focus = focusInput
@@ -818,11 +816,11 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "K":
 		// Kill selected agent (capital K to not conflict with vim nav)
 		if item, idx := v.filter.SelectedItem(); idx >= 0 {
-			if item.State == engine.AgentRunning || item.State == engine.AgentStarting {
+			if item.State == service.AgentRunning || item.State == service.AgentStarting {
 				agentID := item.ID
 				v.killConfirm.Show("Kill Agent", fmt.Sprintf("Kill agent %s?", agentID), func() tea.Cmd {
-					if v.engine != nil {
-						v.engine.KillAgent(agentID)
+					if v.services != nil {
+						v.services.Agent.Kill(v.ctx(), agentID)
 						v.loadAgents()
 					}
 					return nil
@@ -846,7 +844,7 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "i":
 		if v.selectedAgent != nil &&
-			(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting || v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentKilled || v.selectedAgent.State == engine.AgentError) {
+			(v.selectedAgent.State == service.AgentRunning || v.selectedAgent.State == service.AgentStarting || v.selectedAgent.State == service.AgentComplete || v.selectedAgent.State == service.AgentKilled || v.selectedAgent.State == service.AgentError) {
 			v.showMessageInput = true
 			v.messageInput = ""
 			v.focus = focusInput
@@ -867,9 +865,9 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "c":
-		if v.engine != nil {
+		if v.services != nil {
 			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				if item.State != engine.AgentRunning && item.State != engine.AgentStarting {
+				if item.State != service.AgentRunning && item.State != service.AgentStarting {
 					if strings.HasPrefix(item.ID, "saved:") {
 						// Synthetic saved-proposal entry: remove from tracking, don't touch engine
 						issueKey := strings.TrimPrefix(item.ID, "saved:")
@@ -881,7 +879,7 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 							}
 						}
 					} else {
-						v.engine.RemoveAgent(item.ID)
+						v.services.Agent.Remove(v.ctx(), item.ID)
 					}
 					if v.selectedAgent != nil && v.selectedAgent.ID == item.ID {
 						v.deselectAgent()
@@ -929,10 +927,10 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Open approval view for completed Jira refine/create agents
 		if v.selectedAgent != nil && v.jiraAgentMeta != nil {
 			if meta, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
-				if v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentError || v.selectedAgent.State == engine.AgentKilled {
-					actions, err := jira.ParseJiraActions(meta.ActionsFile)
-					if err == nil && len(actions) > 0 && v.jiraClient != nil {
-						v.approvalView = NewApprovalView(actions, v.jiraClient)
+				if v.selectedAgent.State == service.AgentComplete || v.selectedAgent.State == service.AgentError || v.selectedAgent.State == service.AgentKilled {
+					actions, err := v.parseJiraActionsRaw(meta.ActionsFile)
+					if err == nil && len(actions) > 0 && v.services != nil {
+						v.approvalView = NewApprovalView(actions)
 						v.approvalView.SetSize(v.width, v.height)
 						v.approvalAgent = v.selectedAgent.ID
 					}
@@ -943,9 +941,9 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "R":
 		// Re-run agent on saved proposal with Jira ticket context
-		if v.selectedAgent != nil && v.jiraAgentMeta != nil && v.jiraClient != nil && v.engine != nil {
+		if v.selectedAgent != nil && v.jiraAgentMeta != nil && v.services != nil {
 			if meta, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
-				if v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentError || v.selectedAgent.State == engine.AgentKilled {
+				if v.selectedAgent.State == service.AgentComplete || v.selectedAgent.State == service.AgentError || v.selectedAgent.State == service.AgentKilled {
 					return v, v.startRefineProposalFromSaved(meta)
 				}
 			}
@@ -969,25 +967,25 @@ func (v *AgentView) renderAgentItem(agent AgentInfo, index int, selected bool) s
 	var statusStyle lipgloss.Style
 
 	switch agent.State {
-	case engine.AgentIdle:
+	case service.AgentIdle:
 		statusIcon = "○"
 		statusStyle = th.MutedTextStyle
-	case engine.AgentRouting:
+	case service.AgentRouting:
 		statusIcon = "◌"
 		statusStyle = lipgloss.NewStyle().Foreground(th.Info)
-	case engine.AgentStarting:
+	case service.AgentStarting:
 		statusIcon = "◐"
 		statusStyle = lipgloss.NewStyle().Foreground(th.Info)
-	case engine.AgentRunning:
+	case service.AgentRunning:
 		statusIcon = "●"
 		statusStyle = lipgloss.NewStyle().Foreground(th.Info)
-	case engine.AgentComplete:
+	case service.AgentComplete:
 		statusIcon = "✓"
 		statusStyle = lipgloss.NewStyle().Foreground(th.Info)
-	case engine.AgentError:
+	case service.AgentError:
 		statusIcon = "✗"
 		statusStyle = th.DashboardErrorStyle
-	case engine.AgentKilled:
+	case service.AgentKilled:
 		statusIcon = "⊘"
 		statusStyle = th.MutedTextStyle
 	default:
@@ -1023,7 +1021,7 @@ func (v *AgentView) renderAgentItem(agent AgentInfo, index int, selected bool) s
 	line.WriteString(fmt.Sprintf(" %s", th.StatsStyle.Render(displayText)))
 
 	// Time info
-	if agent.State == engine.AgentRunning || agent.State == engine.AgentStarting {
+	if agent.State == service.AgentRunning || agent.State == service.AgentStarting {
 		if agent.StartedAt != nil {
 			elapsed := time.Since(*agent.StartedAt)
 			line.WriteString(th.MutedTextStyle.Render(fmt.Sprintf(" %s", formatDuration(elapsed))))
@@ -1034,9 +1032,9 @@ func (v *AgentView) renderAgentItem(agent AgentInfo, index int, selected bool) s
 	}
 
 	stateLabel := agent.State.String()
-	if agent.State == engine.AgentRunning {
+	if agent.State == service.AgentRunning {
 		stateLabel = "running"
-	} else if agent.State == engine.AgentComplete {
+	} else if agent.State == service.AgentComplete {
 		stateLabel = "done"
 	}
 	line.WriteString(fmt.Sprintf(" %s", statusStyle.Render(stateLabel)))
@@ -1079,20 +1077,20 @@ func (v *AgentView) View() string {
 
 	// Stats line — computed from v.agents (already loaded) to avoid per-agent
 	// mutex acquisition on the render path, which would block the event loop.
-	if v.engine != nil {
+	if v.services != nil {
 		var active, done, errored int
 		for _, a := range v.agents {
 			switch a.State {
-			case engine.AgentRunning, engine.AgentStarting, engine.AgentRouting:
+			case service.AgentRunning, service.AgentStarting, service.AgentRouting:
 				active++
-			case engine.AgentComplete:
+			case service.AgentComplete:
 				done++
-			case engine.AgentError:
+			case service.AgentError:
 				errored++
 			}
 		}
 		s.WriteString(th.StatsStyle.Render(fmt.Sprintf(" Agents: %d/%d active  %d done  %d errors",
-			active, v.engine.MaxAgents(), done, errored)))
+			active, v.maxAgents(), done, errored)))
 	}
 
 	// Help hint
@@ -1106,7 +1104,7 @@ func (v *AgentView) View() string {
 		proposalHint := ""
 		if v.selectedAgent != nil && v.jiraAgentMeta != nil {
 			if _, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
-				if v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentError || v.selectedAgent.State == engine.AgentKilled {
+				if v.selectedAgent.State == service.AgentComplete || v.selectedAgent.State == service.AgentError || v.selectedAgent.State == service.AgentKilled {
 					proposalHint = "  A:review  R:re-run"
 				}
 			}
@@ -1226,7 +1224,7 @@ func (v *AgentView) View() string {
 		reviewBtn := ""
 		if v.jiraAgentMeta != nil {
 			if _, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
-				if v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentError || v.selectedAgent.State == engine.AgentKilled {
+				if v.selectedAgent.State == service.AgentComplete || v.selectedAgent.State == service.AgentError || v.selectedAgent.State == service.AgentKilled {
 					reviewBtn = "  " + lipgloss.NewStyle().Foreground(th.Accent).Bold(true).Render("[ A: Review Proposal ]")
 				}
 			}
@@ -1253,7 +1251,7 @@ func (v *AgentView) View() string {
 			title := "Send Message"
 			prompt := "Message: "
 			hint := "Enter: send   Esc: cancel"
-			if v.selectedAgent != nil && v.selectedAgent.State == engine.AgentError {
+			if v.selectedAgent != nil && v.selectedAgent.State == service.AgentError {
 				title = "Resume with History"
 				prompt = "Message (optional): "
 				hint = "Enter: resume in new session   Esc: cancel"
@@ -1269,15 +1267,15 @@ func (v *AgentView) View() string {
 		} else if v.focus == focusOutput {
 			hint := " j/k:scroll  g/G:top/bottom  ctrl+d/u:page  tab:list  esc:close"
 			if v.selectedAgent != nil &&
-				(v.selectedAgent.State == engine.AgentRunning || v.selectedAgent.State == engine.AgentStarting || v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentKilled) {
+				(v.selectedAgent.State == service.AgentRunning || v.selectedAgent.State == service.AgentStarting || v.selectedAgent.State == service.AgentComplete || v.selectedAgent.State == service.AgentKilled) {
 				hint += "  i:send message"
-			} else if v.selectedAgent != nil && v.selectedAgent.State == engine.AgentError {
+			} else if v.selectedAgent != nil && v.selectedAgent.State == service.AgentError {
 				hint += "  i:resume with history"
 			}
 			// Show actions hint for completed Jira refine/create agents
 			if v.selectedAgent != nil && v.jiraAgentMeta != nil {
 				if _, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
-					if v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentError || v.selectedAgent.State == engine.AgentKilled {
+					if v.selectedAgent.State == service.AgentComplete || v.selectedAgent.State == service.AgentError || v.selectedAgent.State == service.AgentKilled {
 						hint += "  A:review actions"
 					}
 				}
@@ -1287,7 +1285,7 @@ func (v *AgentView) View() string {
 			hint := " tab:focus output  esc/d:close"
 			if v.selectedAgent != nil && v.jiraAgentMeta != nil {
 				if _, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
-					if v.selectedAgent.State == engine.AgentComplete || v.selectedAgent.State == engine.AgentError || v.selectedAgent.State == engine.AgentKilled {
+					if v.selectedAgent.State == service.AgentComplete || v.selectedAgent.State == service.AgentError || v.selectedAgent.State == service.AgentKilled {
 						hint += "  A:review proposal"
 					}
 				}
@@ -1419,17 +1417,17 @@ func (v *AgentView) handleJiraAgentConfirm(msg tea.KeyMsg) tea.Cmd {
 }
 
 // startAgentFromJira starts a new agent for the given Jira ticket using a worktree.
-func (v *AgentView) startAgentFromJira(issue *jira.Issue, extraMsg string) tea.Cmd {
-	if issue == nil || v.engine == nil {
+func (v *AgentView) startAgentFromJira(issue *service.Issue, extraMsg string) tea.Cmd {
+	if issue == nil || v.services == nil {
 		return nil
 	}
-	eng := v.engine
+	svc := v.services
 	repoPath := v.repoPath
 	ctxFiles := v.contextFiles
 	agentPrompt := buildJiraAgentPrompt(issue, extraMsg)
 
 	return func() tea.Msg {
-		id, err := eng.StartAgent(repoPath, agentPrompt, engine.AgentOptions{
+		id, err := svc.Agent.Start(v.ctx(), repoPath, agentPrompt, service.AgentOptions{
 			ContextFiles: ctxFiles,
 			SmartRoute:   true,
 			UseWorktree:  true,
@@ -1439,17 +1437,17 @@ func (v *AgentView) startAgentFromJira(issue *jira.Issue, extraMsg string) tea.C
 }
 
 // startRefineFromJira starts a Jira refine agent for the given issue.
-func (v *AgentView) startRefineFromJira(issue *jira.Issue, focus string) tea.Cmd {
-	if issue == nil || v.engine == nil {
+func (v *AgentView) startRefineFromJira(issue *service.Issue, focus string) tea.Cmd {
+	if issue == nil || v.services == nil {
 		return nil
 	}
-	eng := v.engine
+	svc := v.services
 	repoPath := v.repoPath
 
 	return func() tea.Msg {
 		// Use a unique actions file per issue key to avoid conflicts with parallel refines
 		actionsFile := fmt.Sprintf(".jira-actions-%s.json", issue.Key)
-		id, err := jira.RefineTicket(eng, issue, repoPath, focus, actionsFile)
+		id, err := svc.Jira.RefineTicket(v.ctx(), issue, repoPath, focus, actionsFile)
 		if err == nil {
 			// We'll register the meta in the AgentCreatedMsg handler
 			return AgentCreatedMsg{
@@ -1467,11 +1465,11 @@ func (v *AgentView) startRefineFromJira(issue *jira.Issue, focus string) tea.Cmd
 }
 
 // startCreateFromJira starts a Jira create-stories agent for the given issue.
-func (v *AgentView) startCreateFromJira(issue *jira.Issue) tea.Cmd {
-	if issue == nil || v.engine == nil {
+func (v *AgentView) startCreateFromJira(issue *service.Issue) tea.Cmd {
+	if issue == nil || v.services == nil {
 		return nil
 	}
-	eng := v.engine
+	svc := v.services
 	repoPath := v.repoPath
 	cfg := v.jiraCfg
 
@@ -1483,7 +1481,7 @@ func (v *AgentView) startCreateFromJira(issue *jira.Issue) tea.Cmd {
 			}
 		}
 		actionsFile := fmt.Sprintf(".jira-actions-%s.json", issue.Key)
-		id, err := jira.CreateStories(eng, issue, "", project, repoPath, actionsFile)
+		id, err := svc.Jira.CreateStories(v.ctx(), issue, "", project, repoPath, actionsFile)
 		if err == nil {
 			return AgentCreatedMsg{
 				ID:  id,
@@ -1503,27 +1501,26 @@ func (v *AgentView) startCreateFromJira(issue *jira.Issue) tea.Cmd {
 // using the live Jira ticket as context. It fetches the ticket, reads the saved
 // actions file, then launches RefineProposalWithContext.
 func (v *AgentView) startRefineProposalFromSaved(meta *jiraAgentMeta) tea.Cmd {
-	if meta == nil || v.jiraClient == nil || v.engine == nil {
+	if meta == nil || v.services == nil {
 		return nil
 	}
-	client := v.jiraClient
-	eng := v.engine
+	svc := v.services
 	repoPath := v.repoPath
 	issueKey := meta.IssueKey
 	actionsFile := meta.ActionsFile
 
 	return func() tea.Msg {
-		issue, err := client.GetIssue(issueKey)
+		issue, err := svc.Jira.GetIssue(v.ctx(), issueKey)
 		if err != nil {
 			return AgentCreatedMsg{Err: fmt.Errorf("fetching %s: %w", issueKey, err)}
 		}
-		existingActions, err := jira.ParseJiraActions(actionsFile)
+		existingActions, err := v.parseJiraActions(actionsFile)
 		if err != nil {
 			return AgentCreatedMsg{Err: fmt.Errorf("reading proposal: %w", err)}
 		}
 		// Write to the same file so the proposal is updated in place
 		relFile := fmt.Sprintf(".jira-actions-%s.json", issueKey)
-		id, err := jira.RefineProposalWithContext(eng, issue, existingActions, "", repoPath, relFile)
+		id, err := svc.Jira.RefineProposalWithContext(v.ctx(), issue, existingActions, "", repoPath, relFile)
 		if err != nil {
 			return AgentCreatedMsg{Err: err}
 		}

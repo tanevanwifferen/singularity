@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	"github.com/charmbracelet/bubbletea"
@@ -35,7 +35,7 @@ type DiffLine struct {
 // Right panel: file details and diff content
 type DiffView struct {
 	viewBase
-	repo    *git.RepoInfo
+	repo    *service.RepoInfo
 	loading bool
 	err     error
 
@@ -45,13 +45,13 @@ type DiffView struct {
 	// Branch comparison mode
 	branchA    string
 	branchB    string
-	branchDiff *git.BranchDiff
+	branchDiff *service.BranchDiff
 
 	// Workdir diff mode
-	workdirDiff *git.WorkdirDiff
+	workdirDiff *service.WorkdirDiff
 
 	// File list state
-	files       []git.FileChange
+	files       []service.FileChange
 	selectedIdx int
 	showDiff    bool // Whether to show actual diff content
 
@@ -105,7 +105,7 @@ func (v *DiffView) loadData() {
 	v.err = nil
 
 	// Load repo info
-	repo, err := git.OpenRepo(v.repoPath)
+	repo, err := v.services.Repo.Open(v.ctx(), v.repoPath)
 	if err != nil {
 		v.err = fmt.Errorf("failed to open repo: %w", err)
 		v.loading = false
@@ -128,7 +128,7 @@ func (v *DiffView) loadBranchDiff() {
 		return
 	}
 
-	diff, err := git.GetBranchDiff(v.repoPath, v.branchA, v.branchB)
+	diff, err := v.services.Diff.BranchDiff(v.ctx(), v.repoPath, v.branchA, v.branchB)
 	if err != nil {
 		v.err = err
 		return
@@ -147,7 +147,7 @@ func (v *DiffView) loadBranchDiff() {
 
 // loadWorkdirDiff loads diff data for working directory changes.
 func (v *DiffView) loadWorkdirDiff() {
-	diff, err := git.GetWorkdirStatus(v.repoPath)
+	diff, err := v.services.Diff.WorkdirStatus(v.ctx(), v.repoPath)
 	if err != nil {
 		v.err = err
 		return
@@ -155,9 +155,9 @@ func (v *DiffView) loadWorkdirDiff() {
 	v.workdirDiff = diff
 
 	// Convert WorkdirStatus to FileChange for unified handling
-	v.files = make([]git.FileChange, 0, len(diff.Files))
+	v.files = make([]service.FileChange, 0, len(diff.Files))
 	for _, f := range diff.Files {
-		fc := git.FileChange{
+		fc := service.FileChange{
 			NewPath:   f.Path,
 			Additions: f.UnstagedAdditions + f.StagedAdditions,
 			Deletions: f.UnstagedDeletions + f.StagedDeletions,
@@ -289,7 +289,7 @@ func (v *DiffView) loadFileDiff() {
 	file := v.files[v.selectedIdx]
 
 	if v.mode == DiffModeBranch {
-		diff, err := git.GetFileDiff(v.repoPath, v.branchA, v.branchB, file.NewPath)
+		diff, err := v.services.Diff.FileDiff(v.ctx(), v.repoPath, v.branchA, v.branchB, file.NewPath)
 		if err != nil {
 			v.err = err
 			return
@@ -302,8 +302,8 @@ func (v *DiffView) loadFileDiff() {
 		var err error
 
 		// Try to get both staged and unstaged diffs
-		stagedDiff, _ := git.GetStagedFileDiff(v.repoPath, file.NewPath)
-		unstagedDiff, _ := git.GetUnstagedFileDiff(v.repoPath, file.NewPath)
+		stagedDiff, _ := v.services.Diff.StagedFileDiff(v.ctx(), v.repoPath, file.NewPath)
+		unstagedDiff, _ := v.services.Diff.UnstagedFileDiff(v.ctx(), v.repoPath, file.NewPath)
 
 		// Combine them
 		var combined []string

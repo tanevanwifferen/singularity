@@ -6,9 +6,18 @@ import (
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/views"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// ServicesSetter is implemented by views that accept a service.Services
+// container after construction. The router invokes SetServices on every
+// registered view that satisfies this interface, so views can be built with
+// just a repoPath and gain access to the service layer via app.
+type ServicesSetter interface {
+	SetServices(*service.Services)
+}
 
 // View is the interface that all views must implement.
 // This allows the router to manage multiple views and switch between them.
@@ -507,6 +516,19 @@ func (r *Router) NotifySize(width, height int) {
 	// Also update help overlay size if visible
 	if r.showHelp {
 		r.helpOverlay.SetSize(width, height)
+	}
+}
+
+// SetAllServices wires the service container into every registered view
+// that implements ServicesSetter. Called once during app initialisation.
+func (r *Router) SetAllServices(svc *service.Services) {
+	if svc == nil {
+		return
+	}
+	for _, view := range r.views {
+		if ss, ok := view.(ServicesSetter); ok {
+			ss.SetServices(svc)
+		}
 	}
 }
 

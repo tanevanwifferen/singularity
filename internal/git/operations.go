@@ -3,7 +3,6 @@ package git
 import (
 	"fmt"
 	"os/exec"
-	"runtime"
 	"strings"
 )
 
@@ -76,33 +75,5 @@ func AmendCommitMessage(repoPath, newMessage string) error {
 	return nil
 }
 
-// CopyToClipboard copies text to the system clipboard.
-// It tries platform-appropriate tools: wl-copy (Wayland), xclip, xsel (X11),
-// pbcopy (macOS).
-func CopyToClipboard(text string) error {
-	var cmd *exec.Cmd
-
-	switch runtime.GOOS {
-	case "linux":
-		// Try wl-copy first (Wayland), then xclip, then xsel
-		if _, err := exec.LookPath("wl-copy"); err == nil {
-			cmd = exec.Command("wl-copy")
-		} else if _, err := exec.LookPath("xclip"); err == nil {
-			cmd = exec.Command("xclip", "-selection", "clipboard")
-		} else if _, err := exec.LookPath("xsel"); err == nil {
-			cmd = exec.Command("xsel", "--clipboard", "--input")
-		} else {
-			return fmt.Errorf("no clipboard tool found (install wl-copy, xclip, or xsel)")
-		}
-	case "darwin":
-		cmd = exec.Command("pbcopy")
-	default:
-		return fmt.Errorf("clipboard not supported on %s", runtime.GOOS)
-	}
-
-	cmd.Stdin = strings.NewReader(text)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("clipboard copy failed: %w", err)
-	}
-	return nil
-}
+// CopyToClipboard moved to internal/app/clipboard during the daemon/client
+// migration — clipboard is OS-local and not a git operation.

@@ -4,193 +4,288 @@ import (
 	"net/http"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/api"
-	"gitlab.com/tanevanwifferen1/singularity/internal/project"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 )
 
-// handleProjectList handles GET /api/project/list
+// handleProjectList handles GET /api/project/list.
 func (s *Server) handleProjectList(w http.ResponseWriter, r *http.Request) {
-	if s.projectLoader == nil {
-		s.writeJSON(w, http.StatusOK, api.APIResponse{
-			Success: true,
-			Data: api.ProjectListResponse{
-				Projects: []string{},
-				Loaded:   []string{},
-			},
-		})
+	if !s.requireServices(w) {
 		return
 	}
-
+	keys, err := s.Services.Project.List(r.Context())
+	if err != nil {
+		s.writeServiceErr(w, err)
+		return
+	}
+	// We surface both "configured" and "loaded" via the same list for now;
+	// service.ProjectService.List returns one consolidated set. Filling Loaded
+	// with the same slice keeps the legacy ProjectListResponse shape stable.
 	s.writeJSON(w, http.StatusOK, api.APIResponse{
 		Success: true,
 		Data: api.ProjectListResponse{
-			Projects: s.projectLoader.ListProjectKeys(),
-			Loaded:   s.projectLoader.ListLoadedProjects(),
+			Projects: keys,
+			Loaded:   keys,
 		},
 	})
 }
 
-// requireProjectLoader writes a 400 error and returns false when no project config is loaded.
-func (s *Server) requireProjectLoader(w http.ResponseWriter) bool {
-	if s.projectLoader == nil {
-		s.writeError(w, http.StatusBadRequest, "no project config loaded")
-		return false
-	}
-	return true
-}
-
-// handleProjectLoad handles POST /api/project/load
+// handleProjectLoad handles POST /api/project/load.
 func (s *Server) handleProjectLoad(w http.ResponseWriter, r *http.Request) {
-	if !s.requireProjectLoader(w) {
+	if !s.requireMethod(w, r, http.MethodPost) || !s.requireServices(w) {
 		return
 	}
-
 	var req api.ProjectLoadRequest
 	if err := s.parseJSON(r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid request")
+		s.writeCoded(w, api.ErrCodeBadRequest, "invalid request")
 		return
 	}
-
-	proj, err := s.projectLoader.LoadProject(req.Key)
+	info, err := s.Services.Project.Load(r.Context(), req.Key)
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeServiceErr(w, err)
 		return
 	}
-
-	s.writeJSON(w, http.StatusOK, api.APIResponse{
-		Success: true,
-		Data:    proj.Status(),
-	})
+	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true, Data: info})
 }
 
-// handleProjectStatus handles GET /api/project/status?key=<key>
+// handleProjectInfo handles GET /api/project/info?handle=.
+func (s *Server) handleProjectInfo(w http.ResponseWriter, r *http.Request) {
+	if !s.requireServices(w) {
+		return
+	}
+	handle := service.ProjectHandle(r.URL.Query().Get("handle"))
+	info, err := s.Services.Project.Info(r.Context(), handle)
+	if err != nil {
+		s.writeServiceErr(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true, Data: info})
+}
+
+// handleProjectStatus handles GET /api/project/status?handle=.
 func (s *Server) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
-	if !s.requireProjectLoader(w) {
+	if !s.requireServices(w) {
 		return
 	}
-
-	key := r.URL.Query().Get("key")
-	if key == "" {
-		s.writeError(w, http.StatusBadRequest, "missing project key")
+	handle := service.ProjectHandle(r.URL.Query().Get("handle"))
+	if handle == "" {
+		handle = service.ProjectHandle(r.URL.Query().Get("key")) // legacy
+	}
+	st, err := s.Services.Project.Status(r.Context(), handle)
+	if err != nil {
+		s.writeServiceErr(w, err)
 		return
 	}
-
-	proj := s.projectLoader.GetProject(key)
-	if proj == nil {
-		s.writeError(w, http.StatusNotFound, "project not loaded")
-		return
-	}
-
-	s.writeJSON(w, http.StatusOK, api.APIResponse{
-		Success: true,
-		Data:    proj.Status(),
-	})
+	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true, Data: st})
 }
 
-// handleProjectRefresh handles POST /api/project/refresh
+// handleProjectRefresh handles POST /api/project/refresh.
 func (s *Server) handleProjectRefresh(w http.ResponseWriter, r *http.Request) {
-	if !s.requireProjectLoader(w) {
+	if !s.requireMethod(w, r, http.MethodPost) || !s.requireServices(w) {
 		return
 	}
-
-	var req api.ProjectLoadRequest
+	var req api.ProjectHandleRequest
 	if err := s.parseJSON(r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid request")
+		s.writeCoded(w, api.ErrCodeBadRequest, "invalid request")
 		return
 	}
-
-	if err := s.projectLoader.RefreshProject(req.Key); err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+	st, err := s.Services.Project.Refresh(r.Context(), req.Handle)
+	if err != nil {
+		s.writeServiceErr(w, err)
 		return
 	}
-
-	proj := s.projectLoader.GetProject(req.Key)
-	if proj == nil {
-		s.writeError(w, http.StatusNotFound, "project not found after refresh")
-		return
-	}
-
-	status := proj.Status()
-
-	// Broadcast update
-	s.wsBroadcast(api.WSMessage{Type: api.WSEventProjectUpdate, Payload: status})
-
-	s.writeJSON(w, http.StatusOK, api.APIResponse{
-		Success: true,
-		Data:    status,
+	// Broadcast the post-mismatch envelope so client subscribers can decode it
+	// uniformly (fixes COVERAGE.md §3e).
+	s.wsBroadcast(api.WSMessage{
+		Type: api.WSEventProjectUpdate,
+		Payload: api.ProjectUpdatePayload{
+			Handle: string(req.Handle),
+			Status: st,
+		},
 	})
+	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true, Data: st})
 }
 
-// handleProjectBranchCheck handles POST /api/project/branch/check
+// handleProjectBranchCheck handles POST /api/project/branch/check.
 func (s *Server) handleProjectBranchCheck(w http.ResponseWriter, r *http.Request) {
-	if !s.requireProjectLoader(w) {
+	if !s.requireMethod(w, r, http.MethodPost) || !s.requireServices(w) {
 		return
 	}
-
 	var req api.ProjectBranchRequest
 	if err := s.parseJSON(r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid request")
+		s.writeCoded(w, api.ErrCodeBadRequest, "invalid request")
 		return
 	}
-
-	proj := s.projectLoader.GetProject(req.Key)
-	if proj == nil {
-		s.writeError(w, http.StatusNotFound, "project not loaded")
+	handle := req.Handle
+	if handle == "" && req.Key != "" {
+		handle = service.ProjectHandle(req.Key)
+	}
+	res, err := s.Services.Project.BranchExists(r.Context(), handle, req.Branch)
+	if err != nil {
+		s.writeServiceErr(w, err)
 		return
 	}
-
-	existence := proj.BranchExistsAcross(req.Branch)
-	s.writeJSON(w, http.StatusOK, api.APIResponse{
-		Success: true,
-		Data:    existence,
-	})
+	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true, Data: res})
 }
 
-// handleProjectBranchCompare handles POST /api/project/branch/compare
-func (s *Server) handleProjectBranchCompare(w http.ResponseWriter, r *http.Request) {
-	if !s.requireProjectLoader(w) {
-		return
-	}
-
-	var req api.ProjectBranchRequest
-	if err := s.parseJSON(r, &req); err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid request")
-		return
-	}
-
-	proj := s.projectLoader.GetProject(req.Key)
-	if proj == nil {
-		s.writeError(w, http.StatusNotFound, "project not loaded")
-		return
-	}
-
-	comparison := project.CompareBranchAcrossRepos(proj, req.Branch)
-	s.writeJSON(w, http.StatusOK, api.APIResponse{
-		Success: true,
-		Data:    comparison,
-	})
-}
-
-// handleProjectContext handles GET /api/project/context?key=<key>
-// Returns a text summary suitable for Claude Code agent context
+// handleProjectContext handles GET /api/project/context?handle=.
 func (s *Server) handleProjectContext(w http.ResponseWriter, r *http.Request) {
-	if !s.requireProjectLoader(w) {
+	if !s.requireServices(w) {
 		return
 	}
-
-	key := r.URL.Query().Get("key")
-	if key == "" {
-		s.writeError(w, http.StatusBadRequest, "missing project key")
+	handle := service.ProjectHandle(r.URL.Query().Get("handle"))
+	if handle == "" {
+		handle = service.ProjectHandle(r.URL.Query().Get("key"))
+	}
+	ctx, err := s.Services.Project.ContextSummary(r.Context(), handle)
+	if err != nil {
+		s.writeServiceErr(w, err)
 		return
 	}
+	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true, Data: api.ProjectContextResponse{Context: ctx}})
+}
 
-	proj := s.projectLoader.GetProject(key)
-	if proj == nil {
-		s.writeError(w, http.StatusNotFound, "project not loaded")
+// handleProjectConfigPath handles GET /api/project/config_path.
+func (s *Server) handleProjectConfigPath(w http.ResponseWriter, r *http.Request) {
+	if !s.requireServices(w) {
 		return
 	}
+	path, err := s.Services.Project.DefaultConfigPath(r.Context())
+	if err != nil {
+		s.writeServiceErr(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true, Data: api.ProjectConfigPathResponse{Path: path}})
+}
 
-	s.writeJSON(w, http.StatusOK, api.APIResponse{
-		Success: true,
-		Data:    proj.ContextSummary(),
+// handleProjectSubscribe handles POST /api/project/subscribe — stream.
+func (s *Server) handleProjectSubscribe(w http.ResponseWriter, r *http.Request) {
+	if !s.requireMethod(w, r, http.MethodPost) || !s.requireServices(w) {
+		return
+	}
+	var req api.ProjectHandleRequest
+	if err := s.parseJSON(r, &req); err != nil {
+		s.writeCoded(w, api.ErrCodeBadRequest, "invalid request")
+		return
+	}
+	ctx, ctxCancel := streamContext()
+	ch, cancel, err := s.Services.Project.Subscribe(ctx, req.Handle)
+	if err != nil {
+		ctxCancel()
+		s.writeServiceErr(w, err)
+		return
+	}
+	id := s.registerStream(combineCancel(ctxCancel, cancel))
+	go pumpStream(s, id, ch, func(ev service.ProjectEvent) (api.StreamFrame, bool) {
+		s.wsBroadcast(api.WSMessage{
+			Type: api.WSEventProjectUpdate,
+			Payload: api.ProjectUpdatePayload{
+				Handle:   string(ev.Handle),
+				Status:   ev.Status,
+				RepoName: ev.RepoName,
+			},
+		})
+		return api.StreamFrame{Frame: ev}, false
 	})
+	s.writeJSON(w, http.StatusAccepted, api.APIResponse{Success: true, Data: api.StreamStartResponse{StreamID: id}})
+}
+
+// --- workflow endpoints ---
+
+// handleWorkflowCreate handles POST /api/project/workflow/create.
+func (s *Server) handleWorkflowCreate(w http.ResponseWriter, r *http.Request) {
+	if !s.requireMethod(w, r, http.MethodPost) || !s.requireServices(w) {
+		return
+	}
+	var req api.WorkflowCreateRequest
+	if err := s.parseJSON(r, &req); err != nil {
+		s.writeCoded(w, api.ErrCodeBadRequest, "invalid request")
+		return
+	}
+	wf, err := s.Services.Project.CreateWorkflow(r.Context(), req.Handle, req.Branch, req.BaseDir)
+	if err != nil {
+		s.writeServiceErr(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true, Data: wf})
+}
+
+// handleWorkflowList handles GET /api/project/workflow/list.
+func (s *Server) handleWorkflowList(w http.ResponseWriter, r *http.Request) {
+	if !s.requireServices(w) {
+		return
+	}
+	handle := service.ProjectHandle(r.URL.Query().Get("handle"))
+	wfs, err := s.Services.Project.LoadWorkflows(r.Context(), handle)
+	if err != nil {
+		s.writeServiceErr(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true, Data: api.WorkflowListResponse{Workflows: wfs}})
+}
+
+// handleWorkflowSave handles POST /api/project/workflow/save.
+func (s *Server) handleWorkflowSave(w http.ResponseWriter, r *http.Request) {
+	if !s.requireMethod(w, r, http.MethodPost) || !s.requireServices(w) {
+		return
+	}
+	var req api.WorkflowSaveRequest
+	if err := s.parseJSON(r, &req); err != nil {
+		s.writeCoded(w, api.ErrCodeBadRequest, "invalid request")
+		return
+	}
+	if err := s.Services.Project.SaveWorkflows(r.Context(), req.Handle, req.Workflows); err != nil {
+		s.writeServiceErr(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true})
+}
+
+// handleWorkflowDiscover handles POST /api/project/workflow/discover — stream.
+func (s *Server) handleWorkflowDiscover(w http.ResponseWriter, r *http.Request) {
+	if !s.requireMethod(w, r, http.MethodPost) || !s.requireServices(w) {
+		return
+	}
+	var req api.WorkflowDiscoverRequest
+	if err := s.parseJSON(r, &req); err != nil {
+		s.writeCoded(w, api.ErrCodeBadRequest, "invalid request")
+		return
+	}
+	ctx, ctxCancel := streamContext()
+	ch, cancel, err := s.Services.Project.DiscoverWorkflowsAllRepos(ctx, req.Handle, req.Skip)
+	if err != nil {
+		ctxCancel()
+		s.writeServiceErr(w, err)
+		return
+	}
+	id := s.registerStream(combineCancel(ctxCancel, cancel))
+	go pumpStream(s, id, ch, func(ev service.DiscoveryProgressEvent) (api.StreamFrame, bool) {
+		s.wsBroadcast(api.WSMessage{Type: api.WSEventDiscoveryProgress, Payload: ev})
+		return api.StreamFrame{Frame: ev, Done: ev.Done, Error: ev.Err}, ev.Done
+	})
+	s.writeJSON(w, http.StatusAccepted, api.APIResponse{Success: true, Data: api.StreamStartResponse{StreamID: id}})
+}
+
+// handleWorkflowSubscribe handles POST /api/project/workflow/subscribe — stream.
+func (s *Server) handleWorkflowSubscribe(w http.ResponseWriter, r *http.Request) {
+	if !s.requireMethod(w, r, http.MethodPost) || !s.requireServices(w) {
+		return
+	}
+	var req api.ProjectHandleRequest
+	if err := s.parseJSON(r, &req); err != nil {
+		s.writeCoded(w, api.ErrCodeBadRequest, "invalid request")
+		return
+	}
+	ctx, ctxCancel := streamContext()
+	ch, cancel, err := s.Services.Project.SubscribeWorkflows(ctx, req.Handle)
+	if err != nil {
+		ctxCancel()
+		s.writeServiceErr(w, err)
+		return
+	}
+	id := s.registerStream(combineCancel(ctxCancel, cancel))
+	go pumpStream(s, id, ch, func(ev service.WorkflowEvent) (api.StreamFrame, bool) {
+		s.wsBroadcast(api.WSMessage{Type: api.WSEventWorkflowUpdated, Payload: ev})
+		return api.StreamFrame{Frame: ev}, false
+	})
+	s.writeJSON(w, http.StatusAccepted, api.APIResponse{Success: true, Data: api.StreamStartResponse{StreamID: id}})
 }

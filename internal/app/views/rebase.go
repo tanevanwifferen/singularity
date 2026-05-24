@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	"github.com/charmbracelet/bubbletea"
@@ -19,17 +19,17 @@ import (
 // RebaseView provides visual interactive rebase planning and execution.
 type RebaseView struct {
 	viewBase
-	repo    *git.RepoInfo
+	repo    *service.RepoInfo
 	loading bool
 	err     error
 
 	// Branch selection state
 	showBranchSelect bool
-	branches         []git.BranchInfo
+	branches         []service.BranchInfo
 	branchCursor     int
 
 	// Rebase planning state
-	commits    []git.RebaseCommit
+	commits    []service.RebaseCommit
 	cursor     int
 	baseBranch string
 
@@ -77,7 +77,7 @@ func (v *RebaseView) Init() tea.Cmd {
 func (v *RebaseView) loadData() {
 	v.err = nil
 
-	repo, err := git.OpenRepo(v.repoPath)
+	repo, err := v.services.Repo.Open(v.ctx(), v.repoPath)
 	if err != nil {
 		v.err = fmt.Errorf("failed to open repo: %w", err)
 		v.loading = false
@@ -88,7 +88,7 @@ func (v *RebaseView) loadData() {
 
 	// If we have a base branch, load commits
 	if v.baseBranch != "" && v.repo.CurrentBranch != "" {
-		commits, err := git.GetRebasePlan(v.repoPath, v.baseBranch, v.repo.CurrentBranch)
+		commits, err := v.services.Rebase.Plan(v.ctx(), v.repoPath, v.baseBranch, v.repo.CurrentBranch)
 		if err != nil {
 			v.err = err
 			v.loading = false
@@ -301,7 +301,7 @@ func (v *RebaseView) handleContinueConfirm(msg tea.KeyMsg) tea.Cmd {
 
 // filterBranches filters out the current branch from the selection list.
 func (v *RebaseView) filterBranches() {
-	filtered := make([]git.BranchInfo, 0)
+	filtered := make([]service.BranchInfo, 0)
 	for _, b := range v.branches {
 		if b.Name != v.repo.CurrentBranch {
 			filtered = append(filtered, b)
@@ -318,22 +318,22 @@ func (v *RebaseView) cycleOperation() {
 
 	// Cycle: pick -> reword -> edit -> squash -> fixup -> drop -> pick
 	current := v.commits[v.cursor].Operation
-	var next git.RebaseOperation
+	var next service.RebaseOperation
 	switch current {
-	case git.RebasePick:
-		next = git.RebaseReword
-	case git.RebaseReword:
-		next = git.RebaseEdit
-	case git.RebaseEdit:
-		next = git.RebaseSquash
-	case git.RebaseSquash:
-		next = git.RebaseFixup
-	case git.RebaseFixup:
-		next = git.RebaseDrop
-	case git.RebaseDrop:
-		next = git.RebasePick
+	case service.RebasePick:
+		next = service.RebaseReword
+	case service.RebaseReword:
+		next = service.RebaseEdit
+	case service.RebaseEdit:
+		next = service.RebaseSquash
+	case service.RebaseSquash:
+		next = service.RebaseFixup
+	case service.RebaseFixup:
+		next = service.RebaseDrop
+	case service.RebaseDrop:
+		next = service.RebasePick
 	default:
-		next = git.RebasePick
+		next = service.RebasePick
 	}
 	v.commits[v.cursor].Operation = next
 }
@@ -362,7 +362,7 @@ func (v *RebaseView) moveCommitDown() {
 
 // isRebaseInProgress checks if a rebase is currently in progress.
 func (v *RebaseView) isRebaseInProgress() bool {
-	inProgress, _, err := git.GetRebaseStatus(v.repoPath)
+	inProgress, _, err := v.services.Rebase.Status(v.ctx(), v.repoPath)
 	if err != nil {
 		return false
 	}
@@ -383,7 +383,7 @@ func (v *RebaseView) executeRebase() tea.Cmd {
 		tea.Println(RebaseProgressMsg{Step: 0, Total: v.totalSteps, Message: "Starting rebase..."})
 
 		// Execute rebase using git rebase -i with piped input
-		todo := git.GenerateTodoList(v.commits)
+		todo := v.generateTodoList(v.commits)
 
 		// Use git rebase -i with --no-autosquash
 		cmd := exec.Command("git", "-C", v.repoPath, "rebase", "-i", "--no-autosquash", v.baseBranch)
@@ -477,7 +477,7 @@ func (v *RebaseView) continueRebase() tea.Cmd {
 	v.statusMessage = "Continuing rebase..."
 
 	return func() tea.Msg {
-		err := git.ContinueRebase(v.repoPath)
+		err := v.services.Rebase.Continue(v.ctx(), v.repoPath)
 		if err != nil {
 			output, _ := exec.Command("git", "-C", v.repoPath, "rebase", "--continue").CombinedOutput()
 			outputStr := string(output)
@@ -506,7 +506,7 @@ func (v *RebaseView) skipRebase() tea.Cmd {
 	v.statusMessage = "Skipping conflicting commit..."
 
 	return func() tea.Msg {
-		err := git.SkipRebase(v.repoPath)
+		err := v.services.Rebase.Skip(v.ctx(), v.repoPath)
 		if err != nil {
 			output, _ := exec.Command("git", "-C", v.repoPath, "rebase", "--skip").CombinedOutput()
 			outputStr := string(output)
@@ -536,7 +536,7 @@ func (v *RebaseView) abortRebase() tea.Cmd {
 	v.hasConflict = false
 
 	return func() tea.Msg {
-		err := git.AbortRebase(v.repoPath)
+		err := v.services.Rebase.Abort(v.ctx(), v.repoPath)
 		if err != nil {
 			tea.Println(RebaseOutputMsg{Output: fmt.Sprintf("Failed to abort: %v", err)})
 			return RebaseAbortMsg{Success: false, Error: err}
@@ -548,23 +548,23 @@ func (v *RebaseView) abortRebase() tea.Cmd {
 }
 
 // renderCommitItem renders a single commit item in the list.
-func (v *RebaseView) renderCommitItem(commit git.RebaseCommit, index int, selected bool) string {
+func (v *RebaseView) renderCommitItem(commit service.RebaseCommit, index int, selected bool) string {
 	th := theme.GetTheme()
 
 	// Determine operation color
 	opStyle := th.StatsStyle
 	switch commit.Operation {
-	case git.RebasePick:
+	case service.RebasePick:
 		opStyle = th.DashboardAccentStyle // green
-	case git.RebaseReword:
+	case service.RebaseReword:
 		opStyle = th.InfoStyle // blue
-	case git.RebaseEdit:
+	case service.RebaseEdit:
 		opStyle = th.WarningStyle // yellow
-	case git.RebaseSquash:
+	case service.RebaseSquash:
 		opStyle = th.DashboardErrorStyle // red
-	case git.RebaseFixup:
+	case service.RebaseFixup:
 		opStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("227")) // gold
-	case git.RebaseDrop:
+	case service.RebaseDrop:
 		opStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Strikethrough(true) // gray strikethrough
 	}
 
@@ -616,17 +616,17 @@ func (v *RebaseView) renderTodoList() string {
 		// Operation badge with color
 		opStyle := th.StatsStyle
 		switch commit.Operation {
-		case git.RebasePick:
+		case service.RebasePick:
 			opStyle = th.DashboardAccentStyle
-		case git.RebaseReword:
+		case service.RebaseReword:
 			opStyle = th.InfoStyle
-		case git.RebaseEdit:
+		case service.RebaseEdit:
 			opStyle = th.WarningStyle
-		case git.RebaseSquash:
+		case service.RebaseSquash:
 			opStyle = th.DashboardErrorStyle
-		case git.RebaseFixup:
+		case service.RebaseFixup:
 			opStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("227"))
-		case git.RebaseDrop:
+		case service.RebaseDrop:
 			opStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Strikethrough(true)
 		}
 

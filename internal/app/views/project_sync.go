@@ -7,8 +7,7 @@ import (
 	"time"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
-	"gitlab.com/tanevanwifferen1/singularity/internal/project"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -36,7 +35,7 @@ type projectSyncStatusMsg struct {
 type projectSyncRepoStatus struct {
 	name      string
 	path      string
-	status    *git.UpstreamStatus
+	status    *service.UpstreamStatus
 	lastFetch time.Time
 }
 
@@ -49,7 +48,7 @@ type projectSyncStepMsg struct {
 // ProjectSyncView handles sync operations across all repos in a project.
 type ProjectSyncView struct {
 	viewBase
-	proj *project.Project
+	proj *service.Project
 
 	// Per-repo status
 	repoStatuses []projectSyncRepoStatus
@@ -75,7 +74,7 @@ func (v *ProjectSyncView) syncMaxLines() int {
 }
 
 // NewProjectSyncView creates a new project sync view.
-func NewProjectSyncView(proj *project.Project) *ProjectSyncView {
+func NewProjectSyncView(proj *service.Project) *ProjectSyncView {
 	return &ProjectSyncView{
 		viewBase:      viewBase{width: 80, height: 24},
 		proj:          proj,
@@ -104,16 +103,16 @@ func (v *ProjectSyncView) loadStatuses() {
 
 	for i, repo := range v.proj.Repos {
 		wg.Add(1)
-		go func(idx int, r *project.Repo) {
+		go func(idx int, r *service.Repo) {
 			defer wg.Done()
 			s := projectSyncRepoStatus{
 				name: r.Name,
 				path: r.Path,
 			}
-			if status, err := git.GetUpstreamStatus(r.Path); err == nil {
+			if status, err := v.services.Sync.UpstreamStatus(v.ctx(), r.Path); err == nil {
 				s.status = status
 			}
-			if t, err := git.GetLastFetchTime(r.Path); err == nil {
+			if t, err := v.services.Sync.LastFetchTime(v.ctx(), r.Path); err == nil {
 				s.lastFetch = t
 			}
 			mu.Lock()
@@ -248,14 +247,14 @@ func (v *ProjectSyncView) startBatchOp(op SyncOperation) tea.Cmd {
 }
 
 // runOpOnAllRepos executes a single git operation on all repos concurrently.
-func (v *ProjectSyncView) runOpOnAllRepos(op SyncOperation, repos []*project.Repo) []projectSyncRepoResult {
+func (v *ProjectSyncView) runOpOnAllRepos(op SyncOperation, repos []*service.Repo) []projectSyncRepoResult {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	results := make([]projectSyncRepoResult, len(repos))
 
 	for i, repo := range repos {
 		wg.Add(1)
-		go func(idx int, r *project.Repo) {
+		go func(idx int, r *service.Repo) {
 			defer wg.Done()
 			res := projectSyncRepoResult{
 				repoName: r.Name,
@@ -267,15 +266,15 @@ func (v *ProjectSyncView) runOpOnAllRepos(op SyncOperation, repos []*project.Rep
 
 			switch op {
 			case SyncOpFetch:
-				output, err = git.Fetch(r.Path, "")
+				output, err = v.fetchSync(r.Path, "")
 			case SyncOpPull:
-				output, err = git.Pull(r.Path)
+				output, err = v.pullSync(r.Path)
 			case SyncOpPush:
-				output, err = git.Push(r.Path, false)
+				output, err = v.pushSync(r.Path, false)
 			case SyncOpForcePush:
-				output, err = git.Push(r.Path, true)
+				output, err = v.pushSync(r.Path, true)
 			case SyncOpRebase:
-				output, err = git.PullRebase(r.Path)
+				output, err = v.pullRebaseSync(r.Path)
 			}
 
 			res.output = output
@@ -356,16 +355,16 @@ func (v *ProjectSyncView) refreshStatusCmd() tea.Cmd {
 
 		for i, repo := range v.proj.Repos {
 			wg.Add(1)
-			go func(idx int, r *project.Repo) {
+			go func(idx int, r *service.Repo) {
 				defer wg.Done()
 				s := projectSyncRepoStatus{
 					name: r.Name,
 					path: r.Path,
 				}
-				if status, err := git.GetUpstreamStatus(r.Path); err == nil {
+				if status, err := v.services.Sync.UpstreamStatus(v.ctx(), r.Path); err == nil {
 					s.status = status
 				}
-				if t, err := git.GetLastFetchTime(r.Path); err == nil {
+				if t, err := v.services.Sync.LastFetchTime(v.ctx(), r.Path); err == nil {
 					s.lastFetch = t
 				}
 				mu.Lock()

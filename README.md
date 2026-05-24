@@ -7,15 +7,48 @@ A TUI-based git operations center built in Go with a server-client architecture.
 ```bash
 make build && make install
 
-# Single repo — open the current directory
+# Start the TUI. Auto-spawns a local daemon on the default unix socket
+# if one isn't already running.
 singularity
 
-# Single repo — explicit path
-singularity --repo ~/code/my-project
-
-# Multi-repo project mode
-singularity --project-config ~/.config/singularity/projects.json
+# Connect to an explicit endpoint
+singularity --server unix:///home/me/.config/singularity/daemon.sock
+singularity --server http://rack:8420
 ```
+
+## Daemon
+
+Singularity runs as a long-lived daemon (`singularityd`) that owns the
+agent engine, project loader, and all git state. The TUI is a thin
+client over HTTP+WebSocket.
+
+```bash
+# Run the daemon in the foreground (systemd / debug)
+singularity daemon
+
+# Detach into background — exits 0 once the socket is listening
+singularity daemon --detach
+
+# Status: PID, socket, uptime, API health
+singularity daemon status
+
+# Graceful shutdown (SIGTERM, then SIGKILL after 10s)
+singularity daemon stop
+
+# One-time setup: write a token + config template
+singularity daemon init
+```
+
+**Default socket**: `$XDG_CONFIG_HOME/singularity/daemon.sock` on Linux,
+`~/Library/Application Support/singularity/daemon.sock` on macOS. Override
+the whole state directory with `SINGULARITY_HOME=/custom/path`.
+
+**Listen overrides**: `singularity daemon --listen tcp://0.0.0.0:8420`
+binds TCP instead of a unix socket. See
+[docs/design/DAEMON-LIFECYCLE.md](docs/design/DAEMON-LIFECYCLE.md).
+
+See `singularity project init` / `singularity project generate-config <dir>`
+for the project config helpers (previously `--init` / `--generate-config-from-dir`).
 
 ## Core Features
 
@@ -68,19 +101,29 @@ A built-in Jira client (`g,j` in the TUI) connects to Jira Cloud or Server/Data 
 - **Dual auth** — email + API token for Cloud, PAT for Server/Data Center
 - **REST API v2/v3** — supports both Jira API versions
 
-### Server-Client Architecture
+### Daemon / TUI Architecture
 
-The app runs in four modes, from local single-user to remote multi-client:
+Singularity is split into a long-lived daemon (`singularity daemon`) that
+owns all git, engine, and project state, and a thin bubbletea TUI client
+(`singularity`) that talks to the daemon over HTTP + WebSocket. The TUI
+auto-spawns a daemon on the default unix socket when one isn't running.
 
-| Flag | Mode | Description |
-|------|------|-------------|
-| *(none)* | Repo | TUI for the current directory |
-| `--repo <path>` | Repo | TUI for a specific repository |
-| `--project-config <path>` | Project | Multi-repo dashboard |
-| `--server` | Server | Headless REST + WebSocket daemon on `localhost:8080` |
-| `--client <url>` | Client | TUI connected to a remote server |
+| Invocation | Description |
+|------------|-------------|
+| `singularity` | TUI; auto-spawns a local daemon on the default unix socket if needed |
+| `singularity --server unix:///path/to/sock` | TUI against an explicit unix-socket endpoint |
+| `singularity --server http://host:port` | TUI against a TCP daemon (requires `SINGULARITY_TOKEN` or `~/.config/singularity/token`) |
+| `singularity --repo <path>` | TUI with a single-repo override |
+| `singularity daemon` | Run the daemon in the foreground (systemd, debug) |
+| `singularity daemon --listen tcp://host:port` | Run the daemon bound to TCP (requires a token from `daemon init`) |
 
-The server exposes a full REST API for repo operations, branch management, commit message generation, MR creation, and project coordination. A WebSocket channel pushes real-time events (branch updates, pipeline status, agent output) to connected clients. Both local and remote TUI modes use the same API surface — in local mode, the server runs in-process.
+The daemon exposes a full REST + WebSocket API for repo operations, branch
+management, commit message generation, MR creation, project coordination,
+and agent orchestration. The WebSocket channel pushes real-time events
+(branch updates, pipeline status, agent output) to connected clients. TCP
+mode requires bearer-token authentication — generate the token with
+`singularity daemon init`. Unix-socket mode uses filesystem permissions
+(0600) and skips token auth.
 
 ## Views
 

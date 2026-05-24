@@ -8,7 +8,7 @@ import (
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	"github.com/charmbracelet/lipgloss"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 )
 
 // Layout manages the shared TUI layout structure.
@@ -131,7 +131,7 @@ type RepoSelector struct {
 
 // RenderStatusBar renders the status bar at the bottom of the screen.
 // projectName is an optional fallback displayed when repoInfo is nil (e.g. project mode).
-func (l *Layout) RenderStatusBar(repoInfo *git.RepoInfo, viewName string, projectName string, repoSel ...RepoSelector) string {
+func (l *Layout) RenderStatusBar(repoInfo *service.RepoInfo, viewName string, projectName string, repoSel ...RepoSelector) string {
 	// Build status bar content
 	var status string
 
@@ -214,7 +214,7 @@ type RenderOpts struct {
 }
 
 // Render renders the complete layout with the active view content.
-func (l *Layout) Render(router *Router, repoInfo *git.RepoInfo, activeViewContent string, opts ...RenderOpts) string {
+func (l *Layout) Render(router *Router, repoInfo *service.RepoInfo, activeViewContent string, opts ...RenderOpts) string {
 	th := theme.GetTheme()
 	l.rebuildStyles()
 

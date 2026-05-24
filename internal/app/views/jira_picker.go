@@ -1,12 +1,13 @@
 package views
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
 	"gitlab.com/tanevanwifferen1/singularity/internal/config"
-	"gitlab.com/tanevanwifferen1/singularity/internal/jira"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -14,29 +15,29 @@ import (
 
 // jiraPickerLoadedMsg carries search results back to the picker.
 type jiraPickerLoadedMsg struct {
-	issues []jira.Issue
+	issues []service.Issue
 	err    error
 }
 
 // JiraPickerState manages an inline Jira issue picker with search, list, and preview.
 // Embed this struct in views that need to pick a Jira ticket.
 type JiraPickerState struct {
-	cfg    config.JiraConfig
-	client *jira.Client
+	cfg      config.JiraConfig
+	services *service.Services
 
 	open    bool
 	loading bool
 	err     error
 
-	issues []jira.Issue
-	filter *components.Filter[jira.Issue]
+	issues []service.Issue
+	filter *components.Filter[service.Issue]
 
 	// JQL search input
 	searchInput string
 	searchMode  bool // typing a full JQL query
 
 	// Detail/preview pane for the selected issue
-	previewIssue *jira.Issue
+	previewIssue *service.Issue
 	descOffset   int // scroll offset for description in preview pane
 
 	width  int
@@ -44,20 +45,30 @@ type JiraPickerState struct {
 }
 
 // NewJiraPickerState creates a new picker state using the given Jira config.
-// Returns nil if Jira is not configured (no BaseURL).
+// Returns nil if Jira is not configured (no BaseURL). The owning view should
+// call SetServices on the picker before opening so the JiraService can
+// satisfy queries.
 func NewJiraPickerState(cfg config.JiraConfig) *JiraPickerState {
 	if cfg.BaseURL == "" {
 		return nil
 	}
 	p := &JiraPickerState{
 		cfg:    cfg,
-		client: jira.NewClient(cfg.BaseURL, cfg.Email, cfg.APIToken),
 		width:  80,
 		height: 24,
 	}
-	p.filter = components.NewFilter([]jira.Issue{}, p.renderItem)
+	p.filter = components.NewFilter([]service.Issue{}, p.renderItem)
 	p.filter.SetHeight(8)
 	return p
+}
+
+// SetServices wires the service container into the picker. Required before
+// Open() so the picker can resolve Jira queries via JiraService.
+func (p *JiraPickerState) SetServices(s *service.Services) {
+	if p == nil {
+		return
+	}
+	p.services = s
 }
 
 // IsAvailable returns true when the picker has a valid Jira config.
@@ -106,16 +117,20 @@ func (p *JiraPickerState) defaultJQL() string {
 }
 
 func (p *JiraPickerState) fetchCmd(query string) tea.Cmd {
-	client := p.client
+	svc := p.services
 	return func() tea.Msg {
+		if svc == nil {
+			return jiraPickerLoadedMsg{err: service.ErrUnavailable}
+		}
+		ctx := context.Background()
 		if issueKeyRe.MatchString(strings.TrimSpace(query)) {
-			issue, err := client.GetIssue(strings.TrimSpace(query))
+			issue, err := svc.Jira.GetIssue(ctx, strings.TrimSpace(query))
 			if err != nil {
 				return jiraPickerLoadedMsg{err: err}
 			}
-			return jiraPickerLoadedMsg{issues: []jira.Issue{*issue}}
+			return jiraPickerLoadedMsg{issues: []service.Issue{*issue}}
 		}
-		result, err := client.SearchIssues(query, 50)
+		result, err := svc.Jira.SearchIssues(ctx, query, 50)
 		if err != nil {
 			return jiraPickerLoadedMsg{err: err}
 		}
@@ -152,7 +167,7 @@ func (p *JiraPickerState) HandleMsg(msg tea.Msg) tea.Cmd {
 //   - done: true when the picker should close (cancelled or confirmed)
 //   - confirmed: true when the user confirmed a selection
 //   - selectedIssue: the confirmed issue (only valid when confirmed==true)
-func (p *JiraPickerState) HandleKey(msg tea.KeyMsg) (cmd tea.Cmd, done bool, confirmed bool, issue *jira.Issue) {
+func (p *JiraPickerState) HandleKey(msg tea.KeyMsg) (cmd tea.Cmd, done bool, confirmed bool, issue *service.Issue) {
 	if p == nil || !p.open {
 		return nil, false, false, nil
 	}
@@ -209,7 +224,7 @@ func (p *JiraPickerState) HandleKey(msg tea.KeyMsg) (cmd tea.Cmd, done bool, con
 	return nil, false, false, nil
 }
 
-func (p *JiraPickerState) handleSearchKey(msg tea.KeyMsg) (cmd tea.Cmd, done bool, confirmed bool, issue *jira.Issue) {
+func (p *JiraPickerState) handleSearchKey(msg tea.KeyMsg) (cmd tea.Cmd, done bool, confirmed bool, issue *service.Issue) {
 	switch msg.String() {
 	case "enter":
 		jql := p.searchInput
@@ -304,7 +319,7 @@ func (p *JiraPickerState) SetSize(width, height int) {
 }
 
 // renderItem renders a single issue row in the filter list.
-func (p *JiraPickerState) renderItem(issue jira.Issue, index int, selected bool) string {
+func (p *JiraPickerState) renderItem(issue service.Issue, index int, selected bool) string {
 	th := theme.GetTheme()
 
 	prefix := "  "

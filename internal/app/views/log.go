@@ -8,8 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"gitlab.com/tanevanwifferen1/singularity/internal/app/clipboard"
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	"github.com/charmbracelet/bubbletea"
@@ -32,7 +33,7 @@ type LogCommit struct {
 // LogView displays a scrollable commit log with filtering and detail view.
 type LogView struct {
 	viewBase
-	repo        *git.RepoInfo
+	repo        *service.RepoInfo
 	commits     []LogCommit
 	filter      *components.Filter[LogCommit]
 	loading     bool
@@ -52,7 +53,7 @@ type LogView struct {
 	detailCommit *LogCommit
 
 	// Detail sub-view: split-panel with file list + diff
-	detailFiles       []git.FileChange
+	detailFiles       []service.FileChange
 	detailFileIdx     int
 	detailFocusFiles  bool // true = file list focused, false = diff panel focused
 	detailDiffLines   []DiffLine
@@ -123,7 +124,7 @@ func (v *LogView) loadCommits(reset bool) {
 		return
 	}
 
-	repo, err := git.OpenRepo(v.repoPath)
+	repo, err := v.services.Repo.Open(v.ctx(), v.repoPath)
 	if err != nil {
 		v.err = fmt.Errorf("failed to open repo: %w", err)
 		v.loading = false
@@ -246,7 +247,7 @@ func (v *LogView) openCommitDetail(commit *LogCommit) {
 	v.detailLoadingDiff = false
 
 	// Load file list
-	files, err := git.GetCommitFiles(v.repoPath, commit.Hash)
+	files, err := v.services.Commit.Files(v.ctx(), v.repoPath, commit.Hash)
 	if err != nil {
 		v.detailFiles = nil
 		return
@@ -267,7 +268,7 @@ func (v *LogView) loadDetailFileDiff(idx int) {
 	}
 	v.detailLoadingDiff = true
 	file := v.detailFiles[idx]
-	raw, err := git.GetCommitFileDiff(v.repoPath, v.detailCommit.Hash, file.NewPath)
+	raw, err := v.services.Commit.FileDiff(v.ctx(), v.repoPath, v.detailCommit.Hash, file.NewPath)
 	if err != nil {
 		v.detailDiffRaw = ""
 		v.detailDiffLines = nil
@@ -296,7 +297,7 @@ func (v *LogView) openFullDiff(commit *LogCommit) {
 	v.fullDiffScroll = 0
 	v.showFullDiff = true
 
-	raw, err := git.GetCommitFullDiff(v.repoPath, commit.Hash)
+	raw, err := v.services.Commit.FullDiff(v.ctx(), v.repoPath, commit.Hash)
 	if err != nil {
 		v.fullDiffLines = nil
 	} else {
@@ -556,7 +557,7 @@ func (v *LogView) handleListKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if item, idx := v.filter.SelectedItem(); idx >= 0 {
 			v.operationErr = nil
 			v.operationSuccess = ""
-			if err := git.CopyToClipboard(item.Hash); err != nil {
+			if err := clipboard.Copy(item.Hash); err != nil {
 				v.operationErr = err
 			} else {
 				v.operationSuccess = fmt.Sprintf("Copied %s to clipboard", item.ShortHash)
@@ -572,7 +573,7 @@ func (v *LogView) handleListKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			v.cherryPickConfirm.Show("Cherry-pick Commit",
 				fmt.Sprintf("Cherry-pick commit %s onto current branch?", hash[:min(8, len(hash))]),
 				func() tea.Cmd {
-					if err := git.CherryPick(v.repoPath, hash); err != nil {
+					if err := v.services.Commit.CherryPick(v.ctx(), v.repoPath, hash); err != nil {
 						v.operationErr = err
 					} else {
 						v.operationSuccess = fmt.Sprintf("Cherry-picked %s", hash[:8])
@@ -759,7 +760,7 @@ func (v *LogView) showResetConfirmForMode(mode string) {
 		func() tea.Cmd {
 			v.resetHash = ""
 			v.resetMode = ""
-			if err := git.ResetToCommit(v.repoPath, hash, mode); err != nil {
+			if err := v.services.Commit.Reset(v.ctx(), v.repoPath, hash, mode); err != nil {
 				v.operationErr = err
 			} else {
 				v.operationSuccess = fmt.Sprintf("Reset --%s to %s", mode, hash[:8])
@@ -782,7 +783,7 @@ func (v *LogView) handleRewordEditor(msg tea.KeyMsg) tea.Cmd {
 			newMsg := v.rewordInput.Value
 			v.showRewordEditor = false
 			v.rewordInput.Clear()
-			if err := git.AmendCommitMessage(v.repoPath, newMsg); err != nil {
+			if err := v.services.Commit.AmendMessage(v.ctx(), v.repoPath, newMsg); err != nil {
 				v.operationErr = err
 			} else {
 				v.operationSuccess = "Commit message amended"

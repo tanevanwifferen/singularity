@@ -7,8 +7,7 @@ import (
 	"sync"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
-	"gitlab.com/tanevanwifferen1/singularity/internal/project"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -24,7 +23,7 @@ type projectDiffDoneMsg struct {
 type repoWorkdirResult struct {
 	RepoName string
 	RepoPath string
-	Diff     *git.WorkdirDiff
+	Diff     *service.WorkdirDiff
 	Err      error
 }
 
@@ -34,7 +33,7 @@ type projectDiffItem struct {
 	RepoName     string
 	RepoPath     string
 	// For file entries
-	WorkdirFile *git.WorkdirStatus
+	WorkdirFile *service.WorkdirStatus
 	// For repo headers: aggregate stats
 	TotalFiles int
 	TotalAdds  int
@@ -46,7 +45,7 @@ type projectDiffItem struct {
 type ProjectDiffView struct {
 	viewBase
 	diffNavHelper
-	proj    *project.Project
+	proj    *service.Project
 	loading bool
 	err     error
 
@@ -57,7 +56,7 @@ type ProjectDiffView struct {
 }
 
 // NewProjectDiffView creates a new project diff view.
-func NewProjectDiffView(proj *project.Project) *ProjectDiffView {
+func NewProjectDiffView(proj *service.Project) *ProjectDiffView {
 	return &ProjectDiffView{
 		viewBase: viewBase{width: 120, height: 30},
 		proj:     proj,
@@ -65,7 +64,7 @@ func NewProjectDiffView(proj *project.Project) *ProjectDiffView {
 }
 
 // SetProject updates the project reference and resets state.
-func (v *ProjectDiffView) SetProject(proj *project.Project) {
+func (v *ProjectDiffView) SetProject(proj *service.Project) {
 	v.proj = proj
 	v.reset()
 }
@@ -98,9 +97,9 @@ func (v *ProjectDiffView) Init() tea.Cmd {
 
 		for _, repo := range proj.Repos {
 			wg.Add(1)
-			go func(r *project.Repo) {
+			go func(r *service.Repo) {
 				defer wg.Done()
-				diff, err := git.GetWorkdirStatus(r.Path)
+				diff, err := v.services.Diff.WorkdirStatus(v.ctx(), r.Path)
 				mu.Lock()
 				results[r.Name] = &repoWorkdirResult{
 					RepoName: r.Name,
@@ -258,8 +257,8 @@ func (v *ProjectDiffView) loadSelectedFileDiff() {
 	}
 
 	f := item.WorkdirFile
-	stagedDiff, _ := git.GetStagedFileDiff(item.RepoPath, f.Path)
-	unstagedDiff, _ := git.GetUnstagedFileDiff(item.RepoPath, f.Path)
+	stagedDiff, _ := v.services.Diff.StagedFileDiff(v.ctx(), item.RepoPath, f.Path)
+	unstagedDiff, _ := v.services.Diff.UnstagedFileDiff(v.ctx(), item.RepoPath, f.Path)
 
 	var parts []string
 	if stagedDiff != "" {

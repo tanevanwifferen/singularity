@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	"github.com/charmbracelet/bubbletea"
@@ -16,9 +16,9 @@ import (
 // PipelineView displays CI/CD pipeline status for branches.
 type PipelineView struct {
 	viewBase
-	repo      *git.RepoInfo
-	branches  []git.BranchInfo
-	pipelines map[string]*git.PipelineInfo
+	repo      *service.RepoInfo
+	branches  []service.BranchInfo
+	pipelines map[string]*service.PipelineInfo
 	loading   bool
 	err       error
 
@@ -60,7 +60,7 @@ func (v *PipelineView) Init() tea.Cmd {
 func (v *PipelineView) loadData() {
 	v.err = nil
 
-	repo, err := git.OpenRepo(v.repoPath)
+	repo, err := v.services.Repo.Open(v.ctx(), v.repoPath)
 	if err != nil {
 		v.err = fmt.Errorf("failed to open repo: %w", err)
 		v.loading = false
@@ -70,7 +70,7 @@ func (v *PipelineView) loadData() {
 	v.branches = repo.Branches
 
 	// Get pipeline statuses for all branches
-	v.pipelines, err = git.GetBranchPipelineStatuses(v.repoPath, v.branches)
+	v.pipelines, err = v.services.Pipeline.Statuses(v.ctx(), v.repoPath, v.branches)
 	if err != nil {
 		// Don't fail completely on pipeline errors
 		v.err = fmt.Errorf("pipeline fetch error: %v", err)
@@ -166,11 +166,11 @@ func (v *PipelineView) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if v.selectedIdx < len(v.branches) {
 			branch := v.branches[v.selectedIdx].Name
 			info, ok := v.pipelines[branch]
-			if ok && info != nil && info.Status == git.PipelineFailed {
+			if ok && info != nil && info.Status == service.PipelineFailed {
 				v.retryBranch = branch
 				v.showRetryBusy = true
 				return v, func() tea.Msg {
-					err := git.RetryPipeline(v.repoPath, branch)
+					err := v.services.Pipeline.Retry(v.ctx(), v.repoPath, branch)
 					return RetryDoneMsg{Branch: branch, Error: err}
 				}
 			}
@@ -199,7 +199,7 @@ func (v *PipelineView) View() string {
 	s.WriteString("\n\n")
 
 	// Forge info
-	auth, _ := git.DetectForgeAuth()
+	auth, _ := v.services.Forge.DetectAuth(v.ctx())
 	if auth != nil && auth.Valid {
 		s.WriteString(th.StatsStyle.Render(fmt.Sprintf(" Forge: %s ", auth.Type.String())))
 	} else {
@@ -217,7 +217,7 @@ func (v *PipelineView) View() string {
 			th.DashboardAccentStyle.Render(v.repo.CurrentBranch)))
 
 		if ok && currentInfo != nil && currentInfo.HasPipeline {
-			statusStr := git.FormatPipelineStatus(currentInfo.Status)
+			statusStr := service.FormatPipelineStatus(currentInfo.Status)
 			statusColor := v.getStatusStyle(currentInfo.Status)
 			s.WriteString(fmt.Sprintf(" %s %s\n",
 				th.BranchStyle.Render("Status:"),
@@ -293,7 +293,7 @@ func (v *PipelineView) View() string {
 }
 
 // renderBranchItem renders a single branch item in the list.
-func (v *PipelineView) renderBranchItem(branch git.BranchInfo) string {
+func (v *PipelineView) renderBranchItem(branch service.BranchInfo) string {
 	th := theme.GetTheme()
 	info, ok := v.pipelines[branch.Name]
 
@@ -301,7 +301,7 @@ func (v *PipelineView) renderBranchItem(branch git.BranchInfo) string {
 	var statusStyle lipgloss.Style
 
 	if ok && info != nil && info.HasPipeline {
-		statusStr = git.FormatPipelineStatus(info.Status)
+		statusStr = service.FormatPipelineStatus(info.Status)
 		statusStyle = v.getStatusStyle(info.Status)
 	} else {
 		statusStr = "○ no pipeline"
@@ -315,7 +315,7 @@ func (v *PipelineView) renderBranchItem(branch git.BranchInfo) string {
 }
 
 // renderSelectedBranch renders the selected branch item.
-func (v *PipelineView) renderSelectedBranch(branch git.BranchInfo) string {
+func (v *PipelineView) renderSelectedBranch(branch service.BranchInfo) string {
 	th := theme.GetTheme()
 	info, ok := v.pipelines[branch.Name]
 
@@ -323,7 +323,7 @@ func (v *PipelineView) renderSelectedBranch(branch git.BranchInfo) string {
 	var statusStyle lipgloss.Style
 
 	if ok && info != nil && info.HasPipeline {
-		statusStr = git.FormatPipelineStatus(info.Status)
+		statusStr = service.FormatPipelineStatus(info.Status)
 		statusStyle = v.getStatusStyle(info.Status)
 	} else {
 		statusStr = "○ no pipeline"
@@ -345,9 +345,9 @@ func (v *PipelineView) renderSelectedBranch(branch git.BranchInfo) string {
 }
 
 // renderRetryHint shows retry hint for failed pipelines.
-func (v *PipelineView) renderRetryHint(info *git.PipelineInfo) string {
+func (v *PipelineView) renderRetryHint(info *service.PipelineInfo) string {
 	th := theme.GetTheme()
-	if info != nil && info.Status == git.PipelineFailed {
+	if info != nil && info.Status == service.PipelineFailed {
 		return th.Help.Render(" [R]etry")
 	}
 	return ""
@@ -381,7 +381,7 @@ func (v *PipelineView) renderExpandedDetails() string {
 		th.StatsStyle.Render(pipeline.SHA[:minInt(7, len(pipeline.SHA))])))
 	s.WriteString(fmt.Sprintf(" %s %s\n",
 		th.BranchStyle.Render("Status:"),
-		v.getStatusStyle(pipeline.Status).Render(git.FormatPipelineStatus(pipeline.Status))))
+		v.getStatusStyle(pipeline.Status).Render(service.FormatPipelineStatus(pipeline.Status))))
 
 	if pipeline.Duration > 0 {
 		s.WriteString(fmt.Sprintf(" %s %s\n",
@@ -396,7 +396,7 @@ func (v *PipelineView) renderExpandedDetails() string {
 		s.WriteString(th.DashboardTitle.Render(" Jobs "))
 		s.WriteString("\n")
 		for _, job := range pipeline.Jobs {
-			statusStr := git.FormatPipelineStatus(job.Status)
+			statusStr := service.FormatPipelineStatus(job.Status)
 			statusStyle := v.getStatusStyle(job.Status)
 			s.WriteString(fmt.Sprintf("  %s %s %s\n",
 				v.getJobStatusIcon(job.Status),
@@ -409,22 +409,22 @@ func (v *PipelineView) renderExpandedDetails() string {
 }
 
 // getStatusIcon returns an icon for pipeline status.
-func (v *PipelineView) getStatusIcon(info *git.PipelineInfo) string {
+func (v *PipelineView) getStatusIcon(info *service.PipelineInfo) string {
 	if info == nil || !info.HasPipeline {
 		return "○"
 	}
 	switch info.Status {
-	case git.PipelineSuccess:
+	case service.PipelineSuccess:
 		return "✓"
-	case git.PipelineFailed:
+	case service.PipelineFailed:
 		return "✗"
-	case git.PipelineRunning:
+	case service.PipelineRunning:
 		return "●"
-	case git.PipelinePending:
+	case service.PipelinePending:
 		return "○"
-	case git.PipelineCanceled:
+	case service.PipelineCanceled:
 		return "⊘"
-	case git.PipelineSkipped:
+	case service.PipelineSkipped:
 		return "⊝"
 	default:
 		return "?"
@@ -432,19 +432,19 @@ func (v *PipelineView) getStatusIcon(info *git.PipelineInfo) string {
 }
 
 // getJobStatusIcon returns an icon for job status.
-func (v *PipelineView) getJobStatusIcon(status git.PipelineStatus) string {
+func (v *PipelineView) getJobStatusIcon(status service.PipelineStatus) string {
 	switch status {
-	case git.PipelineSuccess:
+	case service.PipelineSuccess:
 		return "✓"
-	case git.PipelineFailed:
+	case service.PipelineFailed:
 		return "✗"
-	case git.PipelineRunning:
+	case service.PipelineRunning:
 		return "●"
-	case git.PipelinePending:
+	case service.PipelinePending:
 		return "○"
-	case git.PipelineCanceled:
+	case service.PipelineCanceled:
 		return "⊘"
-	case git.PipelineSkipped:
+	case service.PipelineSkipped:
 		return "⊝"
 	default:
 		return "?"
@@ -452,16 +452,16 @@ func (v *PipelineView) getJobStatusIcon(status git.PipelineStatus) string {
 }
 
 // getStatusStyle returns the lipgloss style for a pipeline status.
-func (v *PipelineView) getStatusStyle(status git.PipelineStatus) lipgloss.Style {
+func (v *PipelineView) getStatusStyle(status service.PipelineStatus) lipgloss.Style {
 	th := theme.GetTheme()
 	switch status {
-	case git.PipelineSuccess:
+	case service.PipelineSuccess:
 		return lipgloss.NewStyle().Foreground(th.Info)
-	case git.PipelineFailed:
+	case service.PipelineFailed:
 		return lipgloss.NewStyle().Foreground(th.Error)
-	case git.PipelineRunning:
+	case service.PipelineRunning:
 		return lipgloss.NewStyle().Foreground(th.Warning)
-	case git.PipelinePending:
+	case service.PipelinePending:
 		return lipgloss.NewStyle().Foreground(th.MutedText)
 	default:
 		return th.Help

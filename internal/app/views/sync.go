@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -59,7 +59,7 @@ type (
 		err    string
 	}
 	syncStatusRefreshedMsg struct {
-		status *git.UpstreamStatus
+		status *service.UpstreamStatus
 	}
 	// syncStepMsg drives the multi-step sync flow.
 	syncStepMsg struct {
@@ -74,7 +74,7 @@ type SyncView struct {
 	loading bool
 
 	// Upstream status
-	status    *git.UpstreamStatus
+	status    *service.UpstreamStatus
 	lastFetch time.Time
 
 	// Operation state
@@ -114,7 +114,7 @@ func (v *SyncView) Init() tea.Cmd {
 }
 
 func (v *SyncView) loadStatus() {
-	status, err := git.GetUpstreamStatus(v.repoPath)
+	status, err := v.services.Sync.UpstreamStatus(v.ctx(), v.repoPath)
 	if err != nil {
 		v.err = err
 		v.loading = false
@@ -122,7 +122,7 @@ func (v *SyncView) loadStatus() {
 	}
 	v.status = status
 
-	if t, err := git.GetLastFetchTime(v.repoPath); err == nil {
+	if t, err := v.services.Sync.LastFetchTime(v.ctx(), v.repoPath); err == nil {
 		v.lastFetch = t
 	}
 
@@ -164,7 +164,7 @@ func (v *SyncView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.status != nil {
 			v.status = msg.status
 		}
-		if t, err := git.GetLastFetchTime(v.repoPath); err == nil {
+		if t, err := v.services.Sync.LastFetchTime(v.ctx(), v.repoPath); err == nil {
 			v.lastFetch = t
 		}
 
@@ -250,7 +250,7 @@ func (v *SyncView) startOp(op SyncOperation) tea.Cmd {
 	switch op {
 	case SyncOpFetch:
 		return func() tea.Msg {
-			output, err := git.Fetch(v.repoPath, "")
+			output, err := v.fetchSync(v.repoPath, "")
 			if err != nil {
 				return syncErrorMsg{op: op, output: output, err: err.Error()}
 			}
@@ -258,7 +258,7 @@ func (v *SyncView) startOp(op SyncOperation) tea.Cmd {
 		}
 	case SyncOpPull:
 		return func() tea.Msg {
-			output, err := git.Pull(v.repoPath)
+			output, err := v.pullSync(v.repoPath)
 			if err != nil {
 				return syncErrorMsg{op: op, output: output, err: err.Error()}
 			}
@@ -266,7 +266,7 @@ func (v *SyncView) startOp(op SyncOperation) tea.Cmd {
 		}
 	case SyncOpPush:
 		return func() tea.Msg {
-			output, err := git.Push(v.repoPath, false)
+			output, err := v.pushSync(v.repoPath, false)
 			if err != nil {
 				return syncErrorMsg{op: op, output: output, err: err.Error()}
 			}
@@ -274,7 +274,7 @@ func (v *SyncView) startOp(op SyncOperation) tea.Cmd {
 		}
 	case SyncOpForcePush:
 		return func() tea.Msg {
-			output, err := git.Push(v.repoPath, true)
+			output, err := v.pushSync(v.repoPath, true)
 			if err != nil {
 				return syncErrorMsg{op: op, output: output, err: err.Error()}
 			}
@@ -282,7 +282,7 @@ func (v *SyncView) startOp(op SyncOperation) tea.Cmd {
 		}
 	case SyncOpRebase:
 		return func() tea.Msg {
-			output, err := git.PullRebase(v.repoPath)
+			output, err := v.pullRebaseSync(v.repoPath)
 			if err != nil {
 				return syncErrorMsg{op: op, output: output, err: err.Error()}
 			}
@@ -295,7 +295,7 @@ func (v *SyncView) startOp(op SyncOperation) tea.Cmd {
 		}
 	case SyncOpSetUpstream:
 		return func() tea.Msg {
-			output, err := git.SetUpstreamAndPush(v.repoPath, "origin")
+			output, err := v.setUpstreamAndPushSync(v.repoPath, "origin")
 			if err != nil {
 				return syncErrorMsg{op: SyncOpSetUpstream, output: output, err: err.Error()}
 			}
@@ -311,7 +311,7 @@ func (v *SyncView) handleSyncStep(msg syncStepMsg) (tea.Model, tea.Cmd) {
 		// Step 1: Fetch
 		v.addLog(SyncOpSync, "info", "Step 1/3: Fetching...")
 		return v, func() tea.Msg {
-			output, err := git.Fetch(v.repoPath, "")
+			output, err := v.fetchSync(v.repoPath, "")
 			if err != nil {
 				return syncErrorMsg{op: SyncOpSync, output: output, err: "fetch step failed: " + err.Error()}
 			}
@@ -324,7 +324,7 @@ func (v *SyncView) handleSyncStep(msg syncStepMsg) (tea.Model, tea.Cmd) {
 		}
 		v.addLog(SyncOpSync, "info", "Step 2/3: Rebasing...")
 		return v, func() tea.Msg {
-			output, err := git.PullRebase(v.repoPath)
+			output, err := v.pullRebaseSync(v.repoPath)
 			if err != nil {
 				return syncErrorMsg{op: SyncOpSync, output: output, err: "rebase step failed: " + err.Error()}
 			}
@@ -337,7 +337,7 @@ func (v *SyncView) handleSyncStep(msg syncStepMsg) (tea.Model, tea.Cmd) {
 		}
 		v.addLog(SyncOpSync, "info", "Step 3/3: Pushing...")
 		return v, func() tea.Msg {
-			output, err := git.Push(v.repoPath, false)
+			output, err := v.pushSync(v.repoPath, false)
 			if err != nil {
 				return syncErrorMsg{op: SyncOpSync, output: output, err: "push step failed: " + err.Error()}
 			}
@@ -349,7 +349,7 @@ func (v *SyncView) handleSyncStep(msg syncStepMsg) (tea.Model, tea.Cmd) {
 
 func (v *SyncView) refreshStatusCmd() tea.Cmd {
 	return func() tea.Msg {
-		status, _ := git.GetUpstreamStatus(v.repoPath)
+		status, _ := v.services.Sync.UpstreamStatus(v.ctx(), v.repoPath)
 		return syncStatusRefreshedMsg{status: status}
 	}
 }

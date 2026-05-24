@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	"github.com/charmbracelet/bubbletea"
@@ -15,8 +15,8 @@ import (
 // PRView provides a TUI interface for creating Pull Requests (GitHub) and Merge Requests (GitLab).
 type PRView struct {
 	viewBase
-	repo     *git.RepoInfo
-	branches []git.BranchInfo
+	repo     *service.RepoInfo
+	branches []service.BranchInfo
 
 	// Branch selection state
 	sourceBranchIdx     int
@@ -24,7 +24,7 @@ type PRView struct {
 	pendingSourceBranch string // pre-select this branch as source on next load
 
 	// Forge detection
-	forgeAuth *git.ForgeAuth
+	forgeAuth *service.ForgeAuth
 
 	// PR/MR fields
 	title       string
@@ -39,7 +39,7 @@ type PRView struct {
 	// UI state
 	loading     bool
 	isCreating  bool
-	createdMR   *git.MergeRequest
+	createdMR   *service.MergeRequest
 	errorMsg    string
 	successMsg  string
 	showSuccess bool
@@ -80,7 +80,7 @@ func (v *PRView) loadData() {
 	v.errorMsg = ""
 
 	// Open repository
-	repo, err := git.OpenRepo(v.repoPath)
+	repo, err := v.services.Repo.Open(v.ctx(), v.repoPath)
 	if err != nil {
 		v.errorMsg = fmt.Sprintf("Failed to open repo: %v", err)
 		v.loading = false
@@ -90,7 +90,7 @@ func (v *PRView) loadData() {
 	v.branches = repo.Branches
 
 	// Detect forge authentication
-	auth, err := git.DetectForgeAuth()
+	auth, err := v.services.Forge.DetectAuth(v.ctx())
 	if err != nil {
 		v.forgeAuth = nil
 	} else {
@@ -157,7 +157,7 @@ func (v *PRView) generateTitle() {
 	sourceBranch := v.branches[v.sourceBranchIdx].Name
 	targetBranch := v.branches[v.targetBranchIdx].Name
 
-	title, err := git.GenerateMRTitle(v.repoPath, sourceBranch, targetBranch)
+	title, err := v.services.MR.GenerateTitle(v.ctx(), v.repoPath, sourceBranch, targetBranch)
 	if err != nil {
 		v.title = fmt.Sprintf("Merge %s into %s", sourceBranch, targetBranch)
 	} else {
@@ -176,7 +176,7 @@ func (v *PRView) generateDescription() {
 	sourceBranch := v.branches[v.sourceBranchIdx].Name
 	targetBranch := v.branches[v.targetBranchIdx].Name
 
-	desc, err := git.GenerateMRDescription(v.repoPath, sourceBranch, targetBranch)
+	desc, err := v.services.MR.GenerateDescription(v.ctx(), v.repoPath, sourceBranch, targetBranch)
 	if err != nil || desc == "" {
 		v.description = ""
 		v.descLines = []string{""}
@@ -534,10 +534,10 @@ func (v *PRView) createPR() {
 	v.errorMsg = ""
 
 	go func() {
-		mr, err := git.CreateMR(v.repoPath, sourceBranch, targetBranch, v.title, v.description, nil)
+		mr, err := v.services.MR.Create(v.ctx(), v.repoPath, sourceBranch, targetBranch, v.title, v.description, nil)
 		if err != nil {
 			v.isCreating = false
-			if errors.Is(err, git.ErrMRAlreadyExists) {
+			if errors.Is(err, service.ErrMRAlreadyExists) {
 				v.successMsg = "A merge request already exists for this branch."
 				v.showSuccess = true
 			} else {

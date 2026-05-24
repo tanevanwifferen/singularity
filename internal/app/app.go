@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,9 +9,7 @@ import (
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/views"
 	"gitlab.com/tanevanwifferen1/singularity/internal/config"
-	"gitlab.com/tanevanwifferen1/singularity/internal/engine"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
-	"gitlab.com/tanevanwifferen1/singularity/internal/project"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -26,37 +25,35 @@ type Model struct {
 	quitConfirm     components.ConfirmDialog
 	repoPath        string
 	projectPath     string
-	repoInfo        *git.RepoInfo
-	proj            *project.Project
-	engine          *engine.Engine
+	repoInfo        *service.RepoInfo
+	proj            *service.Project
+	services        *service.Services
 	statusMsg       string
 	errorMsg        string
 	router          *Router
 	layout          *Layout
-	wsClient        *WSClient
-	wsStatus        WSConnectionStatus
+	connStatus      ConnectionStatus
 	projectMode     bool
 	activeRepoIdx   int // index of active repo in project (for [ / ] cycling)
 	cfg             *config.Config
+
+	// agentCancel cancels the goroutine subscribed to AgentService events.
+	agentCancel context.CancelFunc
 }
 
-// New creates a new app model
-func New() *Model {
+// New creates a new app model. Services may be nil for tests that don't
+// exercise the service layer; production callers always pass non-nil from
+// cmd/singularity/main.go (local.New or remote.New).
+func New(services ...*service.Services) *Model {
 	m := &Model{layout: NewLayout()}
+	if len(services) > 0 {
+		m.services = services[0]
+	}
 	cfg, err := config.LoadDefaultConfig()
 	if err != nil {
 		m.errorMsg = fmt.Sprintf("config load: %v", err)
 	}
 	m.cfg = cfg
-	return m
-}
-
-// NewWithWS creates a new app model with WebSocket client
-func NewWithWS(wsURL string) *Model {
-	m := New()
-	if wsURL != "" {
-		m.SetWSClient(wsURL)
-	}
 	return m
 }
 
@@ -74,52 +71,24 @@ func (m *Model) SetProjectPath(path string) {
 	m.loadProject()
 }
 
+// SetProject installs a pre-loaded project (set by main.go in local mode
+// where the daemon-side loader has already produced it).
+func (m *Model) SetProject(proj *service.Project) {
+	m.proj = proj
+	m.projectMode = proj != nil
+	if m.projectMode {
+		m.initProjectRouter()
+	}
+}
+
 // loadProject loads the project and initializes router with project views
 func (m *Model) loadProject() {
 	m.initProjectRouter()
 }
 
-// SetEngine sets the agent engine (for server mode)
-func (m *Model) SetEngine(eng *engine.Engine) {
-	m.engine = eng
-	if m.router != nil {
-		if agentView := m.getAgentView(); agentView != nil {
-			agentView.SetEngine(eng)
-		}
-		if wv := m.getWorkflowsView(); wv != nil {
-			wv.SetEngine(eng)
-		}
-	}
-}
-
-// SetWSClient configures the WebSocket client for receiving server events
-func (m *Model) SetWSClient(url string) {
-	if m.wsClient != nil {
-		m.wsClient.Disconnect()
-	}
-
-	m.wsClient = NewWSViewUpdater(url, m.repoPath)
-
-	// Register for connection status updates
-	statusCh := make(chan WSConnectionStatus, 5)
-	m.wsClient.SubscribeStatus(statusCh)
-
-	// Goroutine to handle status updates
-	go func() {
-		for status := range statusCh {
-			// Post to tea message queue via command
-			_ = status // Status is already tracked via WSConnectionMsg in Update
-		}
-	}()
-
-	// Start connection
-	go func() {
-		if err := m.wsClient.Connect(); err != nil {
-			m.errorMsg = fmt.Sprintf("WebSocket connection failed: %v", err)
-		}
-	}()
-
-	// Register handlers for WebSocket events - these are already registered in NewWSViewUpdater
+// SetServices wires the Services container after construction.
+func (m *Model) SetServices(s *service.Services) {
+	m.services = s
 }
 
 // getProjectView returns the ProjectView from the router if it exists
@@ -170,9 +139,14 @@ func (m *Model) loadRepo() {
 		m.repoPath = cwd
 	}
 
+	if m.services == nil {
+		m.errorMsg = "services not configured"
+		return
+	}
+
 	// Find repo if not already a git repo
 	if _, err := os.Stat(filepath.Join(m.repoPath, ".git")); os.IsNotExist(err) {
-		repoPath, err := git.FindRepo(m.repoPath)
+		repoPath, err := m.services.Repo.Find(context.TODO(), m.repoPath)
 		if err != nil {
 			m.errorMsg = fmt.Sprintf("No git repository found: %v", err)
 			return
@@ -181,7 +155,7 @@ func (m *Model) loadRepo() {
 	}
 
 	// Load repo info
-	repo, err := git.OpenRepo(m.repoPath)
+	repo, err := m.services.Repo.Open(context.TODO(), m.repoPath)
 	if err != nil {
 		m.errorMsg = fmt.Sprintf("Failed to open repository: %v", err)
 		return
@@ -237,7 +211,7 @@ func (m *Model) registerCommonViews(router *Router, repoPath string, startFKey i
 	if m.proj != nil {
 		contextFiles = m.proj.ContextFiles
 	}
-	agentView := views.NewAgentView(repoPath, m.engine, contextFiles)
+	agentView := views.NewAgentView(repoPath, contextFiles)
 	router.Register("Agents", agentView, fkey(startFKey+3))
 	if m.cfg != nil {
 		agentView.SetJiraConfig(m.cfg.Jira)
@@ -263,7 +237,6 @@ func (m *Model) registerCommonViews(router *Router, repoPath string, startFKey i
 	router.Register("Rebase", rebaseView)
 
 	worktreeView := views.NewWorktreeView(repoPath)
-	worktreeView.SetEngine(m.engine)
 	router.Register("Worktrees", worktreeView)
 
 	pipelineView := views.NewPipelineView(repoPath)
@@ -283,12 +256,6 @@ func (m *Model) initRouter() {
 	router.viewKeys["Overview"] = "f1"
 	router.keyToView["f1"] = "Overview"
 
-	if m.engine == nil {
-		m.engine = engine.New(10)
-	}
-	m.engine.SetSoundConfig(m.cfg.Sound)
-	m.engine.PruneStaleWorktrees(m.repoPath)
-
 	m.registerCommonViews(router, m.repoPath, 2)
 
 	// Build git submenu items
@@ -303,7 +270,6 @@ func (m *Model) initRouter() {
 	}
 	if m.cfg != nil && m.cfg.Jira.Enabled {
 		jiraView := views.NewJiraView(m.cfg.Jira)
-		jiraView.SetEngine(m.engine)
 		jiraView.SetRepoPath(m.repoPath)
 		router.Register("Jira", jiraView)
 		gitItems = append(gitItems, components.SubmenuItem{Key: "j", Label: "Jira Issues", ViewName: "Jira"})
@@ -312,6 +278,9 @@ func (m *Model) initRouter() {
 	router.RegisterSubmenu("g", "Git", gitItems)
 
 	m.router = router
+
+	// Wire services into every view that supports it.
+	m.router.SetAllServices(m.services)
 
 	// Wire Jira config to views that support the Jira picker
 	// (must happen after router is set so getAgentView() works)
@@ -330,46 +299,9 @@ func (m *Model) initRouter() {
 
 // initProjectRouter initializes the router with project-level views for multi-repo mode.
 func (m *Model) initProjectRouter() {
-	// Load project from path
-	if m.projectPath == "" {
-		m.projectPath = project.GetDefaultConfigPath()
-	}
-
-	// Try to load project config
-	loader, err := project.NewLoaderFromFile(m.projectPath)
-	if err != nil {
-		// No config file, try auto-discovery in current directory
-		// Create a project with all subdirectories that are git repos
-		m.statusMsg = "No project config found, using auto-discovery"
-		proj := m.discoverProject(m.projectPath)
-		if proj == nil {
-			m.errorMsg = "No git repositories found"
-			return
-		}
-		m.proj = proj
-	} else {
-		// Load the first project from config
-		keys := loader.ListProjectKeys()
-		if len(keys) == 0 {
-			m.errorMsg = "No projects in config"
-			return
-		}
-		proj, err := loader.LoadProject(keys[0])
-		if err != nil {
-			m.errorMsg = fmt.Sprintf("Failed to load project: %v", err)
-			return
-		}
-		m.proj = proj
-	}
-
-	if m.engine == nil {
-		m.engine = engine.New(10)
-	}
-	m.engine.SetSoundConfig(m.cfg.Sound)
-	if m.proj != nil {
-		for _, repo := range m.proj.Repos {
-			m.engine.PruneStaleWorktrees(repo.Path)
-		}
+	if m.proj == nil {
+		m.errorMsg = "no project loaded — main.go did not pass one"
+		return
 	}
 
 	// Create the project overview view as the first view (landing page)
@@ -381,7 +313,6 @@ func (m *Model) initProjectRouter() {
 
 	// Feature workflows view (multi-repo worktrees, push, MR, agents)
 	workflowsView := views.NewWorkflowsView(m.proj)
-	workflowsView.SetEngine(m.engine)
 	router.Register("Workflows", workflowsView, "f2")
 
 	// Workflow diff view (drill-down from Workflows, not a top-level tab)
@@ -401,8 +332,10 @@ func (m *Model) initProjectRouter() {
 	}
 
 	// Load repo info for the status bar
-	if repoInfo, err := git.OpenRepo(defaultRepoPath); err == nil {
-		m.repoInfo = repoInfo
+	if m.services != nil {
+		if repoInfo, err := m.services.Repo.Open(context.TODO(), defaultRepoPath); err == nil {
+			m.repoInfo = repoInfo
+		}
 	}
 
 	// Register shared single-repo views (F3-F7, after Workflows at F2)
@@ -432,7 +365,6 @@ func (m *Model) initProjectRouter() {
 	}
 	if m.cfg != nil && m.cfg.Jira.Enabled {
 		jiraView := views.NewJiraView(m.cfg.Jira)
-		jiraView.SetEngine(m.engine)
 		jiraView.SetProject(m.proj)
 		router.Register("Jira", jiraView)
 		projGitItems = append(projGitItems, components.SubmenuItem{Key: "j", Label: "Jira Issues", ViewName: "Jira"})
@@ -441,6 +373,9 @@ func (m *Model) initProjectRouter() {
 	router.RegisterSubmenu("g", "Git", projGitItems)
 
 	m.router = router
+
+	// Wire services into every view that supports it.
+	m.router.SetAllServices(m.services)
 
 	// Wire Jira config to views that support the Jira picker
 	if m.cfg != nil && m.cfg.Jira.BaseURL != "" {
@@ -459,50 +394,17 @@ func (m *Model) initProjectRouter() {
 	}
 }
 
-// discoverProject creates a project by auto-discovering git repos in a directory
-func (m *Model) discoverProject(dir string) *project.Project {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-
-	var repos []project.RepoDef
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		repoPath := filepath.Join(dir, entry.Name(), ".git")
-		if _, err := os.Stat(repoPath); err == nil {
-			// It's a git repo
-			repos = append(repos, project.RepoDef{
-				Name:          entry.Name(),
-				Path:          filepath.Join(dir, entry.Name()),
-				DefaultBranch: "main",
-			})
-		}
-	}
-
-	if len(repos) == 0 {
-		return nil
-	}
-
-	proj := project.NewProject(project.ProjectDef{
-		Name:  filepath.Base(dir),
-		Repos: repos,
-	})
-	proj.Refresh()
-	return proj
-}
-
 // switchToProjectRepo updates all single-repo views to point at the repo at the given index.
 func (m *Model) switchToProjectRepo(idx int) tea.Cmd {
 	repo := m.proj.Repos[idx]
 	m.router.SetAllRepoPath(repo.Path)
 
 	// Load repo info for the status bar
-	repoInfo, err := git.OpenRepo(repo.Path)
-	if err == nil {
-		m.repoInfo = repoInfo
+	if m.services != nil {
+		repoInfo, err := m.services.Repo.Open(context.TODO(), repo.Path)
+		if err == nil {
+			m.repoInfo = repoInfo
+		}
 	}
 
 	m.statusMsg = fmt.Sprintf("Switched to repo: %s", repo.Name)
@@ -544,11 +446,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case components.ConfirmResult:
 			if msg.ID == "quit" && msg.Confirmed {
 				m.quitting = true
-				if m.engine != nil {
-					m.engine.Shutdown()
-				}
-				if m.wsClient != nil {
-					m.wsClient.Disconnect()
+				if m.agentCancel != nil {
+					m.agentCancel()
 				}
 				return m, tea.Quit
 			}
@@ -599,8 +498,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case views.AgentUpdateMsg:
-		// Engine notified us of an agent state/output change.
-		// Run the refresh in a goroutine so glamour rendering doesn't block the event loop.
+		// Agent service notified us of an agent state/output change.
 		if av := m.getAgentView(); av != nil {
 			return m, func() tea.Msg {
 				av.LoadAgents()
@@ -608,9 +506,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
-	case WSConnectionMsg, WSRepoUpdateMsg, WSBranchUpdateMsg, WSPipelineUpdateMsg,
-		WSAgentOutputMsg, WSAgentEventMsg, WSProjectUpdateMsg:
-		return m.handleAppWSMsg(msg)
+	case ConnectionStatusMsg:
+		m.connStatus = msg.Status
+		if msg.Status.Connected {
+			m.statusMsg = fmt.Sprintf("Connected to %s", msg.Status.URL)
+		} else if msg.Status.Reconnecting {
+			m.statusMsg = fmt.Sprintf("Reconnecting to %s...", msg.Status.URL)
+		} else if msg.Status.Error != "" {
+			m.errorMsg = fmt.Sprintf("Connection error: %s", msg.Status.Error)
+		}
+		return m, nil
 	case views.OpenPRForBranchMsg:
 		// Navigate to PR creation view with the worktree branch pre-selected
 		if m.router != nil {
@@ -715,61 +620,6 @@ func (m Model) handleAppKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Delegate unhandled keys to router
 	_, cmd := m.router.Update(msg)
 	return m, cmd
-}
-
-// handleAppWSMsg handles WebSocket message types (connection, repo, branch,
-// pipeline, agent output/event, and project updates).
-func (m Model) handleAppWSMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case WSConnectionMsg:
-		m.wsStatus = msg.Status
-		if msg.Status.Connected {
-			m.statusMsg = fmt.Sprintf("Connected to %s", msg.Status.URL)
-		} else if msg.Status.Reconnecting {
-			m.statusMsg = fmt.Sprintf("Reconnecting to %s...", msg.Status.URL)
-		} else if msg.Status.Error != "" {
-			m.errorMsg = fmt.Sprintf("Connection error: %s", msg.Status.Error)
-		}
-	case WSRepoUpdateMsg:
-		m.repoInfo = msg.Repo
-		return m, func() tea.Msg {
-			return views.RefreshMsg{}
-		}
-	case WSBranchUpdateMsg:
-		if m.router != nil {
-			m.router.SwitchTo("Branches")
-		}
-		return m, func() tea.Msg {
-			return views.RefreshMsg{}
-		}
-	case WSPipelineUpdateMsg:
-		if m.router != nil {
-			m.router.SwitchTo("Pipeline")
-		}
-		return m, func() tea.Msg {
-			return views.RefreshMsg{}
-		}
-	case WSAgentOutputMsg:
-		if m.router != nil {
-			m.router.SwitchTo("Agents")
-		}
-		if av := m.getAgentView(); av != nil {
-			av.LoadAgents() // load immediately; timer chain handles rescheduling
-		}
-		return m, nil
-	case WSAgentEventMsg:
-		if m.router != nil {
-			m.router.SwitchTo("Agents")
-		}
-		if av := m.getAgentView(); av != nil {
-			av.LoadAgents() // load immediately; timer chain handles rescheduling
-		}
-		return m, nil
-	case WSProjectUpdateMsg:
-		m.statusMsg = fmt.Sprintf("Project updated: %s", msg.Status)
-		return m, nil
-	}
-	return m, nil
 }
 
 // View renders the TUI
@@ -901,7 +751,9 @@ func (m Model) renderRepoInfo() string {
 	return view
 }
 
-// Run starts the application
+// Run starts the application. It also wires the AgentService subscription
+// goroutine that pumps AgentEvent messages into the bubbletea event loop
+// (replacing the old engine.OnAgentUpdate callback hook).
 func (m *Model) Run() error {
 	// Load repo if path not set and not in project mode
 	if m.repoPath == "" && !m.projectMode {
@@ -913,13 +765,25 @@ func (m *Model) Run() error {
 		tea.WithMouseCellMotion(),
 	)
 
-	// Register engine observer to push agent updates into the Bubble Tea event loop.
-	if m.engine != nil {
-		m.engine.OnAgentUpdate(func(agentID string) {
-			p.Send(views.AgentUpdateMsg{AgentID: agentID})
-		})
+	// Subscribe to agent events and forward them as AgentUpdateMsg's to the
+	// bubbletea program. Cancel on shutdown.
+	if m.services != nil && m.services.Agent != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		m.agentCancel = cancel
+		ch, sub, err := m.services.Agent.SubscribeAll(ctx)
+		if err == nil {
+			go func() {
+				defer sub()
+				for ev := range ch {
+					p.Send(views.AgentUpdateMsg{AgentID: ev.AgentID})
+				}
+			}()
+		}
 	}
 
 	_, err := p.Run()
+	if m.agentCancel != nil {
+		m.agentCancel()
+	}
 	return err
 }

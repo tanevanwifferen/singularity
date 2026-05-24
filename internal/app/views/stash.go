@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	"github.com/charmbracelet/bubbletea"
@@ -16,15 +16,15 @@ import (
 // StashView displays a list of git stash entries with management capabilities.
 type StashView struct {
 	viewBase
-	repo    *git.RepoInfo
-	stashes []git.StashEntry
-	filter  *components.Filter[git.StashEntry]
+	repo    *service.RepoInfo
+	stashes []service.StashEntry
+	filter  *components.Filter[service.StashEntry]
 	loading bool
 	err     error
 
 	// Preview panel state
 	showPreview  bool
-	previewStash *git.StashEntry
+	previewStash *service.StashEntry
 
 	// Modal states for destructive operations
 	showDropConfirm  bool
@@ -47,7 +47,7 @@ func NewStashView(repoPath string) *StashView {
 	}
 
 	// Initialize the filter with stash items
-	stashes := []git.StashEntry{}
+	stashes := []service.StashEntry{}
 	v.filter = components.NewFilter(stashes, v.renderStashItem)
 	v.filter.SetHeight(v.height)
 
@@ -67,7 +67,7 @@ func (v *StashView) Init() tea.Cmd {
 func (v *StashView) loadData() {
 	v.err = nil
 
-	repo, err := git.OpenRepo(v.repoPath)
+	repo, err := v.services.Repo.Open(v.ctx(), v.repoPath)
 	if err != nil {
 		v.err = fmt.Errorf("failed to open repo: %w", err)
 		v.loading = false
@@ -75,7 +75,7 @@ func (v *StashView) loadData() {
 	}
 	v.repo = repo
 
-	stashes, err := git.GetStashList(v.repoPath)
+	stashes, err := v.services.Stash.List(v.ctx(), v.repoPath)
 	if err != nil {
 		v.err = err
 		v.loading = false
@@ -310,7 +310,7 @@ func (v *StashView) loadStashPreview(index int) {
 		return
 	}
 
-	entry, err := git.GetStash(v.repoPath, index)
+	entry, err := v.services.Stash.Get(v.ctx(), v.repoPath, index)
 	if err != nil {
 		v.err = err
 		return
@@ -320,7 +320,7 @@ func (v *StashView) loadStashPreview(index int) {
 
 // applyStash applies the specified stash without dropping it.
 func (v *StashView) applyStash(index int) {
-	err := git.ApplyStash(v.repoPath, index, false)
+	err := v.services.Stash.Apply(v.ctx(), v.repoPath, index, false)
 	if err != nil {
 		v.err = fmt.Errorf("failed to apply stash: %w", err)
 		return
@@ -331,7 +331,7 @@ func (v *StashView) applyStash(index int) {
 
 // popStash applies the specified stash and drops it.
 func (v *StashView) popStash(index int) {
-	err := git.ApplyStash(v.repoPath, index, true)
+	err := v.services.Stash.Apply(v.ctx(), v.repoPath, index, true)
 	if err != nil {
 		v.err = fmt.Errorf("failed to pop stash: %w", err)
 		return
@@ -342,7 +342,7 @@ func (v *StashView) popStash(index int) {
 
 // dropStash drops the specified stash.
 func (v *StashView) dropStash(index int) {
-	err := git.DropStash(v.repoPath, index)
+	err := v.services.Stash.Drop(v.ctx(), v.repoPath, index)
 	if err != nil {
 		v.err = fmt.Errorf("failed to drop stash: %w", err)
 		return
@@ -353,7 +353,7 @@ func (v *StashView) dropStash(index int) {
 
 // clearAllStashes removes all stash entries.
 func (v *StashView) clearAllStashes() {
-	err := git.ClearStash(v.repoPath)
+	err := v.services.Stash.Clear(v.ctx(), v.repoPath)
 	if err != nil {
 		v.err = fmt.Errorf("failed to clear stashes: %w", err)
 		return
@@ -364,7 +364,7 @@ func (v *StashView) clearAllStashes() {
 
 // createStash creates a new stash with the given message.
 func (v *StashView) createStash(message string, includeUntracked bool) {
-	_, err := git.CreateStash(v.repoPath, message, includeUntracked)
+	_, err := v.services.Stash.Create(v.ctx(), v.repoPath, message, includeUntracked)
 	if err != nil {
 		v.err = fmt.Errorf("failed to create stash: %w", err)
 		return
@@ -374,7 +374,7 @@ func (v *StashView) createStash(message string, includeUntracked bool) {
 }
 
 // renderStashItem renders a single stash item in the list.
-func (v *StashView) renderStashItem(stash git.StashEntry, index int, selected bool) string {
+func (v *StashView) renderStashItem(stash service.StashEntry, index int, selected bool) string {
 	th := theme.GetTheme()
 
 	// Stash name

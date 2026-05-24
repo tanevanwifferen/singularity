@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	"github.com/charmbracelet/bubbletea"
@@ -17,17 +17,17 @@ import (
 // Right panel: detailed comparison results
 type BranchComparisonView struct {
 	viewBase
-	repo        *git.RepoInfo
-	branches    []git.BranchInfo
+	repo        *service.RepoInfo
+	branches    []service.BranchInfo
 	selectedIdx int
 	loading     bool
 	err         error
 
 	// Comparison state
-	compareBranch *git.BranchInfo
-	comparison    *git.BranchComparison
-	treeCompare   *git.TreeComparison
-	fileDiff      *git.BranchDiff
+	compareBranch *service.BranchInfo
+	comparison    *service.BranchComparison
+	treeCompare   *service.TreeComparison
+	fileDiff      *service.BranchDiff
 }
 
 // NewBranchComparisonView creates a new branch comparison view.
@@ -51,7 +51,7 @@ func (v *BranchComparisonView) Init() tea.Cmd {
 func (v *BranchComparisonView) loadData() {
 	v.err = nil
 
-	repo, err := git.OpenRepo(v.repoPath)
+	repo, err := v.services.Repo.Open(v.ctx(), v.repoPath)
 	if err != nil {
 		v.err = fmt.Errorf("failed to open repo: %w", err)
 		v.loading = false
@@ -94,7 +94,7 @@ func (v *BranchComparisonView) loadComparison() {
 	}
 
 	// Compare branches (ahead/behind)
-	comparison, err := git.CompareBranches(v.repoPath, v.repo.CurrentBranch, v.compareBranch.Name)
+	comparison, err := v.services.Branch.Compare(v.ctx(), v.repoPath, v.repo.CurrentBranch, v.compareBranch.Name)
 	if err != nil {
 		v.err = err
 		return
@@ -102,7 +102,7 @@ func (v *BranchComparisonView) loadComparison() {
 	v.comparison = comparison
 
 	// Compare trees (detects squash merges)
-	treeCompare, err := git.CompareBranchesByTree(v.repoPath, v.repo.CurrentBranch, v.compareBranch.Name)
+	treeCompare, err := v.services.Branch.CompareByTree(v.ctx(), v.repoPath, v.repo.CurrentBranch, v.compareBranch.Name)
 	if err != nil {
 		v.err = err
 		return
@@ -110,7 +110,7 @@ func (v *BranchComparisonView) loadComparison() {
 	v.treeCompare = treeCompare
 
 	// Get file diff summary
-	fileDiff, err := git.GetBranchDiff(v.repoPath, v.repo.CurrentBranch, v.compareBranch.Name)
+	fileDiff, err := v.services.Diff.BranchDiff(v.ctx(), v.repoPath, v.repo.CurrentBranch, v.compareBranch.Name)
 	if err != nil {
 		v.err = err
 		return

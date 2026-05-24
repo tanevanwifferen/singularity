@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	"github.com/charmbracelet/bubbletea"
@@ -18,7 +18,7 @@ import (
 // OverviewView displays repository health at a glance.
 type OverviewView struct {
 	viewBase
-	repo        *git.RepoInfo
+	repo        *service.RepoInfo
 	commits     []CommitInfo
 	stashCount  int
 	worktreeCnt int
@@ -59,7 +59,7 @@ func (v *OverviewView) loadData() {
 	v.err = nil
 
 	// Load repo info
-	repo, err := git.OpenRepo(v.repoPath)
+	repo, err := v.services.Repo.Open(v.ctx(), v.repoPath)
 	if err != nil {
 		v.err = fmt.Errorf("failed to open repo: %w", err)
 		v.loading = false
@@ -75,7 +75,7 @@ func (v *OverviewView) loadData() {
 	}
 
 	// Load stash count
-	stashes, err := git.GetStashList(v.repoPath)
+	stashes, err := v.services.Stash.List(v.ctx(), v.repoPath)
 	if err != nil {
 		v.stashCount = 0
 	} else {
@@ -83,7 +83,7 @@ func (v *OverviewView) loadData() {
 	}
 
 	// Load worktree count
-	worktrees, err := git.GetWorktrees(v.repoPath)
+	worktrees, err := v.services.Worktree.List(v.ctx(), v.repoPath)
 	if err != nil {
 		v.worktreeCnt = 0
 	} else {
@@ -146,7 +146,7 @@ func (v *OverviewView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "y", "enter":
 				v.showDetachConfirm = false
-				err := git.CheckoutDetached(v.repoPath)
+				err := v.services.Branch.CheckoutDetached(v.ctx(), v.repoPath)
 				if err != nil {
 					v.actionResult = fmt.Sprintf("✗ %v", err)
 				} else {
@@ -306,7 +306,7 @@ func (v *OverviewView) View() string {
 }
 
 // findCurrentBranch returns the current branch info.
-func (v *OverviewView) findCurrentBranch() *git.BranchInfo {
+func (v *OverviewView) findCurrentBranch() *service.BranchInfo {
 	if v.repo == nil || v.repo.CurrentBranch == "" {
 		return nil
 	}

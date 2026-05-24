@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
-	"gitlab.com/tanevanwifferen1/singularity/internal/jira"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -14,7 +14,7 @@ import (
 
 // ApprovalItem wraps a JiraAction with UI state.
 type ApprovalItem struct {
-	Action   jira.JiraAction
+	Action   service.JiraAction
 	Selected bool // checkbox state
 	Expanded bool // show detail
 }
@@ -28,7 +28,7 @@ type ApprovalDoneMsg struct {
 
 // ActionResult tracks the outcome of executing one action.
 type ActionResult struct {
-	Action     jira.JiraAction
+	Action     service.JiraAction
 	Success    bool
 	CreatedKey string // for create_issue: the new issue key
 	Err        error
@@ -51,7 +51,6 @@ type ApprovalView struct {
 	items        []ApprovalItem
 	cursor       int
 	scrollOffset int
-	client       *jira.Client
 
 	// Execution state
 	executing    bool
@@ -65,9 +64,11 @@ type ApprovalView struct {
 }
 
 // NewApprovalView creates an ApprovalView from a list of JiraActions.
-// All items are selected by default. Items are sorted by Order field.
-func NewApprovalView(actions []jira.JiraAction, client *jira.Client) *ApprovalView {
-	sorted := make([]jira.JiraAction, len(actions))
+// All items are selected by default. Items are sorted by Order field. The
+// JiraService used for execution is read from viewBase.services, wired by
+// the parent view via SetServices.
+func NewApprovalView(actions []service.JiraAction) *ApprovalView {
+	sorted := make([]service.JiraAction, len(actions))
 	copy(sorted, actions)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		return sorted[i].Order < sorted[j].Order
@@ -83,8 +84,7 @@ func NewApprovalView(actions []jira.JiraAction, client *jira.Client) *ApprovalVi
 	}
 
 	return &ApprovalView{
-		items:  items,
-		client: client,
+		items: items,
 	}
 }
 
@@ -94,8 +94,8 @@ func (v *ApprovalView) Init() tea.Cmd {
 }
 
 // Actions returns all actions in the view (for passing to iterate agent).
-func (v *ApprovalView) Actions() []jira.JiraAction {
-	actions := make([]jira.JiraAction, len(v.items))
+func (v *ApprovalView) Actions() []service.JiraAction {
+	actions := make([]service.JiraAction, len(v.items))
 	for i, item := range v.items {
 		actions[i] = item.Action
 	}
@@ -352,7 +352,7 @@ func (v *ApprovalView) renderItems(t theme.Theme) string {
 }
 
 // renderDetail renders the expanded detail for a single action, indented.
-func (v *ApprovalView) renderDetail(a jira.JiraAction, t theme.Theme) string {
+func (v *ApprovalView) renderDetail(a service.JiraAction, t theme.Theme) string {
 	indent := "      "
 	var lines []string
 
@@ -459,9 +459,13 @@ func (v *ApprovalView) executeActions() tea.Cmd {
 		}
 	}
 
-	client := v.client
+	svc := v.services
+	ctx := v.ctx()
 
 	return func() tea.Msg {
+		if svc == nil {
+			return approvalExecDoneMsg{err: service.ErrUnavailable}
+		}
 		results := make([]ActionResult, 0, len(selected))
 
 		// Map from Order number to created issue key (for linking)
@@ -469,7 +473,7 @@ func (v *ApprovalView) executeActions() tea.Cmd {
 
 		// Track create_issue results that need linking
 		type createResult struct {
-			action jira.JiraAction
+			action service.JiraAction
 			key    string
 		}
 		var created []createResult
@@ -478,7 +482,7 @@ func (v *ApprovalView) executeActions() tea.Cmd {
 			a := item.Action
 			switch a.Type {
 			case "create_issue":
-				issue, err := client.CreateIssue(a.Project, a.IssueType, a.Summary, a.Description, a.Priority)
+				issue, err := svc.Jira.CreateIssue(ctx, a.Project, a.IssueType, a.Summary, a.Description, a.Priority)
 				if err != nil {
 					results = append(results, ActionResult{
 						Action:  a,
@@ -496,7 +500,7 @@ func (v *ApprovalView) executeActions() tea.Cmd {
 				}
 
 			case "update_field":
-				err := client.UpdateFields(a.IssueKey, a.Fields)
+				err := svc.Jira.UpdateFields(ctx, a.IssueKey, a.Fields)
 				if err != nil {
 					results = append(results, ActionResult{
 						Action:  a,
@@ -511,7 +515,7 @@ func (v *ApprovalView) executeActions() tea.Cmd {
 				}
 
 			case "comment":
-				err := client.AddComment(a.IssueKey, a.Body)
+				err := svc.Jira.AddComment(ctx, a.IssueKey, a.Body)
 				if err != nil {
 					results = append(results, ActionResult{
 						Action:  a,
@@ -538,7 +542,7 @@ func (v *ApprovalView) executeActions() tea.Cmd {
 				if linkType == "" {
 					linkType = "relates_to"
 				}
-				if err := client.LinkIssues(cr.key, a.LinkTo, linkType); err != nil {
+				if err := svc.Jira.LinkIssues(ctx, cr.key, a.LinkTo, linkType); err != nil {
 					linkErr = fmt.Errorf("linking %s -> %s: %w", cr.key, a.LinkTo, err)
 				}
 			}
@@ -546,7 +550,7 @@ func (v *ApprovalView) executeActions() tea.Cmd {
 			// Link to depends_on_order issues
 			for _, depOrder := range a.DependsOnOrder {
 				if depKey, ok := orderToKey[depOrder]; ok {
-					if err := client.LinkIssues(cr.key, depKey, "is_blocked_by"); err != nil && linkErr == nil {
+					if err := svc.Jira.LinkIssues(ctx, cr.key, depKey, "is_blocked_by"); err != nil && linkErr == nil {
 						linkErr = fmt.Errorf("linking dependency %s -> %s: %w", cr.key, depKey, err)
 					}
 				}
@@ -572,7 +576,7 @@ func (v *ApprovalView) selectedCount() int {
 }
 
 // actionSummary returns a one-line summary for a JiraAction.
-func (v *ApprovalView) actionSummary(a jira.JiraAction) string {
+func (v *ApprovalView) actionSummary(a service.JiraAction) string {
 	switch a.Type {
 	case "create_issue":
 		if a.Summary != "" {

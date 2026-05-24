@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -91,22 +90,24 @@ func (v *BranchDiffView) Init() tea.Cmd {
 				if defaultBranch == "" {
 					defaultBranch = "main"
 				}
-				defaultBranch = git.ResolveRef(r.Path, defaultBranch)
+				if resolved, err := v.services.Branch.ResolveRef(v.ctx(), r.Path, defaultBranch); err == nil && resolved != "" {
+					defaultBranch = resolved
+				}
 
 				// Use merge base so the diff matches what an MR would show.
 				mergeBase := defaultBranch
-				if mb, err := git.GetMergeBase(r.Path, defaultBranch, branch); err == nil {
+				if mb, err := v.services.Diff.MergeBase(v.ctx(), r.Path, defaultBranch, branch); err == nil {
 					mergeBase = mb
 				}
 
-				diff, err := git.GetBranchDiff(r.Path, mergeBase, branch)
+				diff, err := v.services.Diff.BranchDiff(v.ctx(), r.Path, mergeBase, branch)
 
 				// Deep check: detect hunks already incorporated in the base branch.
 				var fileStatus map[string]bool
 				if err == nil && diff != nil && len(diff.Files) > 0 {
 					fileStatus = make(map[string]bool, len(diff.Files))
 					for _, f := range diff.Files {
-						hunks, _, ferr := git.GetDeepFileDiff(r.Path, mergeBase, branch, defaultBranch, f.NewPath)
+						hunks, _, ferr := v.services.Diff.DeepFileDiff(v.ctx(), r.Path, mergeBase, branch, defaultBranch, f.NewPath)
 						if ferr != nil {
 							continue
 						}
@@ -300,7 +301,7 @@ func (v *BranchDiffView) loadSelectedFileDiff() {
 		return
 	}
 
-	hunks, rawDiff, err := git.GetDeepFileDiff(item.WorktreePath, item.MergeBase, v.branchName, item.DefaultBranch, item.File.NewPath)
+	hunks, rawDiff, err := v.services.Diff.DeepFileDiff(v.ctx(), item.WorktreePath, item.MergeBase, v.branchName, item.DefaultBranch, item.File.NewPath)
 	if err != nil {
 		v.err = err
 		return

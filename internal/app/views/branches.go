@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	"github.com/charmbracelet/bubbletea"
@@ -18,9 +18,9 @@ import (
 // BranchesView displays a filterable list of branches with comparison capabilities.
 type BranchesView struct {
 	viewBase
-	repo     *git.RepoInfo
-	branches []git.BranchInfo
-	filter   *components.Filter[git.BranchInfo]
+	repo     *service.RepoInfo
+	branches []service.BranchInfo
+	filter   *components.Filter[service.BranchInfo]
 	loading  bool
 	err      error
 
@@ -30,7 +30,7 @@ type BranchesView struct {
 
 	// Modal state for delete confirmation
 	showDeleteConfirm bool
-	deleteBranch      *git.BranchInfo
+	deleteBranch      *service.BranchInfo
 	deleteRemote      bool
 
 	// New branch input state
@@ -39,7 +39,7 @@ type BranchesView struct {
 	newBranchInput components.Filter[byte]
 
 	// CI status cache
-	pipelines     map[string]*git.PipelineInfo
+	pipelines     map[string]*service.PipelineInfo
 	cacheTime     time.Time
 	cacheDuration time.Duration
 	ciLoading     bool
@@ -56,12 +56,12 @@ func (v *BranchesView) SetBranchDiffView(dv *BranchDiffView, repos []BranchDiffR
 func NewBranchesView(repoPath string) *BranchesView {
 	v := &BranchesView{
 		viewBase:      viewBase{repoPath: repoPath, width: 80, height: 24},
-		pipelines:     make(map[string]*git.PipelineInfo),
+		pipelines:     make(map[string]*service.PipelineInfo),
 		cacheDuration: 2 * time.Minute, // Cache CI status for 2 minutes
 	}
 
 	// Initialize the filter with branch items
-	branches := []git.BranchInfo{}
+	branches := []service.BranchInfo{}
 	v.filter = components.NewFilter(branches, v.renderBranchItem)
 	v.filter.SetHeight(v.height)
 
@@ -81,7 +81,7 @@ func (v *BranchesView) Init() tea.Cmd {
 func (v *BranchesView) loadData() {
 	v.err = nil
 
-	repo, err := git.OpenRepo(v.repoPath)
+	repo, err := v.services.Repo.Open(v.ctx(), v.repoPath)
 	if err != nil {
 		v.err = fmt.Errorf("failed to open repo: %w", err)
 		v.loading = false
@@ -107,14 +107,14 @@ func (v *BranchesView) loadCIPipelineStatuses() {
 	}
 
 	// Check for forge auth first
-	auth, err := git.DetectForgeAuth()
+	auth, err := v.services.Forge.DetectAuth(v.ctx())
 	if err != nil || !auth.Valid {
 		return
 	}
 
 	// Fetch pipeline statuses for all branches
 	v.ciLoading = true
-	pipelines, err := git.GetBranchPipelineStatuses(v.repoPath, v.branches)
+	pipelines, err := v.services.Pipeline.Statuses(v.ctx(), v.repoPath, v.branches)
 	if err != nil {
 		v.ciLoading = false
 		return
@@ -351,7 +351,7 @@ func (v *BranchesView) createBranch(branchName string) {
 }
 
 // renderBranchItem renders a single branch item in the list.
-func (v *BranchesView) renderBranchItem(branch git.BranchInfo, index int, selected bool) string {
+func (v *BranchesView) renderBranchItem(branch service.BranchInfo, index int, selected bool) string {
 	th := theme.GetTheme()
 
 	// Branch name
@@ -411,22 +411,22 @@ func (v *BranchesView) getCIStatusIcon(branchName string) string {
 	var style lipgloss.Style
 
 	switch info.Status {
-	case git.PipelineSuccess:
+	case service.PipelineSuccess:
 		icon = " ✓"
 		style = lipgloss.NewStyle().Foreground(th.Info)
-	case git.PipelineFailed:
+	case service.PipelineFailed:
 		icon = " ✗"
 		style = lipgloss.NewStyle().Foreground(th.Error)
-	case git.PipelineRunning:
+	case service.PipelineRunning:
 		icon = " ●"
 		style = lipgloss.NewStyle().Foreground(th.Warning)
-	case git.PipelinePending:
+	case service.PipelinePending:
 		icon = " ○"
 		style = th.MutedTextStyle
-	case git.PipelineCanceled:
+	case service.PipelineCanceled:
 		icon = " ⊘"
 		style = th.MutedTextStyle
-	case git.PipelineSkipped:
+	case service.PipelineSkipped:
 		icon = " ⊝"
 		style = th.MutedTextStyle
 	default:

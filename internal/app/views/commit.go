@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	"github.com/charmbracelet/bubbletea"
@@ -61,12 +61,12 @@ type CommitView struct {
 	confirmPending bool // Set to true after Ctrl+Enter to show confirm dialog
 
 	// Hunk diff preview state
-	hunkDiffRaw   string         // Raw diff output for the selected file
-	hunkList      []git.DiffHunk // Parsed hunks for the selected file
-	hunkIndex     int            // Currently selected hunk
-	hunkScrollOff int            // Scroll offset within diff display
-	hunkIsStaged  bool           // Whether we are viewing staged hunks (true) or unstaged (false)
-	hunkFilePath  string         // Path of the file whose hunks are displayed
+	hunkDiffRaw   string             // Raw diff output for the selected file
+	hunkList      []service.DiffHunk // Parsed hunks for the selected file
+	hunkIndex     int                // Currently selected hunk
+	hunkScrollOff int                // Scroll offset within diff display
+	hunkIsStaged  bool               // Whether we are viewing staged hunks (true) or unstaged (false)
+	hunkFilePath  string             // Path of the file whose hunks are displayed
 
 	// Line-selection mode state (within a single hunk)
 	lineCursor      int          // Current cursor position in hunk.Lines
@@ -397,7 +397,7 @@ func (v *CommitView) handleMessageEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !v.generating && len(v.stagedFiles) > 0 {
 			v.generating = true
 			return v, func() tea.Msg {
-				suggestion, err := git.SuggestCommitMessage(v.repoPath)
+				suggestion, err := v.services.Commit.SuggestMessage(v.ctx(), v.repoPath)
 				if err != nil {
 					return AIGenErrorMsg{err.Error()}
 				}
@@ -564,11 +564,11 @@ func (v *CommitView) openHunkDiff() {
 
 	if v.activeSection == 0 && v.selectedIndex < len(v.stagedFiles) {
 		filePath = v.stagedFiles[v.selectedIndex].Path
-		rawDiff, err = git.GetStagedFileDiff(v.repoPath, filePath)
+		rawDiff, err = v.services.Diff.StagedFileDiff(v.ctx(), v.repoPath, filePath)
 		isStaged = true
 	} else if v.activeSection == 1 && v.selectedIndex < len(v.unstagedFiles) {
 		filePath = v.unstagedFiles[v.selectedIndex].Path
-		rawDiff, err = git.GetUnstagedFileDiff(v.repoPath, filePath)
+		rawDiff, err = v.services.Diff.UnstagedFileDiff(v.ctx(), v.repoPath, filePath)
 		isStaged = false
 	} else {
 		return
@@ -582,7 +582,7 @@ func (v *CommitView) openHunkDiff() {
 		return
 	}
 
-	hunks := git.ParseHunks(rawDiff)
+	hunks := service.ParseHunks(rawDiff)
 	if len(hunks) == 0 {
 		return
 	}
@@ -632,13 +632,13 @@ func (v *CommitView) handleHunkDiffMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		if v.hunkIsStaged {
 			// Unstage this hunk
-			if err := git.UnstageHunk(v.repoPath, v.hunkFilePath, hunk); err != nil {
+			if err := v.services.Diff.UnstageHunk(v.ctx(), v.repoPath, v.hunkFilePath, hunk); err != nil {
 				v.err = err
 				return v, nil
 			}
 		} else {
 			// Stage this hunk
-			if err := git.StageHunk(v.repoPath, v.hunkFilePath, hunk); err != nil {
+			if err := v.services.Diff.StageHunk(v.ctx(), v.repoPath, v.hunkFilePath, hunk); err != nil {
 				v.err = err
 				return v, nil
 			}
@@ -748,12 +748,12 @@ func (v *CommitView) handleLineDiffMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 		if v.hunkIsStaged {
-			if err := git.UnstageLines(v.repoPath, v.hunkFilePath, hunk, indices); err != nil {
+			if err := v.services.Diff.UnstageLines(v.ctx(), v.repoPath, v.hunkFilePath, hunk, indices); err != nil {
 				v.err = err
 				return v, nil
 			}
 		} else {
-			if err := git.StageLines(v.repoPath, v.hunkFilePath, hunk, indices); err != nil {
+			if err := v.services.Diff.StageLines(v.ctx(), v.repoPath, v.hunkFilePath, hunk, indices); err != nil {
 				v.err = err
 				return v, nil
 			}
@@ -772,7 +772,7 @@ func (v *CommitView) handleLineDiffMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // applyVisualSelection selects all selectable lines between the visual anchor and cursor.
-func (v *CommitView) applyVisualSelection(hunk git.DiffHunk) {
+func (v *CommitView) applyVisualSelection(hunk service.DiffHunk) {
 	lo, hi := v.lineVisualStart, v.lineCursor
 	if lo > hi {
 		lo, hi = hi, lo
@@ -787,7 +787,7 @@ func (v *CommitView) applyVisualSelection(hunk git.DiffHunk) {
 }
 
 // getSelectedLineIndices returns the sorted list of selected line indices.
-func (v *CommitView) getSelectedLineIndices(hunk git.DiffHunk) []int {
+func (v *CommitView) getSelectedLineIndices(hunk service.DiffHunk) []int {
 	var indices []int
 	for i := 0; i < len(hunk.Lines); i++ {
 		if v.lineSelected[i] {
@@ -804,9 +804,9 @@ func (v *CommitView) refreshHunkDiff() {
 	var err error
 
 	if v.hunkIsStaged {
-		rawDiff, err = git.GetStagedFileDiff(v.repoPath, v.hunkFilePath)
+		rawDiff, err = v.services.Diff.StagedFileDiff(v.ctx(), v.repoPath, v.hunkFilePath)
 	} else {
-		rawDiff, err = git.GetUnstagedFileDiff(v.repoPath, v.hunkFilePath)
+		rawDiff, err = v.services.Diff.UnstagedFileDiff(v.ctx(), v.repoPath, v.hunkFilePath)
 	}
 
 	if err != nil || rawDiff == "" {
@@ -818,7 +818,7 @@ func (v *CommitView) refreshHunkDiff() {
 		return
 	}
 
-	hunks := git.ParseHunks(rawDiff)
+	hunks := service.ParseHunks(rawDiff)
 	if len(hunks) == 0 {
 		v.editMode = StageEditMode
 		v.hunkList = nil

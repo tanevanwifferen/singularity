@@ -8,12 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"gitlab.com/tanevanwifferen1/singularity/internal/app/clipboard"
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
 	"gitlab.com/tanevanwifferen1/singularity/internal/config"
-	"gitlab.com/tanevanwifferen1/singularity/internal/engine"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
-	"gitlab.com/tanevanwifferen1/singularity/internal/jira"
-	"gitlab.com/tanevanwifferen1/singularity/internal/project"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -46,12 +44,12 @@ type WorkflowTickMsg struct{}
 // WorkflowsView manages multi-repo feature workflows (worktrees, push, MR, agents).
 type WorkflowsView struct {
 	viewBase
-	proj *project.Project
+	proj *service.Project
 
 	// Workflow state
-	workflows        []*project.FeatureWorkflow
+	workflows        []*service.FeatureWorkflow
 	selectedWorkflow int
-	filter           *components.Filter[*project.FeatureWorkflow]
+	filter           *components.Filter[*service.FeatureWorkflow]
 
 	// Workflow start modal
 	showWorkflowStart   bool
@@ -79,18 +77,18 @@ type WorkflowsView struct {
 	showMRSummary  bool
 	mrSummaryLines []string
 
-	// Agent orchestration
-	engine           *engine.Engine
+	// Agent orchestration. Engine no longer crosses the view boundary —
+	// agent ops route through v.services.Agent (set via SetServices).
 	showAgentPrompt  bool
 	agentPromptInput components.TextInput
 
 	// Auto-refresh tick for live agent status
 	workflowTicking   bool
-	workflowAgentSnap *engine.AgentSnapshot
+	workflowAgentSnap *service.AgentSnapshot
 
 	// Jira ticket picker
 	jiraPicker       *JiraPickerState
-	jiraConfirmIssue *jira.Issue          // issue pending workflow-start confirmation
+	jiraConfirmIssue *service.Issue       // issue pending workflow-start confirmation
 	jiraExtraInput   components.TextInput // optional extra instructions for the agent
 
 	// Drill-down diff view
@@ -98,13 +96,13 @@ type WorkflowsView struct {
 }
 
 // NewWorkflowsView creates a new workflows view.
-func NewWorkflowsView(proj *project.Project) *WorkflowsView {
+func NewWorkflowsView(proj *service.Project) *WorkflowsView {
 	v := &WorkflowsView{
 		viewBase: viewBase{width: 80, height: 24},
 		proj:     proj,
 	}
 	v.workflowBaseDir = defaultWorkflowBaseDir(proj.Name)
-	v.filter = components.NewFilter([]*project.FeatureWorkflow{}, v.renderWorkflowItem)
+	v.filter = components.NewFilter([]*service.FeatureWorkflow{}, v.renderWorkflowItem)
 	v.filter.SetHeight(v.height - 10)
 	return v
 }
@@ -123,11 +121,6 @@ func (v *WorkflowsView) HasActiveWorkflow() bool {
 	return len(v.workflows) > 0
 }
 
-// SetEngine sets the agent engine.
-func (v *WorkflowsView) SetEngine(eng *engine.Engine) {
-	v.engine = eng
-}
-
 // SetJiraConfig wires Jira configuration so the Jira ticket picker is available.
 func (v *WorkflowsView) SetJiraConfig(cfg config.JiraConfig) {
 	v.jiraPicker = NewJiraPickerState(cfg)
@@ -137,7 +130,7 @@ func (v *WorkflowsView) SetJiraConfig(cfg config.JiraConfig) {
 }
 
 // SetProject updates the project reference.
-func (v *WorkflowsView) SetProject(proj *project.Project) {
+func (v *WorkflowsView) SetProject(proj *service.Project) {
 	v.proj = proj
 }
 
@@ -165,7 +158,7 @@ func (v *WorkflowsView) loadWorkflows() {
 
 	key := v.proj.Name
 	if len(v.workflows) == 0 {
-		if loaded, err := project.LoadWorkflows(key, v.proj); err == nil && len(loaded) > 0 {
+		if loaded, err := service.LoadWorkflows(key, v.proj); err == nil && len(loaded) > 0 {
 			v.workflows = loaded
 			v.selectedWorkflow = 0
 		}
@@ -174,7 +167,7 @@ func (v *WorkflowsView) loadWorkflows() {
 }
 
 func (v *WorkflowsView) rebuildFilter() {
-	items := make([]*project.FeatureWorkflow, len(v.workflows))
+	items := make([]*service.FeatureWorkflow, len(v.workflows))
 	copy(items, v.workflows)
 	v.filter.SetItems(items)
 }
@@ -190,12 +183,12 @@ func (v *WorkflowsView) projectKey() string {
 // saveWorkflows persists the current workflow state to disk.
 func (v *WorkflowsView) saveWorkflows() {
 	if key := v.projectKey(); key != "" {
-		project.SaveWorkflows(key, v.workflows)
+		service.SaveWorkflows(key, v.workflows)
 	}
 }
 
 // currentWorkflow returns the currently selected workflow, or nil if none.
-func (v *WorkflowsView) currentWorkflow() *project.FeatureWorkflow {
+func (v *WorkflowsView) currentWorkflow() *service.FeatureWorkflow {
 	if len(v.workflows) == 0 || v.selectedWorkflow >= len(v.workflows) {
 		return nil
 	}
@@ -221,7 +214,7 @@ func (v *WorkflowsView) removeCurrentWorkflow() {
 // spawnAgentForWorkflow spawns a single agent at the workflow's BaseDir.
 func (v *WorkflowsView) spawnAgentForWorkflow(task string) {
 	wf := v.currentWorkflow()
-	if wf == nil || v.engine == nil {
+	if wf == nil || v.services == nil {
 		return
 	}
 
@@ -230,7 +223,7 @@ func (v *WorkflowsView) spawnAgentForWorkflow(task string) {
 		ctxFiles = v.proj.ContextFiles
 	}
 
-	stats := v.engine.Stats()
+	stats := v.agentStats()
 	available := stats.MaxAgents - stats.Active
 	if available < 1 {
 		v.workflowStatusMsg = fmt.Sprintf("Engine capacity exceeded: no slots available (%d/%d active)",
@@ -241,7 +234,7 @@ func (v *WorkflowsView) spawnAgentForWorkflow(task string) {
 	// Build commit instructions listing each repo worktree
 	fullTask := task + "\n\n" + buildWorkflowCommitInstructions(wf)
 
-	id, err := v.engine.StartAgent(wf.WorkflowDir(), fullTask, engine.AgentOptions{
+	id, err := v.services.Agent.Start(v.ctx(), wf.WorkflowDir(), fullTask, service.AgentOptions{
 		ContextFiles: ctxFiles,
 		SmartRoute:   true,
 		WorkflowID:   wf.BranchName,
@@ -598,7 +591,7 @@ func (v *WorkflowsView) handleJiraWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 }
 
 // startWorkflowFromJira creates a FeatureWorkflow from a Jira issue and spawns an agent.
-func (v *WorkflowsView) startWorkflowFromJira(issue *jira.Issue, extraMsg string) tea.Cmd {
+func (v *WorkflowsView) startWorkflowFromJira(issue *service.Issue, extraMsg string) tea.Cmd {
 	if issue == nil || v.proj == nil {
 		return nil
 	}
@@ -606,12 +599,12 @@ func (v *WorkflowsView) startWorkflowFromJira(issue *jira.Issue, extraMsg string
 	baseDir := v.workflowBaseDir
 	agentPrompt := buildJiraAgentPrompt(issue, extraMsg)
 
-	wf := project.NewFeatureWorkflow(v.proj, branchName, baseDir)
+	wf := service.NewFeatureWorkflow(v.proj, branchName, baseDir)
 	v.workflows = append(v.workflows, wf)
 	v.selectedWorkflow = len(v.workflows) - 1
 	v.rebuildFilter()
 
-	eng := v.engine
+	svc := v.services
 	var ctxFiles []string
 	if v.proj != nil {
 		ctxFiles = v.proj.ContextFiles
@@ -623,7 +616,7 @@ func (v *WorkflowsView) startWorkflowFromJira(issue *jira.Issue, extraMsg string
 			return worktreesCreatedMsg{}
 		}
 
-		if eng == nil {
+		if svc == nil {
 			v.workflowStatusMsg = "Agent engine not available"
 			return worktreesCreatedMsg{}
 		}
@@ -631,7 +624,7 @@ func (v *WorkflowsView) startWorkflowFromJira(issue *jira.Issue, extraMsg string
 		// Build full task with commit instructions
 		fullTask := agentPrompt + "\n\n" + buildWorkflowCommitInstructions(wf)
 
-		id, err := eng.StartAgent(wf.WorkflowDir(), fullTask, engine.AgentOptions{
+		id, err := svc.Agent.Start(v.ctx(), wf.WorkflowDir(), fullTask, service.AgentOptions{
 			ContextFiles: ctxFiles,
 			SmartRoute:   true,
 			WorkflowID:   wf.BranchName,
@@ -648,12 +641,12 @@ func (v *WorkflowsView) startWorkflowFromJira(issue *jira.Issue, extraMsg string
 
 // startWorkflowFromJiraOnExisting spawns an agent for a Jira issue on an already-created workflow
 // (reusing its existing worktrees rather than creating new ones).
-func (v *WorkflowsView) startWorkflowFromJiraOnExisting(issue *jira.Issue, wf *project.FeatureWorkflow, extraMsg string) tea.Cmd {
+func (v *WorkflowsView) startWorkflowFromJiraOnExisting(issue *service.Issue, wf *service.FeatureWorkflow, extraMsg string) tea.Cmd {
 	if issue == nil || wf == nil {
 		return nil
 	}
 	agentPrompt := buildJiraAgentPrompt(issue, extraMsg)
-	eng := v.engine
+	svc := v.services
 	var ctxFiles []string
 	if v.proj != nil {
 		ctxFiles = v.proj.ContextFiles
@@ -661,11 +654,11 @@ func (v *WorkflowsView) startWorkflowFromJiraOnExisting(issue *jira.Issue, wf *p
 	fullTask := agentPrompt + "\n\n" + buildWorkflowCommitInstructions(wf)
 
 	return func() tea.Msg {
-		if eng == nil {
+		if svc == nil {
 			v.workflowStatusMsg = "Agent engine not available"
 			return RefreshDoneMsg{}
 		}
-		id, err := eng.StartAgent(wf.WorkflowDir(), fullTask, engine.AgentOptions{
+		id, err := svc.Agent.Start(v.ctx(), wf.WorkflowDir(), fullTask, service.AgentOptions{
 			ContextFiles: ctxFiles,
 			SmartRoute:   true,
 			WorkflowID:   wf.BranchName,
@@ -681,7 +674,7 @@ func (v *WorkflowsView) startWorkflowFromJiraOnExisting(issue *jira.Issue, wf *p
 }
 
 // buildWorkflowCommitInstructions generates commit instructions for a workflow.
-func buildWorkflowCommitInstructions(wf *project.FeatureWorkflow) string {
+func buildWorkflowCommitInstructions(wf *service.FeatureWorkflow) string {
 	var repos []string
 	for name, wr := range wf.Repos {
 		if wr.WorktreeCreated {
@@ -725,7 +718,7 @@ func (v *WorkflowsView) handleWorkflowStartInput(msg tea.KeyMsg) tea.Cmd {
 			baseDir := v.workflowBaseDir
 			v.showWorkflowStart = false
 			v.workflowBranchInput.Clear()
-			wf := project.NewFeatureWorkflow(v.proj, branchName, baseDir)
+			wf := service.NewFeatureWorkflow(v.proj, branchName, baseDir)
 			v.workflows = append(v.workflows, wf)
 			v.selectedWorkflow = len(v.workflows) - 1
 			v.rebuildFilter()
@@ -747,7 +740,7 @@ func (v *WorkflowsView) handleWorkflowStartInput(msg tea.KeyMsg) tea.Cmd {
 func (v *WorkflowsView) handleAgentPromptInput(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
-		if v.agentPromptInput.Value != "" && v.engine != nil && v.currentWorkflow() != nil {
+		if v.agentPromptInput.Value != "" && v.services != nil && v.currentWorkflow() != nil {
 			promptText := v.agentPromptInput.Value
 			v.showAgentPrompt = false
 			v.agentPromptInput.Clear()
@@ -778,12 +771,12 @@ func (v *WorkflowsView) handleDetachWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 			if !wr.WorktreeCreated || wr.WorktreePath == "" || wr.OriginalPath == "" {
 				continue
 			}
-			sha, err := git.GetHEAD(wr.WorktreePath)
+			sha, err := v.services.Branch.HEAD(v.ctx(), wr.WorktreePath)
 			if err != nil {
 				results = append(results, fmt.Sprintf("✗ %s: %v", wr.RepoName, err))
 				continue
 			}
-			if err := git.CheckoutDetachedAt(wr.OriginalPath, sha); err != nil {
+			if err := v.services.Branch.CheckoutDetachedAt(v.ctx(), wr.OriginalPath, sha); err != nil {
 				results = append(results, fmt.Sprintf("✗ %s: %v", wr.RepoName, err))
 			} else {
 				results = append(results, fmt.Sprintf("✓ %s: main→%s", wr.RepoName, sha[:7]))
@@ -806,7 +799,7 @@ func (v *WorkflowsView) handleMRSummary(msg tea.KeyMsg) tea.Cmd {
 		wf := v.currentWorkflow()
 		if wf != nil {
 			text := v.buildMRSummaryText(wf)
-			if err := git.CopyToClipboard(text); err == nil {
+			if err := clipboard.Copy(text); err == nil {
 				v.mrResults = "Copied MR summary to clipboard"
 			} else {
 				v.mrResults = fmt.Sprintf("Copy failed: %v", err)
@@ -820,7 +813,7 @@ func (v *WorkflowsView) handleMRSummary(msg tea.KeyMsg) tea.Cmd {
 }
 
 // buildMRSummaryText builds a colleague-friendly summary of all MRs in a workflow.
-func (v *WorkflowsView) buildMRSummaryText(wf *project.FeatureWorkflow) string {
+func (v *WorkflowsView) buildMRSummaryText(wf *service.FeatureWorkflow) string {
 	var b strings.Builder
 
 	b.WriteString(fmt.Sprintf("MRs for `%s`:\n", wf.BranchName))
@@ -847,7 +840,7 @@ func (v *WorkflowsView) buildMRSummaryText(wf *project.FeatureWorkflow) string {
 
 func (v *WorkflowsView) handleStartAgent() {
 	wf := v.currentWorkflow()
-	if wf != nil && v.engine != nil {
+	if wf != nil && v.services != nil {
 		hasWorktree := false
 		for _, wr := range wf.Repos {
 			if wr.WorktreeCreated {
@@ -926,7 +919,7 @@ func (v *WorkflowsView) handleImport() {
 	for _, wf := range v.workflows {
 		skip[wf.BranchName] = true
 	}
-	discovered, err := project.DiscoverWorkflows(v.proj, skip)
+	discovered, err := service.DiscoverWorkflows(v.proj, skip)
 	if err != nil || len(discovered) == 0 {
 		if err != nil {
 			v.workflowStatusMsg = fmt.Sprintf("Import error: %v", err)
@@ -959,7 +952,7 @@ func (v *WorkflowsView) hasRunningAgents() bool {
 }
 
 func (v *WorkflowsView) runningAgentCount() int {
-	if v.engine == nil {
+	if v.services == nil {
 		return 0
 	}
 	count := 0
@@ -968,12 +961,12 @@ func (v *WorkflowsView) runningAgentCount() int {
 		if agentID == "" {
 			continue
 		}
-		agent := v.engine.GetAgent(agentID)
+		agent := v.agentGet(agentID)
 		if agent == nil {
 			continue
 		}
-		snap := agent.Snapshot()
-		if snap.State == engine.AgentRunning || snap.State == engine.AgentStarting || snap.State == engine.AgentRouting {
+		snap := (*agent)
+		if snap.State == service.AgentRunning || snap.State == service.AgentStarting || snap.State == service.AgentRouting {
 			count++
 		}
 	}
@@ -982,7 +975,7 @@ func (v *WorkflowsView) runningAgentCount() int {
 
 // refreshBranchStatusCmd returns a command that refreshes branch ahead/behind status for all workflows.
 func (v *WorkflowsView) refreshBranchStatusCmd() tea.Cmd {
-	workflows := make([]*project.FeatureWorkflow, len(v.workflows))
+	workflows := make([]*service.FeatureWorkflow, len(v.workflows))
 	copy(workflows, v.workflows)
 	return func() tea.Msg {
 		for _, wf := range workflows {
@@ -994,7 +987,7 @@ func (v *WorkflowsView) refreshBranchStatusCmd() tea.Cmd {
 
 func (v *WorkflowsView) refreshWorkflowAgentSnap() {
 	wf := v.currentWorkflow()
-	if wf == nil || v.engine == nil {
+	if wf == nil || v.services == nil {
 		v.workflowAgentSnap = nil
 		return
 	}
@@ -1003,12 +996,12 @@ func (v *WorkflowsView) refreshWorkflowAgentSnap() {
 		v.workflowAgentSnap = nil
 		return
 	}
-	agent := v.engine.GetAgent(agentID)
+	agent := v.agentGet(agentID)
 	if agent == nil {
 		v.workflowAgentSnap = nil
 		return
 	}
-	s := agent.Snapshot()
+	s := (*agent)
 	v.workflowAgentSnap = &s
 }
 
@@ -1022,7 +1015,7 @@ func (v *WorkflowsView) ensureWorkflowTick() tea.Cmd {
 
 // --- View rendering ---
 
-func (v *WorkflowsView) renderWorkflowItem(wf *project.FeatureWorkflow, index int, selected bool) string {
+func (v *WorkflowsView) renderWorkflowItem(wf *service.FeatureWorkflow, index int, selected bool) string {
 	th := theme.GetTheme()
 	st := wf.Status()
 
@@ -1044,32 +1037,32 @@ func (v *WorkflowsView) renderWorkflowItem(wf *project.FeatureWorkflow, index in
 
 	// State indicator
 	switch st.State {
-	case project.WorkflowActive:
+	case service.WorkflowActive:
 		line.WriteString(th.DashboardAccentStyle.Render("  ● active"))
-	case project.WorkflowDone:
+	case service.WorkflowDone:
 		line.WriteString(th.StatsStyle.Render("  ✓ done"))
-	case project.WorkflowInitializing:
+	case service.WorkflowInitializing:
 		line.WriteString(th.MutedTextStyle.Render("  … init"))
-	case project.WorkflowPushingAll:
+	case service.WorkflowPushingAll:
 		line.WriteString(th.DashboardAccentStyle.Render("  ↑ pushing"))
-	case project.WorkflowCreatingMRs:
+	case service.WorkflowCreatingMRs:
 		line.WriteString(th.DashboardAccentStyle.Render("  MR creating"))
-	case project.WorkflowCleaningUp:
+	case service.WorkflowCleaningUp:
 		line.WriteString(th.MutedTextStyle.Render("  … cleanup"))
 	}
 
 	// Agent status
 	agentID := wf.GetWorkflowAgentID()
-	if agentID != "" && v.engine != nil {
-		agent := v.engine.GetAgent(agentID)
+	if agentID != "" && v.services != nil {
+		agent := v.agentGet(agentID)
 		if agent != nil {
-			snap := agent.Snapshot()
+			snap := (*agent)
 			switch snap.State {
-			case engine.AgentRunning, engine.AgentStarting, engine.AgentRouting:
+			case service.AgentRunning, service.AgentStarting, service.AgentRouting:
 				line.WriteString(th.DashboardAccentStyle.Render("  agent running"))
-			case engine.AgentComplete:
+			case service.AgentComplete:
 				line.WriteString(th.StatsStyle.Render("  agent done"))
-			case engine.AgentError, engine.AgentKilled:
+			case service.AgentError, service.AgentKilled:
 				line.WriteString(th.DashboardErrorStyle.Render("  agent failed"))
 			}
 		}
@@ -1302,7 +1295,7 @@ func (v *WorkflowsView) renderWorkflowList() string {
 
 		if selected {
 			st := wf.Status()
-			if st.State == project.WorkflowActive {
+			if st.State == service.WorkflowActive {
 				var hint string
 				switch {
 				case st.MRsCreated > 0:
@@ -1324,7 +1317,7 @@ func (v *WorkflowsView) renderWorkflowList() string {
 }
 
 // renderRepoDetail shows per-repo status for the selected workflow.
-func (v *WorkflowsView) renderRepoDetail(wf *project.FeatureWorkflow) string {
+func (v *WorkflowsView) renderRepoDetail(wf *service.FeatureWorkflow) string {
 	th := theme.GetTheme()
 	var s strings.Builder
 

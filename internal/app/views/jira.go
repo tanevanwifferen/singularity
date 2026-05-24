@@ -1,6 +1,7 @@
 package views
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,10 +12,7 @@ import (
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
 	"gitlab.com/tanevanwifferen1/singularity/internal/config"
-	"gitlab.com/tanevanwifferen1/singularity/internal/engine"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
-	"gitlab.com/tanevanwifferen1/singularity/internal/jira"
-	"gitlab.com/tanevanwifferen1/singularity/internal/project"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -38,7 +36,7 @@ const (
 
 // jiraLoadedMsg carries freshly fetched Jira issues back to the view.
 type jiraLoadedMsg struct {
-	result *jira.SearchResult
+	result *service.SearchResult
 	err    error
 }
 
@@ -61,9 +59,9 @@ type jiraAITickMsg struct{}
 
 // jiraAIOutputMsg carries new output entries from the agent.
 type jiraAIOutputMsg struct {
-	entries  []engine.OutputEntry
+	entries  []service.OutputEntry
 	done     bool
-	actions  []jira.JiraAction // non-nil when agent completed and actions parsed
+	actions  []service.JiraAction // non-nil when agent completed and actions parsed
 	parseErr error
 }
 
@@ -71,15 +69,15 @@ type jiraAIOutputMsg struct {
 type JiraView struct {
 	viewBase
 	cfg     config.JiraConfig
-	client  *jira.Client
-	issues  []jira.Issue
-	filter  *components.Filter[jira.Issue]
+	issues  []service.Issue
+	filter  *components.Filter[service.Issue]
 	loading bool
 	err     error
 
-	// Dependencies wired by app
-	eng  *engine.Engine
-	proj *project.Project
+	// Dependencies wired by app. The engine and jira client no longer cross
+	// the view boundary — all ops route through v.services (set via
+	// SetServices on viewBase).
+	proj *service.Project
 
 	// Search / JQL input mode
 	searchMode  bool
@@ -87,17 +85,17 @@ type JiraView struct {
 
 	// Detail pane
 	showDetail  bool
-	detailIssue *jira.Issue
+	detailIssue *service.Issue
 
 	// Workflow confirmation modal
 	showWorkflowConfirm bool
-	workflowIssue       *jira.Issue
+	workflowIssue       *service.Issue
 	workflowBranch      string
 	workflowStatusMsg   string
 	wfStep              workflowStep
 
 	// Existing-worktree picker (workflowStepSelectWT)
-	existingWTs   []git.Worktree
+	existingWTs   []service.Worktree
 	selectedWTIdx int
 
 	// Extra message input (workflowStepExtraMsg)
@@ -107,11 +105,11 @@ type JiraView struct {
 	// Refine / Create agent mode
 	aiMode          string // "", "refine", "create", "iterate"
 	aiAgentID       string
-	aiOutputEntries []engine.OutputEntry
+	aiOutputEntries []service.OutputEntry
 	aiOutputOffset  int
 	aiViewOffset    int // display scroll offset (index of first visible entry)
 	approvalView    *ApprovalView
-	refineIssue     *jira.Issue // issue being refined, kept for iterate
+	refineIssue     *service.Issue // issue being refined, kept for iterate
 
 	// Text-input for create mode without a ticket
 	showTextInput bool
@@ -120,7 +118,7 @@ type JiraView struct {
 	// Focus input for refine mode
 	showFocusInput bool
 	focusInput     string
-	focusIssue     *jira.Issue
+	focusIssue     *service.Issue
 
 	// Multi-select for batch review
 	selectedIssues  map[string]bool // issue keys that are toggled
@@ -133,19 +131,15 @@ func NewJiraView(cfg config.JiraConfig) *JiraView {
 	v := &JiraView{
 		viewBase:       viewBase{width: 80, height: 24},
 		cfg:            cfg,
-		client:         jira.NewClient(cfg.BaseURL, cfg.Email, cfg.APIToken),
 		selectedIssues: make(map[string]bool),
 	}
-	v.filter = components.NewFilter([]jira.Issue{}, v.renderIssueItem)
+	v.filter = components.NewFilter([]service.Issue{}, v.renderIssueItem)
 	v.filter.SetHeight(v.height)
 	return v
 }
 
-// SetEngine wires the agent engine.
-func (v *JiraView) SetEngine(eng *engine.Engine) { v.eng = eng }
-
 // SetProject wires the project (project mode).
-func (v *JiraView) SetProject(proj *project.Project) { v.proj = proj }
+func (v *JiraView) SetProject(proj *service.Project) { v.proj = proj }
 
 // CapturesInput reports whether the view is consuming all keyboard input.
 // Note: aiMode (refine/create agent running) is intentionally excluded so the
@@ -170,14 +164,17 @@ func (v *JiraView) defaultJQL() string {
 
 func (v *JiraView) fetchCmd(query string) tea.Cmd {
 	return func() tea.Msg {
+		if v.services == nil {
+			return jiraLoadedMsg{err: service.ErrUnavailable}
+		}
 		if issueKeyRe.MatchString(strings.TrimSpace(query)) {
-			issue, err := v.client.GetIssue(strings.TrimSpace(query))
+			issue, err := v.services.Jira.GetIssue(v.ctx(), strings.TrimSpace(query))
 			if err != nil {
 				return jiraLoadedMsg{err: err}
 			}
-			return jiraLoadedMsg{result: &jira.SearchResult{Total: 1, Issues: []jira.Issue{*issue}}}
+			return jiraLoadedMsg{result: &service.SearchResult{Total: 1, Issues: []service.Issue{*issue}}}
 		}
-		result, err := v.client.SearchIssues(query, 50)
+		result, err := v.services.Jira.SearchIssues(v.ctx(), query, 50)
 		return jiraLoadedMsg{result: result, err: err}
 	}
 }
@@ -267,7 +264,7 @@ func (v *JiraView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return v, nil
 			}
 			if len(msg.actions) > 0 {
-				v.approvalView = NewApprovalView(msg.actions, v.client)
+				v.approvalView = NewApprovalView(msg.actions)
 				v.approvalView.SetSize(v.width, v.height)
 				return v, nil
 			}
@@ -332,8 +329,8 @@ func (v *JiraView) handleJiraKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if v.aiMode != "" && v.approvalView == nil {
 		switch msg.String() {
 		case "esc":
-			if v.aiAgentID != "" && v.eng != nil {
-				v.eng.KillAgent(v.aiAgentID)
+			if v.aiAgentID != "" && v.services != nil {
+				v.services.Agent.Kill(v.ctx(), v.aiAgentID)
 			}
 			v.aiMode = ""
 			v.aiAgentID = ""
@@ -496,7 +493,7 @@ func (v *JiraView) handleJiraKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // triggerWorkflow initiates the workflow confirmation modal.
-func (v *JiraView) triggerWorkflow(issue *jira.Issue) tea.Cmd {
+func (v *JiraView) triggerWorkflow(issue *service.Issue) tea.Cmd {
 	v.workflowIssue = issue
 	v.workflowBranch = issueToBranchName(issue)
 	v.showWorkflowConfirm = true
@@ -583,7 +580,7 @@ func (v *JiraView) handleReviewInput(msg tea.KeyMsg) tea.Cmd {
 }
 
 // startAIMode launches the appropriate refine/create agent.
-func (v *JiraView) startAIMode(mode string, issue *jira.Issue, focus ...string) tea.Cmd {
+func (v *JiraView) startAIMode(mode string, issue *service.Issue, focus ...string) tea.Cmd {
 	v.aiMode = mode
 	v.aiAgentID = ""
 	v.aiOutputEntries = nil
@@ -594,7 +591,7 @@ func (v *JiraView) startAIMode(mode string, issue *jira.Issue, focus ...string) 
 		v.refineIssue = issue
 	}
 
-	eng := v.eng
+	svc := v.services
 	repoPath := v.repoPath
 	if repoPath == "" && v.proj != nil && len(v.proj.Repos) > 0 {
 		repoPath = v.proj.Repos[0].Path
@@ -604,7 +601,7 @@ func (v *JiraView) startAIMode(mode string, issue *jira.Issue, focus ...string) 
 	cfg := v.cfg
 
 	return func() tea.Msg {
-		if eng == nil {
+		if svc == nil {
 			return jiraAIStartedMsg{err: fmt.Errorf("agent engine not available"), mode: mode}
 		}
 		var id string
@@ -615,7 +612,7 @@ func (v *JiraView) startAIMode(mode string, issue *jira.Issue, focus ...string) 
 			if len(focus) > 0 {
 				focusStr = focus[0]
 			}
-			id, err = jira.RefineTicket(eng, &issueCopy, repoPath, focusStr, "")
+			id, err = svc.Jira.RefineTicket(v.ctx(), &issueCopy, repoPath, focusStr, "")
 		case "create":
 			project := cfg.DefaultProject
 			if project == "" {
@@ -624,15 +621,15 @@ func (v *JiraView) startAIMode(mode string, issue *jira.Issue, focus ...string) 
 					project = issueCopy.Key[:idx]
 				}
 			}
-			id, err = jira.CreateStories(eng, &issueCopy, "", project, repoPath, "")
+			id, err = svc.Jira.CreateStories(v.ctx(), &issueCopy, "", project, repoPath, "")
 		}
 		return jiraAIStartedMsg{agentID: id, mode: mode, err: err}
 	}
 }
 
 // startAIIterateMode re-runs the refine agent with existing actions and user feedback.
-func (v *JiraView) startAIIterateMode(existingActions []jira.JiraAction, feedback string) tea.Cmd {
-	eng := v.eng
+func (v *JiraView) startAIIterateMode(existingActions []service.JiraAction, feedback string) tea.Cmd {
+	svc := v.services
 	repoPath := v.repoPath
 	if repoPath == "" && v.proj != nil && len(v.proj.Repos) > 0 {
 		repoPath = v.proj.Repos[0].Path
@@ -640,10 +637,10 @@ func (v *JiraView) startAIIterateMode(existingActions []jira.JiraAction, feedbac
 	issueCopy := *v.refineIssue
 
 	return func() tea.Msg {
-		if eng == nil {
+		if svc == nil {
 			return jiraAIStartedMsg{err: fmt.Errorf("agent engine not available"), mode: "iterate"}
 		}
-		id, err := jira.RefineProposalWithContext(eng, &issueCopy, existingActions, feedback, repoPath, ".jira-actions.json")
+		id, err := svc.Jira.RefineProposalWithContext(v.ctx(), &issueCopy, existingActions, feedback, repoPath, ".jira-actions.json")
 		return jiraAIStartedMsg{agentID: id, mode: "iterate", err: err}
 	}
 }
@@ -657,7 +654,7 @@ func (v *JiraView) pollAIOutput() tea.Cmd {
 
 // fetchAIOutput returns a tea.Cmd that retrieves new output entries from the agent.
 func (v *JiraView) fetchAIOutput() tea.Cmd {
-	eng := v.eng
+	svc := v.services
 	agentID := v.aiAgentID
 	offset := v.aiOutputOffset
 	repoPath := v.repoPath
@@ -666,19 +663,23 @@ func (v *JiraView) fetchAIOutput() tea.Cmd {
 	}
 
 	return func() tea.Msg {
-		entries, err := eng.GetOutputEntries(agentID, offset)
+		entries, err := svc.Agent.Output(v.ctx(), agentID, offset)
 		if err != nil {
 			return jiraAIOutputMsg{done: true}
 		}
 
-		state, _ := eng.GetStatus(agentID)
-		done := state == engine.AgentComplete || state == engine.AgentError || state == engine.AgentKilled
+		snap, _ := svc.Agent.Get(v.ctx(), agentID)
+		var state service.AgentState
+		if snap != nil {
+			state = snap.State
+		}
+		done := state == service.AgentComplete || state == service.AgentError || state == service.AgentKilled
 
-		var actions []jira.JiraAction
+		var actions []service.JiraAction
 		var parseErr error
 		if done {
 			actionsPath := filepath.Join(repoPath, ".jira-actions.json")
-			actions, parseErr = jira.ParseJiraActions(actionsPath)
+			actions, parseErr = v.parseJiraActions(actionsPath)
 		}
 
 		return jiraAIOutputMsg{
@@ -705,7 +706,7 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 				repoPath = v.proj.Repos[0].Path
 			}
 			if repoPath != "" {
-				wts, err := git.GetWorktrees(repoPath)
+				wts, err := v.services.Worktree.List(v.ctx(), repoPath)
 				if err == nil && len(wts) > 1 {
 					v.existingWTs = wts[1:] // skip the main worktree
 				} else {
@@ -725,7 +726,7 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 		case "enter":
 			issue := v.workflowIssue
 			branch := v.workflowBranch
-			eng := v.eng
+			svc := v.services
 			proj := v.proj
 			repoPath := v.repoPath
 			jiraURL := v.cfg.BaseURL + "/browse/" + issue.Key
@@ -735,8 +736,9 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 			if proj != nil && len(proj.Repos) > 0 {
 				defBranch = proj.Repos[0].DefaultBranch
 			}
+			ctx := v.ctx()
 			return func() tea.Msg {
-				return startJiraWorkflow(issue, branch, eng, proj, repoPath, jiraURL, extraMsg, defBranch)
+				return startJiraWorkflow(ctx, svc, issue, branch, proj, repoPath, jiraURL, extraMsg, defBranch)
 			}
 		case "esc":
 			v.wfStep = workflowStepChoose
@@ -784,11 +786,12 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 			if len(v.existingWTs) > 0 && v.selectedWTIdx < len(v.existingWTs) {
 				wt := v.existingWTs[v.selectedWTIdx]
 				issue := v.workflowIssue
-				eng := v.eng
+				svc := v.services
 				extraMsg := v.workflowExtraMsg
 				v.workflowFromExisting = true
+				ctx := v.ctx()
 				return func() tea.Msg {
-					return startJiraWorkflowExisting(issue, wt.Path, eng, extraMsg)
+					return startJiraWorkflowExisting(ctx, svc, issue, wt.Path, extraMsg)
 				}
 			}
 		case "esc":
@@ -816,9 +819,9 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 }
 
 // startJiraWorkflow creates worktrees and spawns an agent.
-func startJiraWorkflow(issue *jira.Issue, branch string, eng *engine.Engine, proj *project.Project, repoPath string, jiraURL string, extraMsg string, defaultBranch string) jiraWorkflowDoneMsg {
-	if eng == nil {
-		return jiraWorkflowDoneMsg{err: fmt.Errorf("agent engine not available")}
+func startJiraWorkflow(ctx context.Context, svc *service.Services, issue *service.Issue, branch string, proj *service.Project, repoPath string, jiraURL string, extraMsg string, defaultBranch string) jiraWorkflowDoneMsg {
+	if svc == nil {
+		return jiraWorkflowDoneMsg{err: fmt.Errorf("service container not available")}
 	}
 
 	agentPrompt := buildJiraAgentPrompt(issue, extraMsg)
@@ -826,7 +829,7 @@ func startJiraWorkflow(issue *jira.Issue, branch string, eng *engine.Engine, pro
 	// Project mode: create worktrees across all repos via FeatureWorkflow
 	if proj != nil {
 		baseDir := filepath.Join(os.TempDir(), "singularity-workflows")
-		fw := project.NewFeatureWorkflow(proj, branch, baseDir)
+		fw := service.NewFeatureWorkflow(proj, branch, baseDir)
 		fw.JiraURL = jiraURL
 		if err := fw.CreateAllWorktrees(); err != nil {
 			return jiraWorkflowDoneMsg{err: fmt.Errorf("create worktrees: %w", err)}
@@ -841,7 +844,7 @@ func startJiraWorkflow(issue *jira.Issue, branch string, eng *engine.Engine, pro
 				}
 			}
 		}
-		id, err := eng.StartAgent(workDir, agentPrompt, engine.AgentOptions{SmartRoute: true, WorkflowID: fw.BranchName})
+		id, err := svc.Agent.Start(ctx, workDir, agentPrompt, service.AgentOptions{SmartRoute: true, WorkflowID: fw.BranchName})
 		if err != nil {
 			return jiraWorkflowDoneMsg{err: fmt.Errorf("start agent: %w", err)}
 		}
@@ -855,10 +858,10 @@ func startJiraWorkflow(issue *jira.Issue, branch string, eng *engine.Engine, pro
 	}
 	worktreePath := filepath.Join(filepath.Dir(repoPath), branch)
 	startPoint := "origin/" + defaultBranch
-	if err := git.CreateWorktree(repoPath, worktreePath, branch, true, startPoint); err != nil {
+	if err := svc.Worktree.Create(ctx, repoPath, worktreePath, branch, true, startPoint); err != nil {
 		return jiraWorkflowDoneMsg{err: fmt.Errorf("create worktree: %w", err)}
 	}
-	id, err := eng.StartAgent(worktreePath, agentPrompt, engine.AgentOptions{SmartRoute: true})
+	id, err := svc.Agent.Start(ctx, worktreePath, agentPrompt, service.AgentOptions{SmartRoute: true})
 	if err != nil {
 		return jiraWorkflowDoneMsg{err: fmt.Errorf("start agent: %w", err)}
 	}
@@ -866,12 +869,12 @@ func startJiraWorkflow(issue *jira.Issue, branch string, eng *engine.Engine, pro
 }
 
 // startJiraWorkflowExisting spawns an agent in an already-existing worktree.
-func startJiraWorkflowExisting(issue *jira.Issue, worktreePath string, eng *engine.Engine, extraMsg string) jiraWorkflowDoneMsg {
-	if eng == nil {
-		return jiraWorkflowDoneMsg{err: fmt.Errorf("agent engine not available")}
+func startJiraWorkflowExisting(ctx context.Context, svc *service.Services, issue *service.Issue, worktreePath string, extraMsg string) jiraWorkflowDoneMsg {
+	if svc == nil {
+		return jiraWorkflowDoneMsg{err: fmt.Errorf("service container not available")}
 	}
 	agentPrompt := buildJiraAgentPrompt(issue, extraMsg)
-	id, err := eng.StartAgent(worktreePath, agentPrompt, engine.AgentOptions{SmartRoute: true})
+	id, err := svc.Agent.Start(ctx, worktreePath, agentPrompt, service.AgentOptions{SmartRoute: true})
 	if err != nil {
 		return jiraWorkflowDoneMsg{err: fmt.Errorf("start agent: %w", err)}
 	}
@@ -879,7 +882,7 @@ func startJiraWorkflowExisting(issue *jira.Issue, worktreePath string, eng *engi
 }
 
 // buildJiraAgentPrompt constructs an agent task prompt from a Jira issue.
-func buildJiraAgentPrompt(issue *jira.Issue, extraMsg string) string {
+func buildJiraAgentPrompt(issue *service.Issue, extraMsg string) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Implement Jira ticket %s.\n\n", issue.Key))
 	b.WriteString(fmt.Sprintf("Summary: %s\n", issue.Summary))
@@ -910,7 +913,7 @@ var nonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
 
 // issueToBranchName derives a git branch name from a Jira issue.
 // Format: key-summary-slug (lowercase, hyphens, max 60 chars).
-func issueToBranchName(issue *jira.Issue) string {
+func issueToBranchName(issue *service.Issue) string {
 	slug := strings.ToLower(issue.Summary)
 	// Replace non-alphanumeric runs with a hyphen
 	slug = nonAlnum.ReplaceAllStringFunc(slug, func(s string) string {
@@ -1013,7 +1016,7 @@ func (v *JiraView) startAIFromText(text string) tea.Cmd {
 	v.aiViewOffset = 0
 	v.approvalView = nil
 
-	eng := v.eng
+	svc := v.services
 	repoPath := v.repoPath
 	if repoPath == "" && v.proj != nil && len(v.proj.Repos) > 0 {
 		repoPath = v.proj.Repos[0].Path
@@ -1022,10 +1025,10 @@ func (v *JiraView) startAIFromText(text string) tea.Cmd {
 	project := v.cfg.DefaultProject
 
 	return func() tea.Msg {
-		if eng == nil {
+		if svc == nil {
 			return jiraAIStartedMsg{err: fmt.Errorf("agent engine not available"), mode: "create"}
 		}
-		id, err := jira.CreateStories(eng, nil, text, project, repoPath, "")
+		id, err := svc.Jira.CreateStories(v.ctx(), nil, text, project, repoPath, "")
 		return jiraAIStartedMsg{agentID: id, mode: "create", err: err}
 	}
 }
@@ -1039,14 +1042,14 @@ func (v *JiraView) startMultiReview(instruction string) tea.Cmd {
 	v.aiViewOffset = 0
 	v.approvalView = nil
 
-	eng := v.eng
+	svc := v.services
 	repoPath := v.repoPath
 	if repoPath == "" && v.proj != nil && len(v.proj.Repos) > 0 {
 		repoPath = v.proj.Repos[0].Path
 	}
 
 	// Collect selected issues
-	var selected []jira.Issue
+	var selected []service.Issue
 	for _, issue := range v.issues {
 		if v.selectedIssues[issue.Key] {
 			selected = append(selected, issue)
@@ -1054,10 +1057,10 @@ func (v *JiraView) startMultiReview(instruction string) tea.Cmd {
 	}
 
 	return func() tea.Msg {
-		if eng == nil {
+		if svc == nil {
 			return jiraAIStartedMsg{err: fmt.Errorf("agent engine not available"), mode: "review"}
 		}
-		id, err := jira.ReviewTickets(eng, selected, repoPath, instruction, "")
+		id, err := svc.Jira.ReviewTickets(v.ctx(), selected, repoPath, instruction, "")
 		return jiraAIStartedMsg{agentID: id, mode: "review", err: err}
 	}
 }
@@ -1301,7 +1304,7 @@ func (v *JiraView) renderWorkflowModal() string {
 	return ""
 }
 
-func (v *JiraView) renderDetail(issue *jira.Issue) string {
+func (v *JiraView) renderDetail(issue *service.Issue) string {
 	th := theme.GetTheme()
 	var s strings.Builder
 
@@ -1359,7 +1362,7 @@ func (v *JiraView) renderDetail(issue *jira.Issue) string {
 }
 
 // renderIssueItem renders one issue row in the filter list.
-func (v *JiraView) renderIssueItem(issue jira.Issue, index int, selected bool) string {
+func (v *JiraView) renderIssueItem(issue service.Issue, index int, selected bool) string {
 	th := theme.GetTheme()
 
 	prefix := "  "

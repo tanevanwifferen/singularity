@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
-	"gitlab.com/tanevanwifferen1/singularity/internal/project"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -15,12 +15,12 @@ import (
 // projectStashDoneMsg signals that a stash operation has completed across all repos.
 type projectStashDoneMsg struct {
 	op      string // "stash", "apply", "pop"
-	results []project.RepoStashResult
+	results []service.RepoStashResult
 }
 
 // projectStashLoadedMsg carries refreshed stash data from all repos.
 type projectStashLoadedMsg struct {
-	lists []project.RepoStashList
+	lists []service.RepoStashList
 }
 
 // ProjectStashView handles stash operations across all repos in a project.
@@ -28,10 +28,10 @@ type projectStashLoadedMsg struct {
 // or apply/pop all stashes with a selected name.
 type ProjectStashView struct {
 	viewBase
-	proj *project.Project
+	proj *service.Project
 
 	// Stash data
-	repoStashLists []project.RepoStashList
+	repoStashLists []service.RepoStashList
 	stashNames     []string // unique stash names across all repos, sorted
 	selectedIdx    int
 	loading        bool
@@ -51,7 +51,7 @@ type ProjectStashView struct {
 }
 
 // NewProjectStashView creates a new project stash view.
-func NewProjectStashView(proj *project.Project) *ProjectStashView {
+func NewProjectStashView(proj *service.Project) *ProjectStashView {
 	return &ProjectStashView{
 		viewBase:      viewBase{width: 80, height: 24},
 		proj:          proj,
@@ -70,12 +70,12 @@ func (v *ProjectStashView) loadCmd() tea.Cmd {
 		if v.proj == nil {
 			return projectStashLoadedMsg{}
 		}
-		lists := project.ListAllStashes(v.proj)
+		lists := service.ListAllStashes(v.proj)
 		return projectStashLoadedMsg{lists: lists}
 	}
 }
 
-func (v *ProjectStashView) processLoadedLists(lists []project.RepoStashList) {
+func (v *ProjectStashView) processLoadedLists(lists []service.RepoStashList) {
 	v.repoStashLists = lists
 
 	seen := make(map[string]bool)
@@ -192,7 +192,7 @@ func (v *ProjectStashView) handleNewStashInput(msg tea.KeyMsg) (tea.Model, tea.C
 			v.executing = true
 			v.addLog(SyncOpNone, "info", fmt.Sprintf("Stashing all repos as %q...", name))
 			return v, func() tea.Msg {
-				results := project.StashAllRepos(v.proj, name, untracked)
+				results := service.StashAllRepos(v.proj, name, untracked)
 				return projectStashDoneMsg{op: "stash", results: results}
 			}
 		}
@@ -218,7 +218,7 @@ func (v *ProjectStashView) handleApplyConfirm(msg tea.KeyMsg) (tea.Model, tea.Cm
 		v.executing = true
 		v.addLog(SyncOpNone, "info", fmt.Sprintf("Applying %q across all repos...", name))
 		return v, func() tea.Msg {
-			results := project.ApplyStashAllRepos(v.proj, name, false)
+			results := service.ApplyStashAllRepos(v.proj, name, false)
 			return projectStashDoneMsg{op: "apply", results: results}
 		}
 	case "n", "esc":
@@ -235,7 +235,7 @@ func (v *ProjectStashView) handlePopConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd)
 		v.executing = true
 		v.addLog(SyncOpNone, "info", fmt.Sprintf("Popping %q across all repos...", name))
 		return v, func() tea.Msg {
-			results := project.ApplyStashAllRepos(v.proj, name, true)
+			results := service.ApplyStashAllRepos(v.proj, name, true)
 			return projectStashDoneMsg{op: "pop", results: results}
 		}
 	case "n", "esc":

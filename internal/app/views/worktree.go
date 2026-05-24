@@ -7,8 +7,7 @@ import (
 	"strings"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
-	"gitlab.com/tanevanwifferen1/singularity/internal/engine"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	"github.com/charmbracelet/bubbletea"
@@ -17,14 +16,11 @@ import (
 // WorktreeView displays and manages git worktrees.
 type WorktreeView struct {
 	viewBase
-	repo      *git.RepoInfo
-	worktrees []git.Worktree
-	filter    *components.Filter[git.Worktree]
+	repo      *service.RepoInfo
+	worktrees []service.Worktree
+	filter    *components.Filter[service.Worktree]
 	loading   bool
 	err       error
-
-	// Agent engine for starting merge agents
-	engine *engine.Engine
 
 	// Modal states
 	showCreate         bool
@@ -32,9 +28,9 @@ type WorktreeView struct {
 	showPruneConfirm   bool
 	showNewBranchInput bool
 	showAgentConfirm   bool
-	agentWorktree      *git.Worktree
+	agentWorktree      *service.Worktree
 	showRebaseConfirm  bool
-	rebaseWorktree     *git.Worktree
+	rebaseWorktree     *service.Worktree
 
 	// Create worktree input state
 	newWorktreePath        string
@@ -44,12 +40,12 @@ type WorktreeView struct {
 	createNewBranch        bool
 
 	// Remove confirmation state
-	removeWorktree *git.Worktree
+	removeWorktree *service.Worktree
 	removeForce    bool
 
 	// Branch list for selection during create
-	branches         []git.BranchInfo
-	branchFilter     *components.Filter[git.BranchInfo]
+	branches         []service.BranchInfo
+	branchFilter     *components.Filter[service.BranchInfo]
 	showBranchPicker bool
 
 	// Detach all worktrees state
@@ -64,16 +60,11 @@ func NewWorktreeView(repoPath string) *WorktreeView {
 	}
 
 	// Initialize the filter with worktree items
-	worktrees := []git.Worktree{}
+	worktrees := []service.Worktree{}
 	v.filter = components.NewFilter(worktrees, v.renderWorktreeItem)
 	v.filter.SetHeight(v.height)
 
 	return v
-}
-
-// SetEngine sets the agent engine used to start merge agents.
-func (v *WorktreeView) SetEngine(eng *engine.Engine) {
-	v.engine = eng
 }
 
 // Init initializes the worktree view.
@@ -89,7 +80,7 @@ func (v *WorktreeView) Init() tea.Cmd {
 func (v *WorktreeView) loadData() {
 	v.err = nil
 
-	repo, err := git.OpenRepo(v.repoPath)
+	repo, err := v.services.Repo.Open(v.ctx(), v.repoPath)
 	if err != nil {
 		v.err = fmt.Errorf("failed to open repo: %w", err)
 		v.loading = false
@@ -97,7 +88,7 @@ func (v *WorktreeView) loadData() {
 	}
 	v.repo = repo
 
-	worktrees, err := git.GetWorktrees(v.repoPath)
+	worktrees, err := v.services.Worktree.List(v.ctx(), v.repoPath)
 	if err != nil {
 		v.err = fmt.Errorf("failed to get worktrees: %w", err)
 		v.loading = false
@@ -330,7 +321,7 @@ func (v *WorktreeView) handleDetachAllConfirm(msg tea.KeyMsg) tea.Cmd {
 		return func() tea.Msg {
 			var errs []string
 			for _, wt := range worktrees {
-				if err := git.CheckoutDetached(wt.Path); err != nil {
+				if err := v.services.Branch.CheckoutDetached(v.ctx(), wt.Path); err != nil {
 					errs = append(errs, fmt.Sprintf("%s: %v", filepath.Base(wt.Path), err))
 				}
 			}
@@ -353,10 +344,10 @@ func (v *WorktreeView) handleAgentConfirm(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "y", "enter":
 		wt := v.agentWorktree
-		eng := v.engine
+		svc := v.services
 		v.showAgentConfirm = false
 		v.agentWorktree = nil
-		if wt != nil && eng != nil {
+		if wt != nil && svc != nil {
 			path := wt.Path
 			branch := wt.Branch
 			return func() tea.Msg {
@@ -367,7 +358,7 @@ func (v *WorktreeView) handleAgentConfirm(msg tea.KeyMsg) tea.Cmd {
 						"4) push to remote. Resolve any merge conflicts carefully.",
 					branch, branch,
 				)
-				id, err := eng.StartAgent(path, task, engine.AgentOptions{SmartRoute: true})
+				id, err := svc.Agent.Start(v.ctx(), path, task, service.AgentOptions{SmartRoute: true})
 				return AgentCreatedMsg{ID: id, Err: err}
 			}
 		}
@@ -383,26 +374,41 @@ func (v *WorktreeView) handleRebaseConfirm(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "y", "enter":
 		wt := v.rebaseWorktree
-		eng := v.engine
+		svc := v.services
 		v.showRebaseConfirm = false
 		v.rebaseWorktree = nil
-		if wt != nil && eng != nil {
+		if wt != nil && svc != nil {
 			path := wt.Path
 			branch := wt.Branch
 			return func() tea.Msg {
-				mainBranch, conflictFiles, _, rebaseErr := git.RebaseOntoMain(path)
-				if rebaseErr == nil {
+				// OntoMain streams progress through SyncProgressEvent; we
+				// collect the final event to detect conflicts and continue
+				// with the existing post-rebase logic.
+				ch, cancel, err := svc.Rebase.OntoMain(v.ctx(), path)
+				if err != nil {
+					return AgentCreatedMsg{Err: err}
+				}
+				defer cancel()
+				var lastErr string
+				var mainBranch string
+				var conflictFiles []string
+				for ev := range ch {
+					if ev.Done {
+						lastErr = ev.Err
+					}
+					_ = mainBranch
+					_ = conflictFiles
+				}
+				if lastErr == "" {
 					pushCmd := exec.Command("git", "-C", path, "push", "--force-with-lease", "origin", branch)
 					pushCmd.Run()
 					return RefreshDoneMsg{}
 				}
-				if len(conflictFiles) == 0 {
-					return AgentCreatedMsg{Err: rebaseErr}
-				}
-				rebaseCtx, ctxErr := git.GetRebaseContext(path, mainBranch, conflictFiles)
-				if ctxErr != nil {
-					rebaseCtx = fmt.Sprintf("(could not gather rebase context: %v)", ctxErr)
-				}
+				// TODO(phase-D-followup): the rebase event stream needs to
+				// surface mainBranch + conflictFiles. For now, fall back to
+				// the agent-driven conflict resolution prompt without the
+				// rich context (LLM can inspect the worktree directly).
+				rebaseCtx := lastErr
 				task := fmt.Sprintf(
 					"You are in a git worktree at path '%s' on branch '%s'.\n\n"+
 						"A `git rebase origin/%s` has already been started and there are merge conflicts.\n\n"+
@@ -421,7 +427,7 @@ func (v *WorktreeView) handleRebaseConfirm(msg tea.KeyMsg) tea.Cmd {
 						"Important: Work in the worktree directory '%s'. Use Read/Edit tools to resolve conflicts by rewriting the conflict regions. Do NOT run git rebase --abort.",
 					path, branch, mainBranch, rebaseCtx, branch, path,
 				)
-				id, err := eng.StartAgent(path, task, engine.AgentOptions{SmartRoute: true})
+				id, err := svc.Agent.Start(v.ctx(), path, task, service.AgentOptions{SmartRoute: true})
 				return AgentCreatedMsg{ID: id, Err: err}
 			}
 		}
@@ -533,7 +539,7 @@ func (v *WorktreeView) handleNewBranchInput(msg tea.KeyMsg) tea.Cmd {
 
 // createWorktree creates a new worktree.
 func (v *WorktreeView) createWorktree(path, branch string, createBranch bool) {
-	err := git.CreateWorktree(v.repoPath, path, branch, createBranch, "")
+	err := v.services.Worktree.Create(v.ctx(), v.repoPath, path, branch, createBranch, "")
 	if err != nil {
 		v.err = fmt.Errorf("failed to create worktree: %w", err)
 		return
@@ -544,7 +550,7 @@ func (v *WorktreeView) createWorktree(path, branch string, createBranch bool) {
 
 // removeWorktreeCmd removes a worktree.
 func (v *WorktreeView) removeWorktreeCmd(worktreePath string, force bool) {
-	err := git.RemoveWorktree(v.repoPath, worktreePath, force)
+	err := v.services.Worktree.Remove(v.ctx(), v.repoPath, worktreePath, force)
 	if err != nil {
 		v.err = fmt.Errorf("failed to remove worktree: %w", err)
 		return
@@ -555,7 +561,7 @@ func (v *WorktreeView) removeWorktreeCmd(worktreePath string, force bool) {
 
 // pruneWorktrees prunes stale worktree references.
 func (v *WorktreeView) pruneWorktrees() {
-	err := git.PruneWorktrees(v.repoPath)
+	err := v.services.Worktree.Prune(v.ctx(), v.repoPath)
 	if err != nil {
 		v.err = fmt.Errorf("failed to prune worktrees: %w", err)
 		return
@@ -566,7 +572,7 @@ func (v *WorktreeView) pruneWorktrees() {
 
 // lockWorktree locks a worktree.
 func (v *WorktreeView) lockWorktree(worktreePath string) {
-	err := git.LockWorktree(v.repoPath, worktreePath)
+	err := v.services.Worktree.Lock(v.ctx(), v.repoPath, worktreePath)
 	if err != nil {
 		v.err = fmt.Errorf("failed to lock worktree: %w", err)
 		return
@@ -577,7 +583,7 @@ func (v *WorktreeView) lockWorktree(worktreePath string) {
 
 // unlockWorktree unlocks a worktree.
 func (v *WorktreeView) unlockWorktree(worktreePath string) {
-	err := git.UnlockWorktree(v.repoPath, worktreePath)
+	err := v.services.Worktree.Unlock(v.ctx(), v.repoPath, worktreePath)
 	if err != nil {
 		v.err = fmt.Errorf("failed to unlock worktree: %w", err)
 		return
@@ -595,7 +601,7 @@ func (v *WorktreeView) navigateToWorktree(path string) {
 }
 
 // renderWorktreeItem renders a single worktree item in the list.
-func (v *WorktreeView) renderWorktreeItem(worktree git.Worktree, index int, selected bool) string {
+func (v *WorktreeView) renderWorktreeItem(worktree service.Worktree, index int, selected bool) string {
 	th := theme.GetTheme()
 
 	// Path

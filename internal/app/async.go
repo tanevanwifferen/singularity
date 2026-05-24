@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -29,7 +29,7 @@ const (
 
 // RepoLoadedMsg is sent when repository data has been loaded.
 type RepoLoadedMsg struct {
-	Repo *git.RepoInfo
+	Repo *service.RepoInfo
 	Err  error
 }
 
@@ -37,7 +37,7 @@ func (RepoLoadedMsg) isAsyncMsg() {}
 
 // BranchesLoadedMsg is sent when branch list has been loaded.
 type BranchesLoadedMsg struct {
-	Branches []git.BranchInfo
+	Branches []service.BranchInfo
 	Err      error
 }
 
@@ -45,7 +45,7 @@ func (BranchesLoadedMsg) isAsyncMsg() {}
 
 // BranchComparisonMsg is sent when branch comparison completes.
 type BranchComparisonMsg struct {
-	Comparison *git.BranchComparison
+	Comparison *service.BranchComparison
 	BranchName string
 	Err        error
 }
@@ -343,11 +343,15 @@ func RunAsyncGit[T AsyncMsg](
 	}
 }
 
-// RunAsyncRepoLoad loads repository info asynchronously.
-func RunAsyncRepoLoad(repoPath string, manager *AsyncManager) tea.Cmd {
+// RunAsyncRepoLoad loads repository info asynchronously through the
+// RepoService rather than calling internal/git directly.
+func RunAsyncRepoLoad(svc *service.Services, repoPath string, manager *AsyncManager) tea.Cmd {
 	id := opKey(OpLoadRepo, repoPath)
 	return RunAsyncGit(OpLoadRepo, id, manager, func(ctx context.Context) RepoLoadedMsg {
-		repo, err := git.OpenRepo(repoPath)
+		if svc == nil {
+			return RepoLoadedMsg{Err: service.ErrUnavailable}
+		}
+		repo, err := svc.Repo.Open(ctx, repoPath)
 		if err != nil {
 			return RepoLoadedMsg{Err: err}
 		}
@@ -355,11 +359,15 @@ func RunAsyncRepoLoad(repoPath string, manager *AsyncManager) tea.Cmd {
 	})
 }
 
-// RunAsyncBranchComparison compares two branches asynchronously.
-func RunAsyncBranchComparison(repoPath, branchA, branchB string, manager *AsyncManager) tea.Cmd {
+// RunAsyncBranchComparison compares two branches asynchronously through the
+// BranchService.
+func RunAsyncBranchComparison(svc *service.Services, repoPath, branchA, branchB string, manager *AsyncManager) tea.Cmd {
 	id := opKey(OpCompareBranches, repoPath+":"+branchA+":"+branchB)
 	return RunAsyncGit(OpCompareBranches, id, manager, func(ctx context.Context) BranchComparisonMsg {
-		comparison, err := git.CompareBranches(repoPath, branchA, branchB)
+		if svc == nil {
+			return BranchComparisonMsg{Err: service.ErrUnavailable, BranchName: branchB}
+		}
+		comparison, err := svc.Branch.Compare(ctx, repoPath, branchA, branchB)
 		if err != nil {
 			return BranchComparisonMsg{Err: err, BranchName: branchB}
 		}
@@ -367,11 +375,15 @@ func RunAsyncBranchComparison(repoPath, branchA, branchB string, manager *AsyncM
 	})
 }
 
-// RunAsyncBranchList loads branch list asynchronously.
-func RunAsyncBranchList(repoPath string, manager *AsyncManager) tea.Cmd {
+// RunAsyncBranchList loads the branch list asynchronously through the
+// RepoService (RepoInfo carries the branch slice).
+func RunAsyncBranchList(svc *service.Services, repoPath string, manager *AsyncManager) tea.Cmd {
 	id := opKey(OpListBranches, repoPath)
 	return RunAsyncGit(OpListBranches, id, manager, func(ctx context.Context) BranchesLoadedMsg {
-		repo, err := git.OpenRepo(repoPath)
+		if svc == nil {
+			return BranchesLoadedMsg{Err: service.ErrUnavailable}
+		}
+		repo, err := svc.Repo.Open(ctx, repoPath)
 		if err != nil {
 			return BranchesLoadedMsg{Err: err}
 		}
@@ -379,11 +391,15 @@ func RunAsyncBranchList(repoPath string, manager *AsyncManager) tea.Cmd {
 	})
 }
 
-// RunAsyncRepoRefresh refreshes repository info asynchronously.
-func RunAsyncRepoRefresh(repoPath string, manager *AsyncManager) tea.Cmd {
+// RunAsyncRepoRefresh refreshes repository info asynchronously through the
+// RepoService.
+func RunAsyncRepoRefresh(svc *service.Services, repoPath string, manager *AsyncManager) tea.Cmd {
 	id := opKey(OpRefreshRepo, repoPath)
 	return RunAsyncGit(OpRefreshRepo, id, manager, func(ctx context.Context) RepoLoadedMsg {
-		repo, err := git.OpenRepo(repoPath)
+		if svc == nil {
+			return RepoLoadedMsg{Err: service.ErrUnavailable}
+		}
+		repo, err := svc.Repo.Open(ctx, repoPath)
 		if err != nil {
 			return RepoLoadedMsg{Err: err}
 		}

@@ -7,8 +7,7 @@ import (
 	"sync"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
-	"gitlab.com/tanevanwifferen1/singularity/internal/git"
-	"gitlab.com/tanevanwifferen1/singularity/internal/project"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -26,7 +25,7 @@ type repoDiffResult struct {
 	WorktreePath  string
 	DefaultBranch string // resolved default branch ref (e.g. "main", "origin/main")
 	MergeBase     string // merge-base SHA used for diff computation
-	Diff          *git.BranchDiff
+	Diff          *service.BranchDiff
 	Err           error
 	// DeepFileStatus maps file path → true if ALL hunks are already in the base branch
 	DeepFileStatus map[string]bool
@@ -36,7 +35,7 @@ type repoDiffResult struct {
 type diffItem struct {
 	IsRepoHeader  bool
 	RepoName      string
-	File          *git.FileChange
+	File          *service.FileChange
 	WorktreePath  string
 	DefaultBranch string // resolved default branch ref
 	MergeBase     string // merge-base SHA used for diff computation
@@ -59,7 +58,7 @@ type hunkStats struct {
 type WorkflowDiffView struct {
 	viewBase
 	diffNavHelper
-	workflow *project.FeatureWorkflow
+	workflow *service.FeatureWorkflow
 	loading  bool
 	err      error
 
@@ -80,7 +79,7 @@ func NewWorkflowDiffView() *WorkflowDiffView {
 }
 
 // SetWorkflow sets the workflow to diff and resets view state.
-func (v *WorkflowDiffView) SetWorkflow(wf *project.FeatureWorkflow) {
+func (v *WorkflowDiffView) SetWorkflow(wf *service.FeatureWorkflow) {
 	v.workflow = wf
 	v.repoOrder = nil
 	v.repoDiffs = nil
@@ -112,23 +111,25 @@ func (v *WorkflowDiffView) Init() tea.Cmd {
 				continue
 			}
 			wg.Add(1)
-			go func(name string, wr *project.WorkflowRepo) {
+			go func(name string, wr *service.WorkflowRepo) {
 				defer wg.Done()
 				defaultBranch := wr.DefaultBranch
 				if defaultBranch == "" {
 					defaultBranch = "main"
 				}
 				// Resolve to an existing ref (handles origin/main fallback)
-				defaultBranch = git.ResolveRef(wr.WorktreePath, defaultBranch)
+				if resolved, err := v.services.Branch.ResolveRef(v.ctx(), wr.WorktreePath, defaultBranch); err == nil && resolved != "" {
+					defaultBranch = resolved
+				}
 
 				// Use merge base so the diff matches what an MR would show
 				// (changes introduced by this branch, not diff between branch tips)
 				mergeBase := defaultBranch
-				if mb, err := git.GetMergeBase(wr.WorktreePath, defaultBranch, "HEAD"); err == nil {
+				if mb, err := v.services.Diff.MergeBase(v.ctx(), wr.WorktreePath, defaultBranch, "HEAD"); err == nil {
 					mergeBase = mb
 				}
 
-				diff, err := git.GetBranchDiff(wr.WorktreePath, mergeBase, "HEAD")
+				diff, err := v.services.Diff.BranchDiff(v.ctx(), wr.WorktreePath, mergeBase, "HEAD")
 
 				// Deep check: for each changed file, test whether all its hunks
 				// are already incorporated in the default branch (squash-merge detection).
@@ -137,7 +138,7 @@ func (v *WorkflowDiffView) Init() tea.Cmd {
 				if err == nil && diff != nil && len(diff.Files) > 0 {
 					fileStatus = make(map[string]bool, len(diff.Files))
 					for _, f := range diff.Files {
-						hunks, _, ferr := git.GetDeepFileDiff(wr.WorktreePath, mergeBase, "HEAD", defaultBranch, f.NewPath)
+						hunks, _, ferr := v.services.Diff.DeepFileDiff(v.ctx(), wr.WorktreePath, mergeBase, "HEAD", defaultBranch, f.NewPath)
 						if ferr != nil {
 							continue
 						}
@@ -336,7 +337,7 @@ func (v *WorkflowDiffView) loadSelectedFileDiff() {
 		return
 	}
 
-	hunks, rawDiff, err := git.GetDeepFileDiff(item.WorktreePath, item.MergeBase, "HEAD", item.DefaultBranch, item.File.NewPath)
+	hunks, rawDiff, err := v.services.Diff.DeepFileDiff(v.ctx(), item.WorktreePath, item.MergeBase, "HEAD", item.DefaultBranch, item.File.NewPath)
 	if err != nil {
 		v.err = err
 		return
@@ -350,7 +351,7 @@ func (v *WorkflowDiffView) loadSelectedFileDiff() {
 
 // parseDeepDiffLines parses raw diff output and annotates lines with AlreadyInBase
 // based on the filtered hunk results from GetDeepFileDiff.
-func parseDeepDiffLines(rawDiff string, filteredHunks []git.FilteredDiffHunk) []DiffLine {
+func parseDeepDiffLines(rawDiff string, filteredHunks []service.FilteredDiffHunk) []DiffLine {
 	lines := ParseDiffLines(rawDiff)
 	if len(filteredHunks) == 0 {
 		return lines
@@ -368,7 +369,7 @@ func parseDeepDiffLines(rawDiff string, filteredHunks []git.FilteredDiffHunk) []
 }
 
 // computeHunkStats tallies how many hunks are new vs already in the base branch.
-func computeHunkStats(hunks []git.FilteredDiffHunk) hunkStats {
+func computeHunkStats(hunks []service.FilteredDiffHunk) hunkStats {
 	stats := hunkStats{Total: len(hunks)}
 	for _, h := range hunks {
 		if h.AlreadyInBase {
