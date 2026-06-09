@@ -14,25 +14,33 @@ import (
 
 // AgentOptions configures an agent's behavior
 type AgentOptions struct {
-	Model        string        // Claude model to use (empty = default)
+	Model        string        // Model to use (empty = backend default)
 	Effort       string        // Effort level: "low", "medium", "high" (empty = default)
-	AllowedTools []string      // Restrict available tools
-	MaxTurns     int           // Max conversation turns (0 = unlimited)
+	AllowedTools []string      // Restrict available tools (claude only; pi uses its own config)
+	MaxTurns     int           // Max conversation turns (0 = unlimited; claude only)
 	Timeout      time.Duration // Kill agent after this duration (0 = no timeout)
 	ContextFiles []string      // Files to read and inject into the prompt on startup
-	SmartRoute   bool          // Use Haiku to classify prompt and pick model (opus for planning, sonnet for implementation)
+	SmartRoute   bool          // Use cheap model to classify prompt and pick model/effort
 	UseWorktree  bool          // Create a git worktree for isolation; merge back on completion
 	Summary      string        // One-line summary for display in agent list (auto-generated if empty)
 	WorkflowID   string        // Optional workflow ID (branch name) this agent belongs to
+	// Backend overrides the engine's default backend for this agent.
+	// nil means use the engine default (or resolve from BackendName).
+	Backend Backend
+	// BackendName is a string alternative to Backend ("claude" or "pi").
+	// Used when the caller comes from a CLI/HTTP path that carries strings.
+	// Ignored when Backend is non-nil.
+	BackendName string
 }
 
-// Engine manages a pool of Claude Code agent subprocesses
+// Engine manages a pool of coding-agent subprocesses
 type Engine struct {
-	agents    map[string]*Agent
-	mu        sync.RWMutex
-	idSeq     atomic.Int64
-	maxAgents int
-	soundCfg  config.SoundConfig
+	agents         map[string]*Agent
+	mu             sync.RWMutex
+	idSeq          atomic.Int64
+	maxAgents      int
+	soundCfg       config.SoundConfig
+	defaultBackend Backend // used when AgentOptions.Backend is nil
 
 	// Observer callback: fired when any agent's state or output changes.
 	// Called from agent goroutines -- must be non-blocking.
@@ -42,15 +50,31 @@ type Engine struct {
 	timerMu     sync.Mutex
 }
 
-// New creates a new agent engine
+// New creates a new agent engine using the claude backend by default.
 func New(maxAgents int) *Engine {
 	if maxAgents <= 0 {
 		maxAgents = 10
 	}
 	return &Engine{
-		agents:    make(map[string]*Agent),
-		maxAgents: maxAgents,
+		agents:         make(map[string]*Agent),
+		maxAgents:      maxAgents,
+		defaultBackend: NewPiBackend(""),
 	}
+}
+
+// SetDefaultBackend replaces the engine's default backend.
+// Call before starting any agents.
+func (e *Engine) SetDefaultBackend(b Backend) {
+	e.mu.Lock()
+	e.defaultBackend = b
+	e.mu.Unlock()
+}
+
+// DefaultBackend returns the currently configured default backend.
+func (e *Engine) DefaultBackend() Backend {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.defaultBackend
 }
 
 // SetSoundConfig configures sound notifications for agent completion.
@@ -85,7 +109,14 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 	}
 
 	id := e.generateID()
-	agent := newAgent(id, projectPath, task, opts)
+	backend := opts.Backend
+	if backend == nil && opts.BackendName != "" {
+		backend = BackendByName(opts.BackendName)
+	}
+	if backend == nil {
+		backend = e.defaultBackend
+	}
+	agent := newAgent(id, projectPath, task, opts, backend)
 	agent.soundCfg = e.soundCfg
 	agent.notify = func() { e.notifyUpdate(id) }
 	e.agents[id] = agent
@@ -111,7 +142,7 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 		agent.setState(AgentRouting)
 		agent.appendOutput("system", "Routing via Haiku...")
 		go func() {
-			route, err := RoutePrompt(task)
+			route, err := RoutePrompt(task, backend)
 			if err == nil {
 				agent.mu.Lock()
 				agent.model = route.Model

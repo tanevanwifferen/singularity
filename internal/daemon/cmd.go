@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/config"
+	"gitlab.com/tanevanwifferen1/singularity/internal/engine"
 	"gitlab.com/tanevanwifferen1/singularity/internal/project"
 	"gitlab.com/tanevanwifferen1/singularity/internal/server"
 	"gitlab.com/tanevanwifferen1/singularity/internal/service/local"
@@ -79,6 +80,16 @@ func Run(opts RunOptions) error {
 	}
 	listenSpec := firstNonEmpty(opts.Listen, fc.Listen)
 	projCfgPath := firstNonEmpty(opts.ProjectConfig, fc.ProjectConfig)
+	// If no project config was explicitly provided, fall back to the default
+	// path (~/.config/singularity/projects.json). This ensures that auto-spawned
+	// daemons pick up the user's project config without requiring daemon.json.
+	if projCfgPath == "" {
+		defaultCfg := project.GetDefaultConfigPath()
+		if _, ferr := os.Stat(defaultCfg); ferr == nil {
+			projCfgPath = defaultCfg
+			log.Printf("auto-loading default project config: %s", projCfgPath)
+		}
+	}
 	maxAgents := opts.MaxAgents
 	if maxAgents == 0 {
 		maxAgents = fc.MaxAgents
@@ -155,6 +166,11 @@ func Run(opts RunOptions) error {
 	var jiraCfg config.JiraConfig
 	if cfg, lerr := config.LoadDefaultConfig(); lerr == nil && cfg != nil {
 		jiraCfg = cfg.Jira
+		// Apply backend from AI provider config ("claude" or "pi").
+		if b := engine.BackendByName(cfg.AI.Provider); b != nil {
+			srv.Engine().SetDefaultBackend(b)
+			log.Printf("agent backend: %s (from config AI.Provider)", cfg.AI.Provider)
+		}
 	}
 	srv.SetServices(local.New(srv.Engine(), loader, jiraCfg))
 

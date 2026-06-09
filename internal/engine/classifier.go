@@ -44,20 +44,17 @@ Respond with ONLY a JSON object, no other text:
 User prompt:
 %s`
 
-// ClassifyPrompt uses Claude Haiku to classify a prompt as planning or implementation.
-// Returns the category and suggested model.
-func ClassifyPrompt(ctx context.Context, prompt string) (*ClassificationResult, error) {
+// ClassifyPrompt uses a lightweight model to classify a prompt as planning or implementation.
+// The backend determines which binary and flags to use.
+func ClassifyPrompt(ctx context.Context, prompt string, backend Backend) (*ClassificationResult, error) {
 	classifyInput := fmt.Sprintf(classifierPrompt, prompt)
 
-	args := []string{
-		"--print",
-		"--model", "haiku",
-		"--output-format", "text",
-		"--max-turns", "1",
-		classifyInput,
+	if backend == nil {
+		backend = NewPiBackend("")
 	}
+	binary, args := backend.ClassifyCommand(classifyInput)
 
-	cmd := exec.CommandContext(ctx, "claude", args...)
+	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Env = append(os.Environ(), "CLAUDE_NO_ANALYTICS=true")
 
 	output, err := cmd.Output()
@@ -117,11 +114,11 @@ func parseClassification(response string) (*ClassificationResult, error) {
 	return result, nil
 }
 
-// RoutePrompt classifies a prompt and returns the classification result.
+// RoutePrompt classifies a prompt using the given backend and returns the result.
 // Uses a 15-second timeout to avoid blocking indefinitely.
-func RoutePrompt(prompt string) (*ClassificationResult, error) {
+func RoutePrompt(prompt string, backend Backend) (*ClassificationResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	return ClassifyPrompt(ctx, prompt)
+	return ClassifyPrompt(ctx, prompt, backend)
 }

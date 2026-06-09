@@ -92,9 +92,9 @@ func TestAgentCapacityLimit(t *testing.T) {
 	e := New(2)
 
 	// Simulate agents at capacity by creating agents and setting them active
-	a1 := newAgent("test-1", os.TempDir(), "task1", AgentOptions{})
+	a1 := newAgent("test-1", os.TempDir(), "task1", AgentOptions{}, NewClaudeBackend())
 	a1.State = AgentRunning
-	a2 := newAgent("test-2", os.TempDir(), "task2", AgentOptions{})
+	a2 := newAgent("test-2", os.TempDir(), "task2", AgentOptions{}, NewClaudeBackend())
 	a2.State = AgentRunning
 
 	e.mu.Lock()
@@ -114,8 +114,8 @@ func TestAgentCapacityLimit(t *testing.T) {
 func TestListAgents(t *testing.T) {
 	e := New(10)
 
-	a1 := newAgent("test-1", os.TempDir(), "task1", AgentOptions{})
-	a2 := newAgent("test-2", os.TempDir(), "task2", AgentOptions{})
+	a1 := newAgent("test-1", os.TempDir(), "task1", AgentOptions{}, NewClaudeBackend())
+	a2 := newAgent("test-2", os.TempDir(), "task2", AgentOptions{}, NewClaudeBackend())
 
 	e.mu.Lock()
 	e.agents["test-1"] = a1
@@ -131,11 +131,11 @@ func TestListAgents(t *testing.T) {
 func TestActiveAgents(t *testing.T) {
 	e := New(10)
 
-	a1 := newAgent("test-1", os.TempDir(), "task1", AgentOptions{})
+	a1 := newAgent("test-1", os.TempDir(), "task1", AgentOptions{}, NewClaudeBackend())
 	a1.State = AgentRunning
-	a2 := newAgent("test-2", os.TempDir(), "task2", AgentOptions{})
+	a2 := newAgent("test-2", os.TempDir(), "task2", AgentOptions{}, NewClaudeBackend())
 	a2.State = AgentComplete
-	a3 := newAgent("test-3", os.TempDir(), "task3", AgentOptions{})
+	a3 := newAgent("test-3", os.TempDir(), "task3", AgentOptions{}, NewClaudeBackend())
 	a3.State = AgentStarting
 
 	e.mu.Lock()
@@ -177,7 +177,7 @@ func TestKillAgentNotFound(t *testing.T) {
 func TestRemoveAgent(t *testing.T) {
 	e := New(10)
 
-	a := newAgent("test-1", os.TempDir(), "task1", AgentOptions{})
+	a := newAgent("test-1", os.TempDir(), "task1", AgentOptions{}, NewClaudeBackend())
 	a.State = AgentComplete
 
 	e.mu.Lock()
@@ -215,7 +215,7 @@ func TestEngineStats(t *testing.T) {
 
 	e.mu.Lock()
 	for id, state := range agents {
-		a := newAgent(id, os.TempDir(), "task", AgentOptions{})
+		a := newAgent(id, os.TempDir(), "task", AgentOptions{}, NewClaudeBackend())
 		a.State = state
 		e.agents[id] = a
 	}
@@ -242,7 +242,7 @@ func TestEngineStats(t *testing.T) {
 func TestShutdown(t *testing.T) {
 	e := New(10)
 
-	a := newAgent("test-1", os.TempDir(), "task1", AgentOptions{})
+	a := newAgent("test-1", os.TempDir(), "task1", AgentOptions{}, NewClaudeBackend())
 	a.State = AgentComplete // not active, won't try to kill
 
 	e.mu.Lock()
@@ -277,7 +277,7 @@ func TestAgentStateString(t *testing.T) {
 }
 
 func TestAgentOutput(t *testing.T) {
-	a := newAgent("test", os.TempDir(), "task", AgentOptions{})
+	a := newAgent("test", os.TempDir(), "task", AgentOptions{}, NewClaudeBackend())
 
 	a.appendOutput("text", "line 1")
 	a.appendOutput("text", "line 2")
@@ -310,7 +310,7 @@ func TestAgentOutput(t *testing.T) {
 }
 
 func TestAgentIsActive(t *testing.T) {
-	a := newAgent("test", os.TempDir(), "task", AgentOptions{})
+	a := newAgent("test", os.TempDir(), "task", AgentOptions{}, NewClaudeBackend())
 
 	a.State = AgentIdle
 	if a.IsActive() {
@@ -344,13 +344,14 @@ func TestAgentIsActive(t *testing.T) {
 }
 
 func TestBuildArgs(t *testing.T) {
-	a := newAgent("test", os.TempDir(), "do something", AgentOptions{
+	opts := AgentOptions{
 		Model:        "sonnet",
 		MaxTurns:     5,
 		AllowedTools: []string{"Read", "Write"},
-	})
+	}
+	a := newAgent("test", os.TempDir(), "do something", opts, NewClaudeBackend())
 
-	args := a.buildArgs()
+	args := a.backend.Args(a.model, a.effort, a.maxTurns, a.allowedTools)
 
 	hasModel := false
 	hasMaxTurns := false
@@ -394,7 +395,7 @@ func TestBuildArgs(t *testing.T) {
 }
 
 func TestBuildTaskNoContextFiles(t *testing.T) {
-	a := newAgent("test", os.TempDir(), "do something", AgentOptions{})
+	a := newAgent("test", os.TempDir(), "do something", AgentOptions{}, NewClaudeBackend())
 	task := a.buildTask()
 	if task != "do something" {
 		t.Errorf("expected bare task, got %q", task)
@@ -416,7 +417,7 @@ func TestBuildTaskWithContextFiles(t *testing.T) {
 
 	a := newAgent("test", os.TempDir(), "do something", AgentOptions{
 		ContextFiles: []string{tmpFile.Name()},
-	})
+	}, NewClaudeBackend())
 	task := a.buildTask()
 
 	if !strings.Contains(task, "# Project Info") {
@@ -433,7 +434,7 @@ func TestBuildTaskWithContextFiles(t *testing.T) {
 func TestBuildTaskWithMissingContextFile(t *testing.T) {
 	a := newAgent("test", os.TempDir(), "do something", AgentOptions{
 		ContextFiles: []string{"/nonexistent/file.md"},
-	})
+	}, NewClaudeBackend())
 	task := a.buildTask()
 	if task != "do something" {
 		t.Errorf("expected bare task when context file missing, got %q", task)
@@ -464,7 +465,7 @@ func TestSendInputNotFound(t *testing.T) {
 func TestSendInputNotRunning(t *testing.T) {
 	e := New(5)
 
-	a := newAgent("test-1", os.TempDir(), "task", AgentOptions{})
+	a := newAgent("test-1", os.TempDir(), "task", AgentOptions{}, NewClaudeBackend())
 	a.State = AgentError
 
 	e.mu.Lock()
@@ -491,7 +492,7 @@ func TestWaitForNotFound(t *testing.T) {
 func TestWaitForCompleted(t *testing.T) {
 	e := New(5)
 
-	a := newAgent("test-1", os.TempDir(), "task", AgentOptions{})
+	a := newAgent("test-1", os.TempDir(), "task", AgentOptions{}, NewClaudeBackend())
 	a.State = AgentComplete
 	close(a.done) // signal completion
 
@@ -511,7 +512,7 @@ func TestWaitForCompleted(t *testing.T) {
 func TestWaitForTimeout(t *testing.T) {
 	e := New(5)
 
-	a := newAgent("test-1", os.TempDir(), "task", AgentOptions{})
+	a := newAgent("test-1", os.TempDir(), "task", AgentOptions{}, NewClaudeBackend())
 	a.State = AgentRunning
 	// Don't close done channel - agent is still "running"
 

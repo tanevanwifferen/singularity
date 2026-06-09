@@ -38,3 +38,12 @@ Thumbs.db
 .bv/
 .claude
 .claude-flow
+
+# Local scratch / AI working notes
+/singl
+.pi/
+context.md
+context-build/
+progress.md
+reviews/
+worker/

@@ -287,6 +287,7 @@ func agentOptionsFromStart(req api.AgentStartRequest) service.AgentOptions {
 		ContextFiles: req.ContextFiles,
 		SmartRoute:   req.SmartRoute,
 		Summary:      req.Summary,
+		BackendName:  req.Backend,
 	}
 	if req.TimeoutSecs > 0 {
 		opts.Timeout = time.Duration(req.TimeoutSecs) * time.Second
@@ -303,6 +304,7 @@ func agentOptionsFromResume(req api.AgentResumeRequest) service.AgentOptions {
 		ContextFiles: req.ContextFiles,
 		SmartRoute:   req.SmartRoute,
 		Summary:      req.Summary,
+		BackendName:  req.Backend,
 	}
 	if req.TimeoutSecs > 0 {
 		opts.Timeout = time.Duration(req.TimeoutSecs) * time.Second

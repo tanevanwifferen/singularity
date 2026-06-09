@@ -23,6 +23,7 @@ func (c *Client) AgentStart(ctx context.Context, workDir, task string, opts api.
 		SmartRoute:   opts.SmartRoute,
 		Summary:      opts.Summary,
 		TimeoutSecs:  int(opts.Timeout.Seconds()),
+		Backend:      opts.BackendName,
 	}
 	var resp api.AgentStartResponse
 	if err := c.post(ctx, "/api/agent/start", req, &resp); err != nil {
@@ -44,6 +45,7 @@ func (c *Client) AgentResume(ctx context.Context, agentID, message string, opts 
 		SmartRoute:   opts.SmartRoute,
 		Summary:      opts.Summary,
 		TimeoutSecs:  int(opts.Timeout.Seconds()),
+		Backend:      opts.BackendName,
 	}
 	var resp api.AgentStartResponse
 	if err := c.post(ctx, "/api/agent/resume", req, &resp); err != nil {

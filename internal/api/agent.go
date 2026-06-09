@@ -68,6 +68,9 @@ type AgentStartRequest struct {
 	ContextFiles []string `json:"context_files,omitempty"`
 	SmartRoute   bool     `json:"smart_route,omitempty"`
 	Summary      string   `json:"summary,omitempty"`
+	// Backend selects the agent runtime: "claude" or "pi".
+	// Empty means use the daemon's current default.
+	Backend string `json:"backend,omitempty"`
 }
 
 // AgentResumeRequest is the body for POST /api/agent/resume.
@@ -82,6 +85,9 @@ type AgentResumeRequest struct {
 	ContextFiles []string `json:"context_files,omitempty"`
 	SmartRoute   bool     `json:"smart_route,omitempty"`
 	Summary      string   `json:"summary,omitempty"`
+	// Backend selects the agent runtime: "claude" or "pi".
+	// Empty means use the daemon's current default.
+	Backend string `json:"backend,omitempty"`
 }
 
 // AgentStartResponse is the body for POST /api/agent/start and resume, plus
