@@ -156,12 +156,9 @@ func Run(opts RunOptions) error {
 		srv.SetProjectLoader(loader)
 	}
 
-	// The engine is owned by the server (constructed in server.New). We
-	// reuse it to keep agent ownership single-source-of-truth. maxAgents
-	// from config doesn't currently flow into engine.New() since the
-	// server owns construction — track as a follow-up; for now we honor
-	// the engine's own default.
-	_ = maxAgents
+	// The engine is owned by the server (constructed in server.New); apply
+	// the configured cap on the shared instance before any agent starts.
+	srv.Engine().SetMaxAgents(maxAgents)
 
 	var jiraCfg config.JiraConfig
 	if cfg, lerr := config.LoadDefaultConfig(); lerr == nil && cfg != nil {

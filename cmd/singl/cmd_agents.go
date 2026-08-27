@@ -90,7 +90,10 @@ func runAgentsGet(ctx context.Context, args []string) int {
 	}
 	if globals.json {
 		if *last > 0 {
-			entries, _ := c.AgentOutput(tctx, *id, 0)
+			entries, oerr := c.AgentOutput(tctx, *id, 0)
+			if oerr != nil {
+				return die(oerr)
+			}
 			start := len(entries) - *last
 			if start < 0 {
 				start = 0

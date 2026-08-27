@@ -34,11 +34,20 @@ const version = "0.0.1"
 
 // Server is the HTTP/WebSocket server.
 type Server struct {
-	addr     string
+	addr string
+
+	// repoPath is the fallback repo used when a request omits repo_path.
+	// Written by /api/repo/open while other handlers read it concurrently,
+	// so all access goes through getRepoPath/setRepoPath under repoMu.
+	repoMu   sync.RWMutex
 	repoPath string
 
+	// httpMu guards httpServer: Serve/Start assign it from their own
+	// goroutine while Shutdown/Stop read it from the signal handler.
+	httpMu     sync.Mutex
 	httpServer *http.Server
 	stopCh     chan struct{}
+	stopOnce   sync.Once
 
 	wsUpgrader websocket.Upgrader
 	wsClients  map[*websocket.Conn]*wsClient
@@ -56,9 +65,12 @@ type Server struct {
 	Services *service.Services
 
 	// agentOutputOffsets tracks the highest output entry offset already
-	// broadcast for a given agent. Updated under outputMu.
+	// broadcast for a given agent; terminalBroadcast marks agents whose
+	// terminal lifecycle event (complete/error) has already been sent, so
+	// overlapping debounce callbacks can't emit it twice. Both under outputMu.
 	outputMu           sync.Mutex
 	agentOutputOffsets map[string]int
+	terminalBroadcast  map[string]bool
 
 	// streams is the per-stream registry of channels created by the
 	// **stream** endpoints; subscribe_stream / cancel_stream WS messages
@@ -90,10 +102,17 @@ type wsClient struct {
 	writeMu sync.Mutex
 }
 
+// wsWriteWait bounds every data write to a WS connection. Without it a peer
+// that stops reading (dead TCP connection, full send buffer) blocks the
+// write forever while holding writeMu — which then stalls every broadcast
+// path in the daemon behind this one connection.
+const wsWriteWait = 10 * time.Second
+
 // writeMessage sends a single WS frame under the per-connection write mutex.
 func (c *wsClient) writeMessage(messageType int, data []byte) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	_ = c.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	return c.conn.WriteMessage(messageType, data)
 }
 
@@ -107,13 +126,26 @@ func (c *wsClient) writeControl(messageType int, data []byte, deadline time.Time
 // streamEntry captures one in-flight server-side stream. Cancel is the
 // service-supplied closure that tears down the underlying subscription.
 // Subscribers is the set of WS connections that asked for this stream's
-// frames; an entry is removed from the map when its terminal Done frame
-// is broadcast.
+// frames.
+//
+// Because the stream starts pumping the moment the HTTP handler returns —
+// before the client's subscribe_stream can possibly arrive — frames emitted
+// while no subscriber has ever attached are buffered in pending and replayed
+// to the first subscriber. Finished entries linger for streamRetention so a
+// subscribe that races the terminal frame still gets the replay instead of
+// hanging forever on a deleted stream.
 type streamEntry struct {
 	id          string
 	cancel      func()
 	subscribers map[*websocket.Conn]bool
 	mu          sync.Mutex
+
+	// pending holds wire-encoded frames broadcast before the first
+	// subscriber attached; nil once replayed. Guarded by mu.
+	pending [][]byte
+	// hasSubscriber flips to true on the first subscribe and never resets.
+	// Guarded by mu.
+	hasSubscriber bool
 }
 
 // New creates a new server. Engine is created up-front so WS callbacks can
@@ -127,6 +159,7 @@ func New(addr string, repoPath string) *Server {
 		stopCh:             make(chan struct{}),
 		engine:             engine.New(10),
 		agentOutputOffsets: make(map[string]int),
+		terminalBroadcast:  make(map[string]bool),
 		streams:            make(map[string]*streamEntry),
 	}
 	s.wsUpgrader = websocket.Upgrader{
@@ -206,15 +239,18 @@ func (s *Server) Start() error {
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
 
-	s.httpServer = &http.Server{
+	srv := &http.Server{
 		Addr:         s.addr,
 		Handler:      mux,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
+	s.httpMu.Lock()
+	s.httpServer = srv
+	s.httpMu.Unlock()
 
 	log.Printf("Starting server on %s", s.addr)
-	if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("server error: %w", err)
 	}
 	return nil
@@ -229,9 +265,12 @@ func (s *Server) Serve(ln net.Listener) error {
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
 
-	s.httpServer = &http.Server{Handler: mux}
+	srv := &http.Server{Handler: mux}
+	s.httpMu.Lock()
+	s.httpServer = srv
+	s.httpMu.Unlock()
 	log.Printf("Serving on %s", ln.Addr())
-	if err := s.httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
+	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("server error: %w", err)
 	}
 	return nil
@@ -241,12 +280,15 @@ func (s *Server) Serve(ln net.Listener) error {
 // stream and closes every WebSocket connection — http.Server.Shutdown alone
 // would block on hijacked WS conns until ctx expires.
 func (s *Server) Shutdown(ctx context.Context) error {
-	if s.httpServer == nil {
+	s.httpMu.Lock()
+	srv := s.httpServer
+	s.httpMu.Unlock()
+	if srv == nil {
 		return nil
 	}
 	s.cancelAllStreams()
 	s.closeAllWS()
-	return s.httpServer.Shutdown(ctx)
+	return srv.Shutdown(ctx)
 }
 
 // cancelAllStreams invokes every active stream's cancel closure and clears
@@ -275,38 +317,35 @@ func (s *Server) closeAllWS() {
 	}
 }
 
-// Stop stops the server.
+// Stop stops the server. Idempotent and safe to call before Start/Serve.
 func (s *Server) Stop() error {
-	close(s.stopCh)
+	s.stopOnce.Do(func() { close(s.stopCh) })
 
 	if s.engine != nil {
 		s.engine.Shutdown()
 	}
 
 	s.closeAllWS()
+	s.cancelAllStreams()
 
-	// Cancel every in-flight stream.
-	s.streamMu.Lock()
-	for id, e := range s.streams {
-		if e.cancel != nil {
-			e.cancel()
-		}
-		delete(s.streams, id)
+	s.httpMu.Lock()
+	srv := s.httpServer
+	s.httpMu.Unlock()
+	if srv == nil {
+		return nil
 	}
-	s.streamMu.Unlock()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return s.httpServer.Shutdown(ctx)
+	return srv.Shutdown(ctx)
 }
 
 // handleStatus handles GET /api/status. Independent of Services.
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	resp := api.StatusResponse{Version: version, Server: "singularity-api"}
-	if s.repoPath != "" {
-		resp.RepoPath = s.repoPath
+	if repoPath := s.getRepoPath(); repoPath != "" {
+		resp.RepoPath = repoPath
 		if s.Services != nil && s.Services.Repo != nil {
-			if info, err := s.Services.Repo.Open(r.Context(), s.repoPath); err == nil {
+			if info, err := s.Services.Repo.Open(r.Context(), repoPath); err == nil {
 				resp.RepoInfo = info
 			}
 		}
@@ -316,29 +355,38 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 // ---------------- helpers ----------------
 
+// getRepoPath returns the fallback repo path under repoMu.
+func (s *Server) getRepoPath() string {
+	s.repoMu.RLock()
+	defer s.repoMu.RUnlock()
+	return s.repoPath
+}
+
+// setRepoPath updates the fallback repo path under repoMu.
+func (s *Server) setRepoPath(p string) {
+	s.repoMu.Lock()
+	s.repoPath = p
+	s.repoMu.Unlock()
+}
+
 // resolveRepoPath returns reqPath when non-empty, otherwise the server's
 // fallback repoPath set at startup or by /api/repo/open. The result passes
 // through validateRepoPath so traversal attempts and (when configured)
 // off-allow-list paths are rejected before they reach the git layer. On
-// validation failure the cleaned path is returned anyway alongside a non-nil
-// error — the only caller that examines the error today is the agent start
-// handler; everyone else discards the error and relies on the downstream git
-// layer to surface a path-not-found.
+// validation failure an empty string is returned — never the raw input, which
+// would hand a traversal-laden or off-allow-list path straight to the git
+// layer. Handlers then fail with a path-not-found-style service error.
 func (s *Server) resolveRepoPath(reqPath string) string {
 	p := reqPath
 	if p == "" {
-		p = s.repoPath
+		p = s.getRepoPath()
 	}
 	if p == "" {
 		return ""
 	}
 	cleaned, err := s.validateRepoPath(p)
 	if err != nil {
-		// Returning empty here would mask the offending input and have the
-		// git layer error with "not a git repository: ''". Return the
-		// original instead; the handler will fail with a NOT_FOUND-style
-		// service error.
-		return p
+		return ""
 	}
 	return cleaned
 }

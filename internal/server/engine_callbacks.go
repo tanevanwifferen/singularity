@@ -34,12 +34,32 @@ func (s *Server) broadcastAgentUpdate(agentID string) {
 	}
 	snap := agent.Snapshot()
 
-	// Stream the new output entries that we haven't broadcast yet.
+	// Claim the new output entries atomically: overlapping callbacks for the
+	// same agent must not both read the same offset and broadcast the same
+	// entries twice. The claim (read offset, fetch, advance offset) happens
+	// under outputMu; the actual broadcasts happen outside it.
 	s.outputMu.Lock()
 	offset := s.agentOutputOffsets[agentID]
+	entries, err := s.engine.GetOutputEntries(agentID, offset)
+	if err == nil {
+		s.agentOutputOffsets[agentID] = offset + len(entries)
+	}
+	// Terminal lifecycle events must be broadcast exactly once per agent;
+	// claim that under the same lock.
+	emitTerminal := false
+	switch snap.State {
+	case engine.AgentComplete, engine.AgentError, engine.AgentKilled:
+		if !s.terminalBroadcast[agentID] {
+			s.terminalBroadcast[agentID] = true
+			emitTerminal = true
+		}
+	default:
+		// Non-terminal state (e.g. a resumed agent running again): re-arm
+		// the terminal broadcast for this agent's next completion.
+		delete(s.terminalBroadcast, agentID)
+	}
 	s.outputMu.Unlock()
 
-	entries, err := s.engine.GetOutputEntries(agentID, offset)
 	if err == nil {
 		for _, entry := range entries {
 			entryCopy := entry
@@ -51,12 +71,12 @@ func (s *Server) broadcastAgentUpdate(agentID string) {
 				},
 			})
 		}
-		s.outputMu.Lock()
-		s.agentOutputOffsets[agentID] = offset + len(entries)
-		s.outputMu.Unlock()
 	}
 
 	// Emit lifecycle events on terminal states.
+	if !emitTerminal {
+		return
+	}
 	switch snap.State {
 	case engine.AgentComplete:
 		s.wsBroadcast(api.WSMessage{

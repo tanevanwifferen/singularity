@@ -30,14 +30,25 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		s.wsMux.Lock()
 		delete(s.wsClients, conn)
 		s.wsMux.Unlock()
-		// Drop the conn from every stream's subscriber set.
+		// Drop the conn from every stream's subscriber set. Streams whose
+		// last subscriber just vanished are canceled so their pollers don't
+		// tick until daemon shutdown.
 		s.streamMu.Lock()
-		for _, e := range s.streams {
+		var abandoned []string
+		for id, e := range s.streams {
 			e.mu.Lock()
-			delete(e.subscribers, conn)
+			if e.subscribers[conn] {
+				delete(e.subscribers, conn)
+				if len(e.subscribers) == 0 {
+					abandoned = append(abandoned, id)
+				}
+			}
 			e.mu.Unlock()
 		}
 		s.streamMu.Unlock()
+		for _, id := range abandoned {
+			s.cancelStream(id)
+		}
 		conn.Close()
 	}()
 
@@ -61,8 +72,19 @@ func (s *Server) wsHeartbeat(c *wsClient) {
 	}
 }
 
+// wsPongWait bounds how long a connection may go without any inbound
+// traffic (message or pong). The heartbeat pings every 30s, so a healthy
+// peer always answers well within this window; a dead one gets reaped
+// instead of silently pinning resources forever.
+const wsPongWait = 90 * time.Second
+
 // wsReader reads incoming WS messages and dispatches them.
 func (s *Server) wsReader(c *wsClient) {
+	c.conn.SetReadLimit(maxBodyBytes)
+	_ = c.conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	c.conn.SetPongHandler(func(string) error {
+		return c.conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	})
 	for {
 		_, msg, err := c.conn.ReadMessage()
 		if err != nil {
@@ -71,6 +93,7 @@ func (s *Server) wsReader(c *wsClient) {
 			}
 			return
 		}
+		_ = c.conn.SetReadDeadline(time.Now().Add(wsPongWait))
 		var wsMsg api.WSMessage
 		if err := json.Unmarshal(msg, &wsMsg); err != nil {
 			s.wsSendError(c, "invalid message format", api.ErrCodeBadRequest)
@@ -87,7 +110,7 @@ func (s *Server) handleWSMessage(c *wsClient, msg *api.WSMessage) {
 		s.wsSend(c, api.WSMessage{Type: api.WSEventSubscribed, Payload: api.SubscribedPayload{Status: "ok"}})
 
 	case api.WSMsgRefreshRepo:
-		path := s.repoPath
+		path := s.getRepoPath()
 		if p, ok := payloadString(msg.Payload, "path"); ok && p != "" {
 			path = p
 		}
@@ -108,12 +131,30 @@ func (s *Server) handleWSMessage(c *wsClient, msg *api.WSMessage) {
 		s.streamMu.Unlock()
 		if !ok {
 			s.wsSendError(c, "unknown stream_id: "+id, api.ErrCodeNotFound)
+			// Also send a stream-scoped terminal frame so a client-side
+			// handler waiting on this id closes instead of hanging forever.
+			s.wsSend(c, api.WSMessage{
+				Type:    api.WSStreamPrefix + id,
+				Payload: api.StreamFrame{StreamID: id, Done: true, Error: "unknown stream_id: " + id, Timestamp: time.Now().UTC()},
+			})
 			return
 		}
+		s.wsSend(c, api.WSMessage{Type: api.WSEventSubscribed, Payload: api.SubscribedPayload{Status: "ok"}})
+		// Attach and replay any frames broadcast before the first subscriber
+		// arrived. The replay happens under e.mu so a concurrent broadcast
+		// can't interleave newer frames before the buffered ones.
 		e.mu.Lock()
 		e.subscribers[c.conn] = true
+		e.hasSubscriber = true
+		pending := e.pending
+		e.pending = nil
+		for _, data := range pending {
+			if err := c.writeMessage(websocket.TextMessage, data); err != nil {
+				log.Printf("Error replaying stream frame: %v", err)
+				break
+			}
+		}
 		e.mu.Unlock()
-		s.wsSend(c, api.WSMessage{Type: api.WSEventSubscribed, Payload: api.SubscribedPayload{Status: "ok"}})
 
 	case api.WSMsgCancelStream:
 		id, _ := payloadString(msg.Payload, "stream_id")

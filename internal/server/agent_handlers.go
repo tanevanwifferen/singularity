@@ -20,7 +20,7 @@ func (s *Server) handleAgentStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.ProjectPath == "" {
-		req.ProjectPath = s.repoPath
+		req.ProjectPath = s.getRepoPath()
 	}
 	if req.ProjectPath == "" {
 		s.writeCoded(w, api.ErrCodeBadRequest, "project_path required")
@@ -140,6 +140,7 @@ func (s *Server) handleAgentRemove(w http.ResponseWriter, r *http.Request) {
 	// Drop any output-offset bookkeeping.
 	s.outputMu.Lock()
 	delete(s.agentOutputOffsets, id)
+	delete(s.terminalBroadcast, id)
 	s.outputMu.Unlock()
 	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true})
 }
@@ -268,14 +269,22 @@ func (s *Server) handleAgentSubscribeAll(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	id := s.registerStream(combineCancel(ctxCancel, cancel))
-	go pumpStream(s, id, ch, agentEventFrame)
+	go pumpStream(s, id, ch, agentEventFrameMulti)
 	s.writeJSON(w, http.StatusAccepted, api.APIResponse{Success: true, Data: api.StreamStartResponse{StreamID: id}})
 }
 
-// agentEventFrame is the frameOf hook for AgentEvent streams.
+// agentEventFrame is the frameOf hook for single-agent streams: the agent's
+// terminal event (complete/error) also terminates the stream.
 func agentEventFrame(ev service.AgentEvent) (api.StreamFrame, bool) {
 	done := ev.Kind == service.AgentEventComplete || ev.Kind == service.AgentEventError
 	return api.StreamFrame{Frame: ev, Done: done, Error: ev.Err, Timestamp: ev.Timestamp}, done
+}
+
+// agentEventFrameMulti is the frameOf hook for the subscribe_all stream. One
+// agent finishing must NOT terminate the multi-agent stream — it ends only
+// when the subscription is canceled (channel close sends the terminal frame).
+func agentEventFrameMulti(ev service.AgentEvent) (api.StreamFrame, bool) {
+	return api.StreamFrame{Frame: ev, Error: ev.Err, Timestamp: ev.Timestamp}, false
 }
 
 func agentOptionsFromStart(req api.AgentStartRequest) service.AgentOptions {

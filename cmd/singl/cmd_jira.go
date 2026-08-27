@@ -366,6 +366,9 @@ func runJiraAIReview(ctx context.Context, args []string) int {
 		return die(err)
 	}
 	if len(res.Issues) == 0 {
+		if globals.json {
+			return printJSON(map[string]any{"agent_id": "", "issues_count": 0})
+		}
 		return renderMarkdown("No issues to review.\n")
 	}
 	agentID, err := c.JiraReviewTickets(tctx, res.Issues, repoArg(*repo), *instruction, "")

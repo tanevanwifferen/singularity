@@ -44,6 +44,11 @@ type Client struct {
 	wsConn   *websocket.Conn
 	onUpdate func(event *api.WSMessage)
 
+	// wsWriteMu serializes writes to wsConn. gorilla/websocket forbids
+	// concurrent writers on one Conn; every write goes through SendWSMessage
+	// which takes this mutex.
+	wsWriteMu sync.Mutex
+
 	// streamMux guards the streamHandlers map (one handler per active
 	// stream:<id> subscription).
 	streamMux      sync.RWMutex
@@ -80,7 +85,7 @@ func NewClient(serverURL string) *Client {
 		c.sockPath = sock
 		c.serverURL = "http://unix"
 		c.httpClient = &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: httpBackstopTimeout,
 			Transport: &http.Transport{
 				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 					var d net.Dialer
@@ -91,9 +96,15 @@ func NewClient(serverURL string) *Client {
 		return c
 	}
 	c.serverURL = trimmed
-	c.httpClient = &http.Client{Timeout: 30 * time.Second}
+	c.httpClient = &http.Client{Timeout: httpBackstopTimeout}
 	return c
 }
+
+// httpBackstopTimeout is a safety net against a wedged daemon, deliberately
+// far above any legitimate request duration. Callers control real deadlines
+// via per-request contexts (LLM-backed endpoints legitimately take minutes,
+// so a tight transport-level timeout would silently override those).
+const httpBackstopTimeout = 10 * time.Minute
 
 // SetUpdateHandler sets the catch-all callback invoked for every non-stream
 // WS event. Existing client of the SDK; retained for backward compat.
@@ -150,11 +161,17 @@ func (c *Client) wsReader() {
 		conn := c.wsConn
 		c.wsMux.RUnlock()
 		if conn == nil {
+			c.failStreams("connection closed")
 			return
 		}
 
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
+			// The connection is gone (daemon restart, network drop, or a
+			// local Disconnect). Terminate every in-flight stream so
+			// consumers blocked on their channels unwedge instead of
+			// hanging forever.
+			c.failStreams(fmt.Sprintf("connection lost: %v", err))
 			return
 		}
 
@@ -183,6 +200,19 @@ func (c *Client) wsReader() {
 	}
 }
 
+// failStreams delivers a synthetic terminal frame to every registered stream
+// handler and clears the registry. Called when the WS connection dies so
+// every consumer sees an error event followed by channel close.
+func (c *Client) failStreams(reason string) {
+	c.streamMux.Lock()
+	handlers := c.streamHandlers
+	c.streamHandlers = make(map[string]func(api.StreamFrame))
+	c.streamMux.Unlock()
+	for id, h := range handlers {
+		h(api.StreamFrame{StreamID: id, Done: true, Error: reason})
+	}
+}
+
 // decodeStreamFrame re-marshals payload (which encoding/json leaves as
 // map[string]interface{}) back into an api.StreamFrame.
 func decodeStreamFrame(payload interface{}) api.StreamFrame {
@@ -195,7 +225,9 @@ func decodeStreamFrame(payload interface{}) api.StreamFrame {
 	return frame
 }
 
-// SendWSMessage sends a WebSocket message.
+// SendWSMessage sends a WebSocket message. Writes are serialized under
+// wsWriteMu — gorilla/websocket panics on concurrent writes to one Conn
+// (e.g. multiple goroutines each starting a stream subscription).
 func (c *Client) SendWSMessage(msgType string, payload interface{}) error {
 	c.wsMux.RLock()
 	conn := c.wsConn
@@ -208,6 +240,8 @@ func (c *Client) SendWSMessage(msgType string, payload interface{}) error {
 	if err != nil {
 		return err
 	}
+	c.wsWriteMu.Lock()
+	defer c.wsWriteMu.Unlock()
 	return conn.WriteMessage(websocket.TextMessage, data)
 }
 

@@ -67,32 +67,75 @@ func (s *Server) registerStream(cancel func()) string {
 	s.streamMu.Lock()
 	s.streams[id] = entry
 	s.streamMu.Unlock()
+	// Reap streams nobody ever subscribed to (client died between the POST
+	// and its subscribe_stream); otherwise their pollers tick forever.
+	time.AfterFunc(subscribeGrace, func() {
+		entry.mu.Lock()
+		orphaned := !entry.hasSubscriber
+		entry.mu.Unlock()
+		if orphaned {
+			s.cancelStream(id)
+		}
+	})
 	return id
 }
 
-// cancelStream invokes the underlying cancel closure and removes the stream
-// from the registry. Idempotent.
+// streamRetention is how long a finished stream's entry (and its buffered
+// frames) stays in the registry. A subscribe_stream that races the terminal
+// frame within this window still gets the full replay instead of an
+// unknown-stream error.
+const streamRetention = 30 * time.Second
+
+// subscribeGrace is how long a stream may exist without any subscriber ever
+// attaching before it is reaped. Protects a long-lived daemon against
+// clients that POSTed a stream endpoint and then died before subscribing.
+const subscribeGrace = 2 * time.Minute
+
+// maxPendingFrames bounds the pre-subscribe replay buffer per stream.
+const maxPendingFrames = 4096
+
+// cancelStream invokes the underlying cancel closure. The registry entry is
+// NOT removed here: cancellation makes the service close its channel, after
+// which pumpStream broadcasts the terminal frame (so subscribers see a Done
+// instead of a silent stall) and schedules the entry's removal. Idempotent.
 func (s *Server) cancelStream(id string) {
 	s.streamMu.Lock()
 	e, ok := s.streams[id]
-	if ok {
-		delete(s.streams, id)
-	}
 	s.streamMu.Unlock()
 	if ok && e.cancel != nil {
 		e.cancel()
 	}
 }
 
+// finishStream runs when a stream's pump exits: it fires the cancel closure
+// (idempotent — tears down the service subscription if still live) and
+// schedules the registry entry's removal after streamRetention.
+func (s *Server) finishStream(id string) {
+	s.streamMu.Lock()
+	e, ok := s.streams[id]
+	s.streamMu.Unlock()
+	if !ok {
+		return
+	}
+	if e.cancel != nil {
+		e.cancel()
+	}
+	time.AfterFunc(streamRetention, func() {
+		s.streamMu.Lock()
+		delete(s.streams, id)
+		s.streamMu.Unlock()
+	})
+}
+
 // pumpStream reads frames from src and forwards each one to every WS client
-// subscribed to streamID. A terminal frame (Done=true) drops the entry from
-// the registry. Run in a goroutine.
+// subscribed to streamID. When src closes (or a terminal frame is emitted)
+// the entry is retained for streamRetention, then dropped. Run in a goroutine.
 //
 // frameOf is invoked per channel value to construct the wire frame; this
 // abstracts away the concrete event type so one pump works for AgentEvent,
 // SyncProgressEvent, etc.
 func pumpStream[T any](s *Server, streamID string, src <-chan T, frameOf func(T) (api.StreamFrame, bool)) {
-	defer s.cancelStream(streamID)
+	defer s.finishStream(streamID)
 	for ev := range src {
 		frame, done := frameOf(ev)
 		frame.StreamID = streamID
@@ -128,8 +171,17 @@ func (s *Server) broadcastStreamFrame(streamID string, frame api.StreamFrame) {
 	}
 	// Snapshot the subscriber set, then resolve each conn to its wsClient
 	// wrapper outside the entry lock so we don't hold two locks at once
-	// while writing.
+	// while writing. Until the first subscriber attaches, frames are
+	// buffered on the entry and replayed on subscribe — the pump starts
+	// before the client's subscribe_stream can possibly arrive.
 	e.mu.Lock()
+	if !e.hasSubscriber {
+		if len(e.pending) < maxPendingFrames {
+			e.pending = append(e.pending, data)
+		}
+		e.mu.Unlock()
+		return
+	}
 	conns := make([]*websocket.Conn, 0, len(e.subscribers))
 	for conn := range e.subscribers {
 		conns = append(conns, conn)

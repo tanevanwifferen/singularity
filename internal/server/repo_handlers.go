@@ -26,12 +26,17 @@ func (s *Server) handleRepoOpen(w http.ResponseWriter, r *http.Request) {
 		}
 		path = found
 	}
-	info, err := s.Services.Repo.Open(r.Context(), path)
+	cleaned, err := s.validateRepoPath(path)
+	if err != nil {
+		s.writeCoded(w, api.ErrCodeBadRequest, "invalid path")
+		return
+	}
+	info, err := s.Services.Repo.Open(r.Context(), cleaned)
 	if err != nil {
 		s.writeServiceErr(w, err)
 		return
 	}
-	s.repoPath = path
+	s.setRepoPath(cleaned)
 	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true, Data: info})
 }
 
@@ -81,7 +86,7 @@ func (s *Server) handleRepoSubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, ctxCancel := streamContext()
-	ch, cancel, err := s.Services.Repo.Subscribe(ctx, req.RepoPath)
+	ch, cancel, err := s.Services.Repo.Subscribe(ctx, s.resolveRepoPath(req.RepoPath))
 	if err != nil {
 		ctxCancel()
 		s.writeServiceErr(w, err)

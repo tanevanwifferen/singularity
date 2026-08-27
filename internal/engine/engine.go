@@ -44,10 +44,10 @@ type Engine struct {
 
 	// Observer callback: fired when any agent's state or output changes.
 	// Called from agent goroutines -- must be non-blocking.
-	onUpdate    func(agentID string)
-	updateMu    sync.RWMutex
-	updateTimer *time.Timer
-	timerMu     sync.Mutex
+	onUpdate     func(agentID string)
+	updateMu     sync.RWMutex
+	updateTimers map[string]*time.Timer
+	timerMu      sync.Mutex
 }
 
 // New creates a new agent engine using the claude backend by default.
@@ -59,7 +59,19 @@ func New(maxAgents int) *Engine {
 		agents:         make(map[string]*Agent),
 		maxAgents:      maxAgents,
 		defaultBackend: NewPiBackend(""),
+		updateTimers:   make(map[string]*time.Timer),
 	}
+}
+
+// SetMaxAgents overrides the concurrent-agent cap. Call before starting any
+// agents (daemon startup); values <= 0 are ignored.
+func (e *Engine) SetMaxAgents(n int) {
+	if n <= 0 {
+		return
+	}
+	e.mu.Lock()
+	e.maxAgents = n
+	e.mu.Unlock()
 }
 
 // SetDefaultBackend replaces the engine's default backend.
@@ -433,8 +445,11 @@ func (e *Engine) OnAgentUpdate(fn func(agentID string)) {
 	e.updateMu.Unlock()
 }
 
-// notifyUpdate fires the registered observer callback, debounced to coalesce
-// rapid bursts of output into a single notification every 50ms.
+// notifyUpdate fires the registered observer callback, debounced PER AGENT to
+// coalesce rapid bursts of output into a single notification every 50ms. The
+// debounce must be per agent: a shared timer would let a chatty agent B
+// swallow agent A's pending notification — including A's terminal
+// complete/error transition, which then never reaches WS subscribers.
 func (e *Engine) notifyUpdate(agentID string) {
 	e.updateMu.RLock()
 	fn := e.onUpdate
@@ -444,10 +459,13 @@ func (e *Engine) notifyUpdate(agentID string) {
 	}
 
 	e.timerMu.Lock()
-	if e.updateTimer != nil {
-		e.updateTimer.Stop()
+	if t := e.updateTimers[agentID]; t != nil {
+		t.Stop()
 	}
-	e.updateTimer = time.AfterFunc(50*time.Millisecond, func() {
+	e.updateTimers[agentID] = time.AfterFunc(50*time.Millisecond, func() {
+		e.timerMu.Lock()
+		delete(e.updateTimers, agentID)
+		e.timerMu.Unlock()
 		fn(agentID)
 	})
 	e.timerMu.Unlock()

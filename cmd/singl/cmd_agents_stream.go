@@ -121,7 +121,10 @@ func runAgentsWatchAll(ctx context.Context, _ []string) int {
 				return 0
 			}
 			prefix := "[" + ev.AgentID + "] "
-			printAgentEvent(ev, prefix) //nolint: we don't stop on one agent completing
+			done, code := printAgentEvent(ev, prefix) // one agent completing doesn't stop the stream…
+			if done && ev.AgentID == "" {
+				return code // …but a transport-level error (no agent attached) does
+			}
 		case <-ctx.Done():
 			return 0
 		}

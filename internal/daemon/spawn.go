@@ -6,11 +6,34 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 	"time"
 )
 
-// Spawn re-execs the current binary as `daemon` (no --detach) with stdio
+// daemonBinary resolves the binary that can run the `daemon` subcommand.
+// When the caller IS the singularity binary, that's itself; a client binary
+// like singl (which has no daemon subcommand) must locate the singularity
+// binary next to itself or on PATH.
+func daemonBinary() (string, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("locate self: %w", err)
+	}
+	if filepath.Base(self) == "singularity" {
+		return self, nil
+	}
+	sibling := filepath.Join(filepath.Dir(self), "singularity")
+	if _, err := os.Stat(sibling); err == nil {
+		return sibling, nil
+	}
+	if p, err := exec.LookPath("singularity"); err == nil {
+		return p, nil
+	}
+	return "", fmt.Errorf("no singularity binary found next to %s or on PATH — start a daemon manually with `singularity daemon`", self)
+}
+
+// Spawn execs the singularity binary as `daemon` (no --detach) with stdio
 // redirected to the log file and the child placed in its own session via
 // Setsid. The function returns after the child's socket becomes reachable
 // (5s timeout) so callers can immediately dial the daemon.
@@ -19,9 +42,9 @@ import (
 // bare fork(); re-exec gives the child a clean address space. See
 // DAEMON-LIFECYCLE §5.
 func Spawn(socketPath string) error {
-	self, err := os.Executable()
+	self, err := daemonBinary()
 	if err != nil {
-		return fmt.Errorf("locate self: %w", err)
+		return err
 	}
 	p := DefaultPaths()
 	if err := os.MkdirAll(p.Dir, 0o700); err != nil {
@@ -57,11 +80,10 @@ func Spawn(socketPath string) error {
 	_ = logFile.Close()
 	_ = devNull.Close()
 
-	// Release the child so it doesn't become a zombie when this parent
-	// (which is the TUI process) exits.
-	if cmd.Process != nil {
-		_ = cmd.Process.Release()
-	}
+	// Reap the child in the background: Setsid already detached its session,
+	// but a long-lived parent (the TUI) must still Wait or a daemon that
+	// exits leaves a zombie until the parent dies.
+	go func() { _ = cmd.Wait() }()
 
 	// Poll for socket readiness, or detect the child died early.
 	deadline := time.Now().Add(5 * time.Second)

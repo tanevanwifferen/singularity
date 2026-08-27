@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -22,7 +23,9 @@ func loadConfig() singlConfig {
 	// 1. .singl.json — walk up from cwd
 	if path, ok := findLocalConfig(); ok {
 		if data, err := os.ReadFile(path); err == nil {
-			_ = json.Unmarshal(data, &cfg)
+			if uerr := json.Unmarshal(data, &cfg); uerr != nil {
+				fmt.Fprintf(os.Stderr, "warning: ignoring malformed %s: %v\n", path, uerr)
+			}
 		}
 	}
 
