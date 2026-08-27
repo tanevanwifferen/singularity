@@ -31,14 +31,15 @@ type MergeRequest struct {
 
 // CreateMR creates a merge request
 func CreateMR(repoPath, sourceBranch, targetBranch, title, description string, reviewers []string) (*MergeRequest, error) {
-	// Detect forge type
-	auth, err := DetectForgeAuth()
+	// Detect forge credentials, preferring the repo's origin host so
+	// self-hosted forges resolve to their own token.
+	auth, err := DetectForgeAuthForRepo(repoPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect forge auth: %w", err)
 	}
 
 	if !auth.Valid {
-		return nil, fmt.Errorf("no valid forge authentication found")
+		return nil, noForgeAuthError(auth)
 	}
 
 	if auth.IsGitLab() {
@@ -207,8 +208,8 @@ func createGitHubPR(repoPath, sourceBranch, targetBranch, title, description str
 
 // MRContent holds a generated MR title and description.
 type MRContent struct {
-	Title       string
-	Description string
+	Title       string `json:"title"`
+	Description string `json:"description"`
 }
 
 // GenerateMRContent generates an intelligent MR title and description using Claude.
@@ -391,21 +392,28 @@ type CommitInfo struct {
 	Date    string
 }
 
+// noForgeAuthError builds an actionable "no auth" error: which sources were
+// checked (auth.Detail) and how to fix it.
+func noForgeAuthError(auth *ForgeAuth) error {
+	detail := ""
+	if auth != nil && auth.Detail != "" {
+		detail = " — checked: " + auth.Detail
+	}
+	return fmt.Errorf("no valid forge authentication found%s. Fix: `glab auth login --hostname <gitlab-host>`, `gh auth login`, or set GITLAB_TOKEN/GITHUB_TOKEN", detail)
+}
+
 // Helper functions
+
+// getProjectPath extracts the "group/subgroup/repo" path from the repo's
+// origin remote, for any forge host (not just gitlab.com).
 func getProjectPath(repoPath string) string {
-	// Get remote URL and extract project path
 	cmd := exec.Command("git", "-C", repoPath, "remote", "get-url", "origin")
 	output, err := cmd.Output()
 	if err != nil {
 		return ""
 	}
-
-	url := strings.TrimSpace(string(output))
-	url = strings.TrimPrefix(url, "https://gitlab.com/")
-	url = strings.TrimPrefix(url, "git@gitlab.com:")
-	url = strings.TrimSuffix(url, ".git")
-
-	return url
+	_, path := ParseGitRemoteURL(string(output))
+	return path
 }
 
 func getGitHubOwnerRepo(repoPath string) (string, string) {

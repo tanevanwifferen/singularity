@@ -2,6 +2,7 @@ package local
 
 import (
 	"context"
+	"fmt"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/git"
 	"gitlab.com/tanevanwifferen1/singularity/internal/service"
@@ -22,7 +23,7 @@ func (s *localForgeService) DetectAuth(ctx context.Context) (*service.ForgeAuth,
 		return nil, wrapErr(err)
 	}
 	if auth == nil || !auth.Valid {
-		return auth, service.ErrNoForge
+		return auth, noForgeErr(auth)
 	}
 	return auth, nil
 }
@@ -46,9 +47,19 @@ func (s *localForgeService) Detect(ctx context.Context) (*service.ForgeInfo, err
 		User:    auth.Username,
 	}
 	if !auth.Valid {
-		return info, service.ErrNoForge
+		return info, noForgeErr(auth)
 	}
 	return info, nil
+}
+
+// noForgeErr wraps ErrNoForge with the detection detail (which credential
+// sources were checked) and a fix hint, so the message reaching the client
+// says where was looked instead of only "no forge auth detected".
+func noForgeErr(auth *service.ForgeAuth) error {
+	if auth == nil || auth.Detail == "" {
+		return service.ErrNoForge
+	}
+	return fmt.Errorf("%w — checked: %s. Fix: `glab auth login --hostname <gitlab-host>`, `gh auth login`, or set GITLAB_TOKEN/GITHUB_TOKEN", service.ErrNoForge, auth.Detail)
 }
 
 // DetectProvider returns the RemoteProvider for a repo (gh/gl/none).

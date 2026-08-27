@@ -22,16 +22,15 @@ func cmdWorktrees(ctx context.Context, verb string, args []string) int {
 	case "prune":
 		return runWorktreesPrune(ctx, args)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown worktrees verb: %q\nverbs: list create remove lock unlock prune\n", verb)
-		return 2
+		return nounHelp("worktrees", verb)
 	}
 }
 
 func runWorktreesList(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("worktrees-list", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -73,8 +72,8 @@ func runWorktreesCreate(ctx context.Context, args []string) int {
 	branch := fs.String("branch", "", "branch name (required)")
 	createBranch := fs.Bool("create-branch", false, "create the branch if it does not exist")
 	startPoint := fs.String("start-point", "", "start point ref for new branch")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *path == "" || *branch == "" {
@@ -101,8 +100,8 @@ func runWorktreesRemove(ctx context.Context, args []string) int {
 	repo := fs.String("repo", "", "repo path (required)")
 	path := fs.String("path", "", "worktree path (required)")
 	force := fs.Bool("force", false, "force removal even if dirty")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *path == "" {
@@ -128,8 +127,8 @@ func runWorktreesLock(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("worktrees-lock", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path (required)")
 	path := fs.String("path", "", "worktree path (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *path == "" {
@@ -155,8 +154,8 @@ func runWorktreesUnlock(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("worktrees-unlock", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path (required)")
 	path := fs.String("path", "", "worktree path (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *path == "" {
@@ -181,8 +180,8 @@ func runWorktreesUnlock(ctx context.Context, args []string) int {
 func runWorktreesPrune(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("worktrees-prune", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {

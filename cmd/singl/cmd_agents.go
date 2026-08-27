@@ -29,6 +29,8 @@ func cmdAgents(ctx context.Context, verb string, args []string) int {
 		return runAgentsOutput(ctx, args)
 	case "input":
 		return runAgentsInput(ctx, args)
+	case "wait":
+		return runAgentsWait(ctx, args)
 	case "watch":
 		return runAgentsWatch(ctx, args)
 	case "watch-all":
@@ -38,12 +40,104 @@ func cmdAgents(ctx context.Context, verb string, args []string) int {
 	case "stats":
 		return runAgentsStats(ctx, args)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown agents verb: %q\nverbs: list get spawn resume kill remove output input watch watch-all chat stats\n", verb)
-		return 2
+		return nounHelp("agents", verb)
 	}
 }
 
-func runAgentsList(ctx context.Context, _ []string) int {
+// agentJSON is the compact CLI JSON projection of an agent snapshot. The
+// full task prompt can be kilobytes; it is only included with --full so
+// polling `agents get/list --json` stays cheap for scripted consumers.
+type agentJSON struct {
+	ID           string     `json:"id"`
+	State        string     `json:"state"`
+	WorkDir      string     `json:"work_dir"`
+	Summary      string     `json:"summary,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	EndedAt      *time.Time `json:"ended_at,omitempty"`
+	DurationSecs *float64   `json:"duration_secs,omitempty"`
+	ExitCode     *int       `json:"exit_code,omitempty"`
+	Error        string     `json:"error,omitempty"`
+	TotalCostUSD float64    `json:"total_cost_usd,omitempty"`
+	MergeResult  string     `json:"merge_result,omitempty"`
+	Task         string     `json:"task,omitempty"`
+}
+
+// agentToJSON projects a wire DTO into the CLI JSON shape. duration_secs is
+// EndedAt-StartedAt for finished agents and time-since-start for running
+// ones. The task prompt is included only when full is true.
+func agentToJSON(a api.AgentSnapshotDTO, full bool) agentJSON {
+	out := agentJSON{
+		ID:           a.ID,
+		State:        a.State,
+		WorkDir:      a.WorkDir,
+		Summary:      a.Summary,
+		CreatedAt:    a.CreatedAt,
+		StartedAt:    a.StartedAt,
+		EndedAt:      a.EndedAt,
+		ExitCode:     a.ExitCode,
+		Error:        a.Error,
+		TotalCostUSD: a.TotalCostUSD,
+		MergeResult:  a.MergeResult,
+	}
+	if a.StartedAt != nil {
+		end := time.Now()
+		if a.EndedAt != nil {
+			end = *a.EndedAt
+		}
+		secs := end.Sub(*a.StartedAt).Round(time.Millisecond).Seconds()
+		out.DurationSecs = &secs
+	}
+	if full {
+		out.Task = a.Task
+	}
+	return out
+}
+
+// outputEntryJSON is the CLI JSON shape for one output entry. It exposes the
+// entry kind as "type" (text | tool_use | tool_result | system | error |
+// result | user_input) so tool calls and assistant text are distinguishable;
+// "source" is kept as an alias for older consumers.
+type outputEntryJSON struct {
+	Timestamp time.Time `json:"timestamp"`
+	Type      string    `json:"type"`
+	Source    string    `json:"source"`
+	Content   string    `json:"content"`
+	ToolName  string    `json:"tool_name,omitempty"`
+	ToolID    string    `json:"tool_id,omitempty"`
+	IsError   bool      `json:"is_error,omitempty"`
+}
+
+func outputEntriesToJSON(entries []api.OutputEntry) []outputEntryJSON {
+	out := make([]outputEntryJSON, len(entries))
+	for i, e := range entries {
+		out[i] = outputEntryJSON{
+			Timestamp: e.Timestamp,
+			Type:      e.Source,
+			Source:    e.Source,
+			Content:   e.Content,
+			ToolName:  e.ToolName,
+			ToolID:    e.ToolID,
+			IsError:   e.IsError,
+		}
+	}
+	return out
+}
+
+// tailEntries returns the last n entries (all of them when n <= 0).
+func tailEntries(entries []api.OutputEntry, n int) []api.OutputEntry {
+	if n <= 0 || n >= len(entries) {
+		return entries
+	}
+	return entries[len(entries)-n:]
+}
+
+func runAgentsList(ctx context.Context, args []string) int {
+	fs := flag.NewFlagSet("agents-list", flag.ContinueOnError)
+	full := fs.Bool("full", false, "include the full task prompt in --json output")
+	if code, done := parseArgs(fs, args); done {
+		return code
+	}
 	c, err := newClient()
 	if err != nil {
 		return die(err)
@@ -55,7 +149,11 @@ func runAgentsList(ctx context.Context, _ []string) int {
 		return die(err)
 	}
 	if globals.json {
-		return printJSON(agents)
+		out := make([]agentJSON, len(agents))
+		for i, a := range agents {
+			out[i] = agentToJSON(a, *full)
+		}
+		return printJSON(out)
 	}
 	md := fmt.Sprintf("## Agents (%d)\n\n", len(agents))
 	for _, a := range agents {
@@ -71,8 +169,9 @@ func runAgentsGet(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("agents-get", flag.ContinueOnError)
 	id := fs.String("id", "", "agent ID (required)")
 	last := fs.Int("last", 0, "append last N output lines to the snapshot")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	full := fs.Bool("full", false, "include the full task prompt in --json output")
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *id == "" {
 		fmt.Fprintln(os.Stderr, "error: --id is required")
@@ -94,24 +193,20 @@ func runAgentsGet(ctx context.Context, args []string) int {
 			if oerr != nil {
 				return die(oerr)
 			}
-			start := len(entries) - *last
-			if start < 0 {
-				start = 0
-			}
-			return printJSON(map[string]any{"agent": a, "output": entries[start:]})
+			return printJSON(map[string]any{
+				"agent":  agentToJSON(*a, *full),
+				"output": outputEntriesToJSON(tailEntries(entries, *last)),
+			})
 		}
-		return printJSON(a)
+		return printJSON(agentToJSON(*a, *full))
 	}
 	md := fmtAgent(*a)
 	if *last > 0 {
 		entries, err := c.AgentOutput(tctx, *id, 0)
 		if err == nil && len(entries) > 0 {
-			start := len(entries) - *last
-			if start < 0 {
-				start = 0
-			}
-			md += fmt.Sprintf("\n#### Last %d output lines\n\n```\n", len(entries[start:]))
-			for _, e := range entries[start:] {
+			shown := tailEntries(entries, *last)
+			md += fmt.Sprintf("\n#### Last %d output lines\n\n```\n", len(shown))
+			for _, e := range shown {
 				if e.Content != "" {
 					md += e.Content + "\n"
 				}
@@ -132,8 +227,8 @@ func runAgentsSpawn(ctx context.Context, args []string) int {
 	maxTurns := fs.Int("max-turns", 0, "max agent turns (0 = unlimited)")
 	timeout := fs.Int("timeout", 0, "timeout in seconds (0 = no timeout)")
 	backend := fs.String("backend", "", "agent backend: claude or pi (default: daemon default)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *workdir == "" || *prompt == "" {
 		fmt.Fprintln(os.Stderr, "error: --workdir and --prompt are required")
@@ -168,8 +263,8 @@ func runAgentsSpawn(ctx context.Context, args []string) int {
 func runAgentsKill(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("agents-kill", flag.ContinueOnError)
 	id := fs.String("id", "", "agent ID (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *id == "" {
 		fmt.Fprintln(os.Stderr, "error: --id is required")
@@ -193,8 +288,8 @@ func runAgentsKill(ctx context.Context, args []string) int {
 func runAgentsRemove(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("agents-remove", flag.ContinueOnError)
 	id := fs.String("id", "", "agent ID (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *id == "" {
 		fmt.Fprintln(os.Stderr, "error: --id is required")
@@ -219,8 +314,9 @@ func runAgentsOutput(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("agents-output", flag.ContinueOnError)
 	id := fs.String("id", "", "agent ID (required)")
 	offset := fs.Int("offset", 0, "start offset")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	tail := fs.Int("tail", 0, "only show the last N entries")
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *id == "" {
 		fmt.Fprintln(os.Stderr, "error: --id is required")
@@ -236,8 +332,9 @@ func runAgentsOutput(ctx context.Context, args []string) int {
 	if err != nil {
 		return die(err)
 	}
+	entries = tailEntries(entries, *tail)
 	if globals.json {
-		return printJSON(entries)
+		return printJSON(outputEntriesToJSON(entries))
 	}
 	md := fmt.Sprintf("## Output for agent `%s`\n\n", *id)
 	for _, e := range entries {
@@ -274,8 +371,8 @@ func runAgentsResume(ctx context.Context, args []string) int {
 	maxTurns := fs.Int("max-turns", 0, "max agent turns")
 	timeout := fs.Int("timeout", 0, "timeout in seconds")
 	backend := fs.String("backend", "", "agent backend: claude or pi (default: daemon default)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *id == "" || *message == "" {
 		fmt.Fprintln(os.Stderr, "error: --id and --message are required")
@@ -311,8 +408,8 @@ func runAgentsInput(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("agents-input", flag.ContinueOnError)
 	id := fs.String("id", "", "agent ID (required)")
 	message := fs.String("message", "", "message to send (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *id == "" || *message == "" {
 		fmt.Fprintln(os.Stderr, "error: --id and --message are required")
@@ -375,6 +472,9 @@ func fmtAgent(a api.AgentSnapshotDTO) string {
 	}
 	if a.EndedAt != nil {
 		s += fmt.Sprintf("Ended: %s  \n", a.EndedAt.Format(time.DateTime))
+	}
+	if a.ExitCode != nil {
+		s += fmt.Sprintf("Exit code: %d  \n", *a.ExitCode)
 	}
 	if a.TotalCostUSD > 0 {
 		s += fmt.Sprintf("Cost: $%s  \n", strconv.FormatFloat(a.TotalCostUSD, 'f', 4, 64))

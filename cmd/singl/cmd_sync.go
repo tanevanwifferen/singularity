@@ -31,8 +31,7 @@ func cmdSync(ctx context.Context, verb string, args []string) int {
 	case "all":
 		return runSyncAll(ctx, args)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown sync verb: %q\nverbs: fetch pull push pull-rebase set-upstream upstream-status last-fetch all\n", verb)
-		return 2
+		return nounHelp("sync", verb)
 	}
 }
 
@@ -40,8 +39,8 @@ func runSyncFetch(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("sync-fetch", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
 	remote := fs.String("remote", "", "remote name (empty = origin)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -68,8 +67,8 @@ func runSyncFetch(ctx context.Context, args []string) int {
 func runSyncPull(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("sync-pull", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -97,8 +96,8 @@ func runSyncPush(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("sync-push", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
 	force := fs.Bool("force", false, "force push")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -125,8 +124,8 @@ func runSyncPush(ctx context.Context, args []string) int {
 func runSyncPullRebase(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("sync-pull-rebase", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -152,8 +151,8 @@ func runSyncSetUpstream(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("sync-set-upstream", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
 	remote := fs.String("remote", "", "remote name (empty = origin)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -178,8 +177,8 @@ func runSyncSetUpstream(ctx context.Context, args []string) int {
 func runSyncUpstreamStatus(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("sync-upstream-status", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -211,8 +210,8 @@ func runSyncUpstreamStatus(ctx context.Context, args []string) int {
 func runSyncLastFetch(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("sync-last-fetch", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -242,8 +241,8 @@ func runSyncAll(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("sync-all", flag.ContinueOnError)
 	project := fs.String("project", "", "project handle (required)")
 	force := fs.Bool("force", false, "force push")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *project == "" {
 		fmt.Fprintln(os.Stderr, "error: --project is required (use `singl project list` for handles)")

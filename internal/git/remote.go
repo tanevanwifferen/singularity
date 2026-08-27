@@ -32,10 +32,62 @@ func DetectRemoteProvider(repoPath string) RemoteProvider {
 	return ProviderUnknown
 }
 
+// ParseGitRemoteURL splits a git remote URL into its host and project path
+// ("group/subgroup/repo", without the .git suffix). Supports the scp-like
+// syntax (git@host:path), ssh:// and http(s):// URLs. Returns empty strings
+// when the URL cannot be parsed.
+func ParseGitRemoteURL(rawURL string) (host, path string) {
+	url := strings.TrimSpace(rawURL)
+	if url == "" {
+		return "", ""
+	}
+	// Scheme form: ssh://git@host[:port]/path, https://host/path, git://host/path
+	if i := strings.Index(url, "://"); i >= 0 {
+		rest := url[i+3:]
+		if at := strings.Index(rest, "@"); at >= 0 {
+			rest = rest[at+1:]
+		}
+		slash := strings.Index(rest, "/")
+		if slash < 0 {
+			return rest, ""
+		}
+		host = rest[:slash]
+		path = rest[slash+1:]
+	} else if at := strings.Index(url, "@"); at >= 0 {
+		// scp-like: git@host:group/repo.git
+		rest := url[at+1:]
+		colon := strings.Index(rest, ":")
+		if colon < 0 {
+			return rest, ""
+		}
+		host = rest[:colon]
+		path = rest[colon+1:]
+	} else {
+		return "", ""
+	}
+	if i := strings.Index(host, ":"); i >= 0 {
+		host = host[:i] // strip port
+	}
+	path = strings.TrimSuffix(strings.Trim(path, "/"), ".git")
+	return host, path
+}
+
+// OriginHost returns the hostname of a repo's origin remote ("gitlab.proxy.nl",
+// "github.com", …), or "" when there is no parsable origin.
+func OriginHost(repoPath string) string {
+	cmd := exec.Command("git", "-C", repoPath, "remote", "get-url", "origin")
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	host, _ := ParseGitRemoteURL(string(output))
+	return host
+}
+
 // MRResult holds the URL and content of a created merge request.
 type MRResult struct {
-	URL     string
-	Content *MRContent
+	URL     string     `json:"url"`
+	Content *MRContent `json:"content,omitempty"`
 }
 
 // CreateMergeRequestCLI creates a merge request using the appropriate CLI tool (gh or glab).

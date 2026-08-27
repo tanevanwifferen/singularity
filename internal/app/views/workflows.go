@@ -2,8 +2,6 @@ package views
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -107,13 +105,10 @@ func NewWorkflowsView(proj *service.Project) *WorkflowsView {
 	return v
 }
 
-// defaultWorkflowBaseDir returns ~/.worktrees/<projectName>/
+// defaultWorkflowBaseDir returns the default worktree base dir for the
+// project: ~/.worktrees/<slug>/ (or the legacy raw-name dir when it exists).
 func defaultWorkflowBaseDir(projectName string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "/tmp"
-	}
-	return filepath.Join(home, ".worktrees", projectName)
+	return service.DefaultWorkflowBaseDir(projectName)
 }
 
 // HasActiveWorkflow returns true if any feature workflows exist.

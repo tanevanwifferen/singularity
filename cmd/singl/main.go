@@ -100,11 +100,11 @@ Global flags:
 Commands:
   status
   worktrees  list | create | remove | lock | unlock | prune
-  agents     list | get | spawn | resume | kill | remove | output | input | watch | watch-all | chat | stats
+  agents     list | get | spawn | resume | kill | remove | output | input | wait | watch | watch-all | chat | stats
   branches   list | checkout | create | delete | head | compare
   repos      info | open | find
   diff       workdir | branch | file | staged | unstaged | merge-base | all-repos
-  commit     suggest | generate | files | diff | file-diff | cherry-pick | reset | amend
+  commit     suggest | generate | stage | create | files | diff | file-diff | cherry-pick | reset | amend
   mr         title | desc | create | cli
   rebase     plan | status | continue | skip | abort | onto-main | todo | context
   stash      list | get | create | apply | pop | drop | clear | list-all | all | apply-all

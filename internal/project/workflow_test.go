@@ -1,6 +1,8 @@
 package project
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -261,5 +263,53 @@ func TestWorkflowStateString(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("WorkflowState(%d).String() = %q, want %q", tt.state, got, tt.want)
 		}
+	}
+}
+
+func TestSlugifyForPath(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"PBD Development", "pbd-development"},
+		{"simple", "simple"},
+		{"Already-Slugged", "already-slugged"},
+		{"weird  __ chars!!", "weird-chars"},
+		{"Trailing space ", "trailing-space"},
+		{" Leading", "leading"},
+		{"v2.0 (beta)", "v2-0-beta"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		if got := SlugifyForPath(tt.input); got != tt.want {
+			t.Errorf("SlugifyForPath(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestDefaultWorkflowBaseDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// No legacy dir: the slugified path is used.
+	got := DefaultWorkflowBaseDir("PBD Development")
+	want := filepath.Join(home, ".worktrees", "pbd-development")
+	if got != want {
+		t.Errorf("DefaultWorkflowBaseDir = %q, want %q", got, want)
+	}
+
+	// Legacy raw-name dir exists: keep using it so existing workflows
+	// (created before slugging) still resolve.
+	legacy := filepath.Join(home, ".worktrees", "PBD Development")
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := DefaultWorkflowBaseDir("PBD Development"); got != legacy {
+		t.Errorf("DefaultWorkflowBaseDir with legacy dir = %q, want %q", got, legacy)
+	}
+
+	// A name that is already a valid slug never triggers the fallback.
+	if got := DefaultWorkflowBaseDir("myproj"); got != filepath.Join(home, ".worktrees", "myproj") {
+		t.Errorf("DefaultWorkflowBaseDir(myproj) = %q", got)
 	}
 }

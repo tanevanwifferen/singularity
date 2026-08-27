@@ -179,7 +179,10 @@ func (s *localProjectService) Subscribe(ctx context.Context, handle service.Proj
 	return ch, func() {}, service.ErrUnavailable
 }
 
-// CreateWorkflow creates a new multi-repo feature workflow.
+// CreateWorkflow creates a new multi-repo feature workflow. An empty baseDir
+// falls back to project.DefaultWorkflowBaseDir — a slugified (space-free)
+// directory under ~/.worktrees, reusing the legacy raw-name directory when
+// one already exists.
 func (s *localProjectService) CreateWorkflow(ctx context.Context, handle service.ProjectHandle, branch, baseDir string) (*service.FeatureWorkflow, error) {
 	if err := checkCtx(ctx); err != nil {
 		return nil, err
@@ -187,6 +190,9 @@ func (s *localProjectService) CreateWorkflow(ctx context.Context, handle service
 	p, err := s.resolve(handle)
 	if err != nil {
 		return nil, err
+	}
+	if baseDir == "" {
+		baseDir = project.DefaultWorkflowBaseDir(p.Name)
 	}
 	wf := project.NewFeatureWorkflow(p, branch, baseDir)
 	return wf, nil

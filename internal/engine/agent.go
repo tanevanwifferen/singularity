@@ -47,6 +47,12 @@ func (s AgentState) String() string {
 	}
 }
 
+// Terminal reports whether the state is a final one: the agent has stopped
+// and will not transition again (complete, error, or killed).
+func (s AgentState) Terminal() bool {
+	return s == AgentComplete || s == AgentError || s == AgentKilled
+}
+
 // Agent wraps a coding-agent subprocess with structured output streaming.
 // The concrete protocol (claude stream-json, pi RPC, …) is delegated to Backend.
 type Agent struct {

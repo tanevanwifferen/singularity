@@ -97,7 +97,7 @@ func (s *remoteAgentService) SubscribeAll(ctx context.Context) (<-chan service.A
 // AgentIdle (the zero value) which matches the engine's behavior for
 // uninitialised agents.
 func dtoToSnapshot(d api.AgentSnapshotDTO) service.AgentSnapshot {
-	return service.AgentSnapshot{
+	snap := service.AgentSnapshot{
 		ID:           d.ID,
 		WorkDir:      d.WorkDir,
 		Task:         d.Task,
@@ -106,13 +106,18 @@ func dtoToSnapshot(d api.AgentSnapshotDTO) service.AgentSnapshot {
 		CreatedAt:    d.CreatedAt,
 		StartedAt:    d.StartedAt,
 		EndedAt:      d.EndedAt,
-		ExitCode:     d.ExitCode,
 		Error:        d.Error,
 		TotalCostUSD: d.TotalCostUSD,
 		MergeResult:  d.MergeResult,
 		// RouteResult intentionally omitted: daemon-side only, not sent
 		// across the wire (api.AgentSnapshotDTO has no field for it).
 	}
+	// ExitCode is only on the wire for terminal states; nil means "not
+	// exited yet", which maps back to the engine's zero value.
+	if d.ExitCode != nil {
+		snap.ExitCode = *d.ExitCode
+	}
+	return snap
 }
 
 // parseAgentState is the inverse of engine.AgentState.String().

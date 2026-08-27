@@ -45,8 +45,7 @@ func cmdJira(ctx context.Context, verb string, args []string) int {
 			return 2
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "unknown jira verb: %q\nverbs: search get mine create update comment link ai\n", verb)
-		return 2
+		return nounHelp("jira", verb)
 	}
 }
 
@@ -82,8 +81,8 @@ func runJiraSearch(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("jira-search", flag.ContinueOnError)
 	jql := fs.String("jql", "", "JQL query (required)")
 	max := fs.Int("max", 20, "max results")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *jql == "" {
 		fmt.Fprintln(os.Stderr, "error: --jql is required")
@@ -116,8 +115,8 @@ func runJiraSearch(ctx context.Context, args []string) int {
 func runJiraGet(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("jira-get", flag.ContinueOnError)
 	key := fs.String("key", "", "issue key e.g. PROJ-123 (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *key == "" {
 		fmt.Fprintln(os.Stderr, "error: --key is required")
@@ -142,8 +141,8 @@ func runJiraGet(ctx context.Context, args []string) int {
 func runJiraMine(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("jira-mine", flag.ContinueOnError)
 	project := fs.String("project", "", "project key filter (optional)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	c, err := newClient()
 	if err != nil {
@@ -176,8 +175,8 @@ func runJiraCreate(ctx context.Context, args []string) int {
 	summary := fs.String("summary", "", "issue summary (required)")
 	desc := fs.String("desc", "", "description")
 	priority := fs.String("priority", "", "priority e.g. High, Medium, Low")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *project == "" || *summary == "" {
 		fmt.Fprintln(os.Stderr, "error: --project and --summary are required")
@@ -204,8 +203,8 @@ func runJiraUpdate(ctx context.Context, args []string) int {
 	key := fs.String("key", "", "issue key (required)")
 	field := fs.String("field", "", "field name (required)")
 	value := fs.String("value", "", "field value (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *key == "" || *field == "" || *value == "" {
 		fmt.Fprintln(os.Stderr, "error: --key, --field, and --value are required")
@@ -230,8 +229,8 @@ func runJiraComment(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("jira-comment", flag.ContinueOnError)
 	key := fs.String("key", "", "issue key (required)")
 	body := fs.String("body", "", "comment body (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *key == "" || *body == "" {
 		fmt.Fprintln(os.Stderr, "error: --key and --body are required")
@@ -257,8 +256,8 @@ func runJiraLink(ctx context.Context, args []string) int {
 	from := fs.String("from", "", "inward issue key (required)")
 	to := fs.String("to", "", "outward issue key (required)")
 	linkType := fs.String("type", "", "link type e.g. 'blocks', 'relates to' (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *from == "" || *to == "" || *linkType == "" {
 		fmt.Fprintln(os.Stderr, "error: --from, --to, and --type are required")
@@ -286,8 +285,8 @@ func runJiraAIRefine(ctx context.Context, args []string) int {
 	key := fs.String("key", "", "issue key (required)")
 	repo := fs.String("repo", "", "repo path (optional)")
 	focus := fs.String("focus", "", "focus area for refinement")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *key == "" {
 		fmt.Fprintln(os.Stderr, "error: --key is required")
@@ -319,8 +318,8 @@ func runJiraAIStories(ctx context.Context, args []string) int {
 	key := fs.String("key", "", "issue key (required)")
 	repo := fs.String("repo", "", "repo path (optional)")
 	project := fs.String("project", "", "Jira project key for created stories")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *key == "" {
 		fmt.Fprintln(os.Stderr, "error: --key is required")
@@ -352,8 +351,8 @@ func runJiraAIReview(ctx context.Context, args []string) int {
 	repo := fs.String("repo", "", "repo path (optional)")
 	instruction := fs.String("instruction", "", "review instruction")
 	project := fs.String("project", "", "Jira project key to pull issues from")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	c, err := newClient()
 	if err != nil {

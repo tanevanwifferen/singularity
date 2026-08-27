@@ -19,8 +19,7 @@ func cmdMR(ctx context.Context, verb string, args []string) int {
 	case "cli":
 		return runMRCLI(ctx, args)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown mr verb: %q\nverbs: title desc create cli\n", verb)
-		return 2
+		return nounHelp("mr", verb)
 	}
 }
 
@@ -29,8 +28,8 @@ func runMRTitle(ctx context.Context, args []string) int {
 	repo := fs.String("repo", "", "repo path")
 	source := fs.String("source", "", "source branch (required)")
 	target := fs.String("target", "", "target branch (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *source == "" || *target == "" {
@@ -58,8 +57,8 @@ func runMRDesc(ctx context.Context, args []string) int {
 	repo := fs.String("repo", "", "repo path")
 	source := fs.String("source", "", "source branch (required)")
 	target := fs.String("target", "", "target branch (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *source == "" || *target == "" {
@@ -90,8 +89,8 @@ func runMRCreate(ctx context.Context, args []string) int {
 	title := fs.String("title", "", "MR title (required)")
 	desc := fs.String("desc", "", "MR description")
 	reviewers := fs.String("reviewers", "", "comma-separated reviewer usernames")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *source == "" || *target == "" || *title == "" {
@@ -140,8 +139,8 @@ func runMRCLI(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("mr-cli", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
 	base := fs.String("base", "", "base branch (optional)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {

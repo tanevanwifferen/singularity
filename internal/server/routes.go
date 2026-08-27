@@ -85,6 +85,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/commit/reset", wrap(s.handleCommitReset))
 	mux.HandleFunc("/api/commit/amend", wrap(s.handleCommitAmend))
 	mux.HandleFunc("/api/commit/message", wrap(s.handleCommitMessage))
+	mux.HandleFunc("/api/commit/stage", wrap(s.handleCommitStage))
+	mux.HandleFunc("/api/commit/create", wrap(s.handleCommitCreate))
 
 	// Stash.
 	mux.HandleFunc("/api/stash/list", wrap(s.handleStashList))

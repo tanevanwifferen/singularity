@@ -22,16 +22,15 @@ func cmdBranches(ctx context.Context, verb string, args []string) int {
 	case "compare":
 		return runBranchesCompare(ctx, args)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown branches verb: %q\nverbs: list checkout create delete head compare\n", verb)
-		return 2
+		return nounHelp("branches", verb)
 	}
 }
 
 func runBranchesList(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("branches-list", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -73,8 +72,8 @@ func runBranchesCheckout(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("branches-checkout", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path (required)")
 	branch := fs.String("branch", "", "branch name (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *branch == "" {
@@ -101,8 +100,8 @@ func runBranchesCreate(ctx context.Context, args []string) int {
 	repo := fs.String("repo", "", "repo path (required)")
 	branch := fs.String("branch", "", "branch name (required)")
 	from := fs.String("start-point", "", "start point ref (empty = HEAD)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *branch == "" {
@@ -129,8 +128,8 @@ func runBranchesDelete(ctx context.Context, args []string) int {
 	repo := fs.String("repo", "", "repo path (required)")
 	branch := fs.String("branch", "", "branch name (required)")
 	force := fs.Bool("force", false, "force delete unmerged branch")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *branch == "" {
@@ -155,8 +154,8 @@ func runBranchesDelete(ctx context.Context, args []string) int {
 func runBranchesHead(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("branches-head", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -184,8 +183,8 @@ func runBranchesCompare(ctx context.Context, args []string) int {
 	repo := fs.String("repo", "", "repo path (required)")
 	base := fs.String("base", "", "base branch (required)")
 	head := fs.String("head", "", "head branch (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *base == "" || *head == "" {

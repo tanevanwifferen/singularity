@@ -13,8 +13,7 @@ func cmdPipeline(ctx context.Context, verb string, args []string) int {
 	case "status":
 		return runPipelineStatus(ctx, args)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown pipeline verb: %q\nverbs: status\n", verb)
-		return 2
+		return nounHelp("pipeline", verb)
 	}
 }
 
@@ -22,8 +21,8 @@ func runPipelineStatus(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("pipeline-status", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
 	branch := fs.String("branch", "", "specific branch (empty = all tracked branches)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
