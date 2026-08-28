@@ -34,7 +34,10 @@ type Model struct {
 	layout          *Layout
 	connStatus      ConnectionStatus
 	projectMode     bool
-	activeRepoIdx   int // index of active repo in project (for [ / ] cycling)
+	activeRepoIdx   int                         // index of active repo in project (for [ / ] cycling)
+	projectKeys     []string                    // loaded project keys (for < / > cycling)
+	projectIdx      int                         // index of the active project in projectKeys
+	projects        map[string]*service.Project // all projects, loaded up front and switched in memory
 	cfg             *config.Config
 
 	// agentCancel cancels the goroutine subscribed to AgentService events.
@@ -71,14 +74,57 @@ func (m *Model) SetProjectPath(path string) {
 	m.loadProject()
 }
 
-// SetProject installs a pre-loaded project (set by main.go in local mode
-// where the daemon-side loader has already produced it).
+// SetProject installs a pre-loaded project (set by main.go, which asks the
+// daemon for the project list and loads one before the TUI starts).
 func (m *Model) SetProject(proj *service.Project) {
 	m.proj = proj
 	m.projectMode = proj != nil
 	if m.projectMode {
 		m.initProjectRouter()
 	}
+}
+
+// SetProjects installs every loaded project at once and activates activeKey.
+// Projects carry no load state after this point: < / > switching just points
+// the views at another entry of the map.
+func (m *Model) SetProjects(keys []string, projects map[string]*service.Project, activeKey string) {
+	m.projectKeys = keys
+	m.projects = projects
+	m.projectIdx = 0
+	for i, k := range keys {
+		if k == activeKey {
+			m.projectIdx = i
+			break
+		}
+	}
+	if len(keys) > 0 {
+		m.SetProject(projects[keys[m.projectIdx]])
+	}
+}
+
+// switchToProject activates the already-loaded project at idx and rebuilds
+// the project router around it. Purely in-memory — the views refresh git
+// state themselves on Init.
+func (m *Model) switchToProject(idx int) tea.Cmd {
+	if idx < 0 || idx >= len(m.projectKeys) || idx == m.projectIdx {
+		return nil
+	}
+	proj := m.projects[m.projectKeys[idx]]
+	if proj == nil {
+		return nil
+	}
+
+	m.projectIdx = idx
+	m.proj = proj
+	m.projectMode = true
+	m.activeRepoIdx = 0
+	m.errorMsg = ""
+	m.initProjectRouter()
+	m.statusMsg = fmt.Sprintf("Switched to project: %s", proj.Name)
+	if m.router == nil {
+		return nil
+	}
+	return m.router.Init()
 }
 
 // loadProject loads the project and initializes router with project views
@@ -597,6 +643,16 @@ func (m Model) handleAppKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.loadProject()
 			return m, nil
 		}
+	case "<":
+		if !viewCapturesInput && len(m.projectKeys) > 1 {
+			idx := (m.projectIdx - 1 + len(m.projectKeys)) % len(m.projectKeys)
+			return m, m.switchToProject(idx)
+		}
+	case ">":
+		if !viewCapturesInput && len(m.projectKeys) > 1 {
+			idx := (m.projectIdx + 1) % len(m.projectKeys)
+			return m, m.switchToProject(idx)
+		}
 	case "[":
 		if !viewCapturesInput && m.projectMode && m.proj != nil && len(m.proj.Repos) > 1 {
 			m.activeRepoIdx = (m.activeRepoIdx - 1 + len(m.proj.Repos)) % len(m.proj.Repos)
@@ -629,6 +685,12 @@ func (m Model) View() string {
 		var base string
 		if m.proj != nil {
 			opts := RenderOpts{ProjectName: m.proj.Name}
+			if len(m.projectKeys) > 1 {
+				opts.ProjectSel = &ProjectSelector{
+					ActiveIdx:     m.projectIdx,
+					TotalProjects: len(m.projectKeys),
+				}
+			}
 			if len(m.proj.Repos) > 1 {
 				opts.RepoSel = &RepoSelector{
 					ActiveIdx:  m.activeRepoIdx,

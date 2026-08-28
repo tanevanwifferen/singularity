@@ -96,6 +96,16 @@ func (c *Client) ProjectCreateWorkflow(ctx context.Context, handle service.Proje
 	return &wf, nil
 }
 
+// ProjectRemoveWorkflow calls Project.RemoveWorkflow.
+func (c *Client) ProjectRemoveWorkflow(ctx context.Context, handle service.ProjectHandle, branch string) (*api.FeatureWorkflow, error) {
+	var wf api.FeatureWorkflow
+	req := api.WorkflowRemoveRequest{Handle: handle, Branch: branch}
+	if err := c.post(ctx, "/api/project/workflow/remove", req, &wf); err != nil {
+		return nil, err
+	}
+	return &wf, nil
+}
+
 // ProjectLoadWorkflows calls Project.LoadWorkflows.
 func (c *Client) ProjectLoadWorkflows(ctx context.Context, handle service.ProjectHandle) ([]*api.FeatureWorkflow, error) {
 	var resp api.WorkflowListResponse

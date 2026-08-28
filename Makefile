@@ -19,7 +19,7 @@ build-singl: ## Build singl CLI binary only
 	go build -o $(BUILD_DIR)/singl ./cmd/singl
 
 install-singl: build-singl ## Install singl to GOPATH/bin
-	cp $(BUILD_DIR)/singl $(GOPATH)/bin/
+	install $(BUILD_DIR)/singl $(GOPATH)/bin/
 
 run: ## Run the application
 	go run ./cmd/singularity
@@ -39,8 +39,8 @@ fmt: ## Format code
 	go fmt ./...
 
 install: build ## Install binaries to GOPATH/bin
-	cp $(BUILD_DIR)/$(BINARY_NAME) $(GOPATH)/bin/
-	cp $(BUILD_DIR)/singl $(GOPATH)/bin/
+	install $(BUILD_DIR)/$(BINARY_NAME) $(GOPATH)/bin/
+	install $(BUILD_DIR)/singl $(GOPATH)/bin/
 
 # Development helpers
 deps: ## Download dependencies

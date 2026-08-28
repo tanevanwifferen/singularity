@@ -292,6 +292,9 @@ func (projectStub) Subscribe(context.Context, service.ProjectHandle) (<-chan ser
 func (projectStub) CreateWorkflow(context.Context, service.ProjectHandle, string, string) (*service.FeatureWorkflow, error) {
 	return nil, unavail()
 }
+func (projectStub) RemoveWorkflow(context.Context, service.ProjectHandle, string) (*service.FeatureWorkflow, error) {
+	return nil, unavail()
+}
 func (projectStub) LoadWorkflows(context.Context, service.ProjectHandle) ([]*service.FeatureWorkflow, error) {
 	return nil, unavail()
 }

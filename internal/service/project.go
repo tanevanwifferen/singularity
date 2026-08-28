@@ -48,6 +48,13 @@ type ProjectService interface {
 	// baseDir overrides the per-project default if non-empty.
 	CreateWorkflow(ctx context.Context, handle ProjectHandle, branch, baseDir string) (*FeatureWorkflow, error)
 
+	// RemoveWorkflow tears down the workflow for `branch`: removes every
+	// repo's worktree, deletes the local and remote feature branches, and
+	// drops the workflow from persistence once fully clean. Per-repo
+	// failures are reported on the returned workflow's repos; a partially
+	// failed workflow stays persisted so a retry can finish the job.
+	RemoveWorkflow(ctx context.Context, handle ProjectHandle, branch string) (*FeatureWorkflow, error)
+
 	// LoadWorkflows reads persisted workflows for the project from disk.
 	LoadWorkflows(ctx context.Context, handle ProjectHandle) ([]*FeatureWorkflow, error)
 

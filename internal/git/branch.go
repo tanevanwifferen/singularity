@@ -93,6 +93,10 @@ func DeleteRemoteBranch(repoPath, remote, branch string) error {
 		if strings.Contains(msg, "remote ref does not exist") || strings.Contains(msg, "error: unable to delete") {
 			return nil
 		}
+		// Not an error if the repo has no such remote at all — nothing to delete
+		if strings.Contains(msg, "does not appear to be a git repository") || strings.Contains(msg, "No such remote") {
+			return nil
+		}
 		// Not an error if the remote is archived/read-only (e.g. GitLab archived project)
 		if strings.Contains(msg, "archived") || strings.Contains(msg, "returned error: 403") {
 			return nil
@@ -130,6 +134,19 @@ func CheckoutDetachedAt(repoPath, commit string) error {
 		return fmt.Errorf("checkout detached failed: %s", strings.TrimSpace(string(output)))
 	}
 	return nil
+}
+
+// RefExists reports whether ref resolves in repoPath. Used to pick a usable
+// start point for a new branch (e.g. "origin/main" may be absent in a repo
+// that was never fetched).
+func RefExists(repoPath, ref string) bool {
+	cmd := exec.Command("git", "-C", repoPath, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	return cmd.Run() == nil
+}
+
+// BranchExists reports whether a local branch named branch exists in repoPath.
+func BranchExists(repoPath, branch string) bool {
+	return RefExists(repoPath, "refs/heads/"+branch)
 }
 
 // CreateBranch creates and checks out a new branch from the default branch

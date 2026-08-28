@@ -13,6 +13,7 @@ import (
 	"gitlab.com/tanevanwifferen1/singularity/internal/app"
 	"gitlab.com/tanevanwifferen1/singularity/internal/daemon"
 	"gitlab.com/tanevanwifferen1/singularity/internal/project"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 )
 
 // version is set via ldflags at build time by goreleaser.
@@ -59,7 +60,9 @@ Usage:
 Default-mode flags (TUI):
   --server <url>     connect to an explicit daemon endpoint
                      (unix:///path/to/sock, http://host:port, https://host:port)
-  --repo <path>      single-repo override
+  --repo <path>      single-repo override (skips project mode)
+  --project <key>    project from projects.json to open (default: the project
+                     owning the cwd, else the first one)
   --project-config <path>
                      project config file (overrides daemon default)
 
@@ -242,7 +245,8 @@ const projectUsage = `Usage:
 func runTUI(args []string) int {
 	fs := flag.NewFlagSet("singularity", flag.ContinueOnError)
 	serverURL := fs.String("server", "", "daemon endpoint URL (unix:///..., http://..., https://...)")
-	repoPath := fs.String("repo", "", "single-repo override")
+	repoPath := fs.String("repo", "", "single-repo override — skips project mode")
+	projectKey := fs.String("project", "", "project key from projects.json to open (default: the project owning the cwd, else the first one)")
 	projectConfig := fs.String("project-config", "", "project config file (used by --server unset + auto-spawn)")
 	_ = projectConfig // currently consumed only by the daemon path; retained for forward-compat
 	if err := fs.Parse(args); err != nil {
@@ -266,8 +270,27 @@ func runTUI(args []string) int {
 	fmt.Println("Connected.")
 
 	a := app.New(svc)
-	if *repoPath != "" {
+	switch {
+	case *repoPath != "":
+		// Explicit single-repo override wins over the project config.
 		a.SetRepoPath(*repoPath)
+	default:
+		// Default: load every configured project up front so the TUI can
+		// switch between them in memory. Falls through to single-repo mode
+		// on the cwd when no project config exists.
+		sel, perr := resolveProjects(svc, *projectKey)
+		if perr != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", perr)
+			return 1
+		}
+		if sel != nil {
+			projects := make(map[string]*service.Project, len(sel.Keys))
+			for _, key := range sel.Keys {
+				projects[key] = service.NewProjectFromInfo(sel.Infos[key])
+			}
+			a.SetProjects(sel.Keys, projects, sel.Key)
+			fmt.Printf("Loaded %d project(s); opening %s.\n", len(sel.Keys), sel.Infos[sel.Key].Name)
+		}
 	}
 	if err := a.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running app: %v\n", err)

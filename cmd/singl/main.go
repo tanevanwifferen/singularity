@@ -46,10 +46,12 @@ func main() {
 
 	var code int
 	switch noun {
+	case "prime":
+		code = cmdPrime(ctx, args[1:])
 	case "status":
 		code = cmdStatus(ctx)
-	case "worktrees":
-		code = cmdWorktrees(ctx, verb, rest)
+	case "workflows":
+		code = cmdWorkflows(ctx, verb, rest)
 	case "agents":
 		code = cmdAgents(ctx, verb, rest)
 	case "branches":
@@ -98,8 +100,9 @@ Global flags:
   --repo     default repo path
 
 Commands:
+  prime      print the orchestration primer (how to drive singl + live daemon state)
   status
-  worktrees  list | create | remove | lock | unlock | prune
+  workflows  list | create | remove | discover   (whole project: one worktree per repo)
   agents     list | get | spawn | resume | kill | remove | output | input | watch | watch-all | chat | stats
   branches   list | checkout | create | delete | head | compare
   repos      info | open | find

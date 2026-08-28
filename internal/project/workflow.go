@@ -110,6 +110,21 @@ func sanitizeBranchForPath(branch string) string {
 	return strings.ReplaceAll(branch, "/", "-")
 }
 
+// DefaultWorkflowBaseDir returns the default root under which a project's
+// workflow worktrees live: ~/.worktrees/<project>/<branch>/<repo>. Callers that
+// let the user pick a base dir should fall back to this when it is empty, so
+// the layout stays identical between the TUI and the CLI.
+func DefaultWorkflowBaseDir(projectName string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = os.TempDir()
+	}
+	if projectName == "" {
+		return filepath.Join(home, ".worktrees")
+	}
+	return filepath.Join(home, ".worktrees", projectName)
+}
+
 // NewFeatureWorkflow creates a workflow that tracks a feature branch across all repos in a project
 func NewFeatureWorkflow(proj *Project, branchName, baseDir string) *FeatureWorkflow {
 	proj.mu.RLock()
@@ -138,8 +153,59 @@ func NewFeatureWorkflow(proj *Project, branchName, baseDir string) *FeatureWorkf
 	}
 }
 
-// CreateAllWorktrees creates worktrees for all repos concurrently.
-// Each repo gets its own error tracked independently.
+// ensureWorktree brings a single repo to the desired state: a worktree of
+// OriginalPath checked out on the workflow branch. It is idempotent — an
+// existing worktree for the branch is adopted (and its real path recorded)
+// instead of failing, so re-running a workflow create is safe.
+//
+// Returns the adopted/created path, or an error. Callers hold no lock.
+func ensureWorktree(repoPath, worktreePath, branch, defaultBranch string) (string, error) {
+	// Already have a worktree on this branch? Adopt it wherever it lives.
+	if worktrees, err := git.GetWorktrees(repoPath); err == nil {
+		for _, wt := range worktrees {
+			if wt.Path == repoPath {
+				continue // main worktree, never a workflow worktree
+			}
+			if wt.Branch == branch {
+				return wt.Path, nil
+			}
+		}
+	}
+
+	if defaultBranch == "" {
+		defaultBranch = "main"
+	}
+
+	// The branch exists but is not checked out anywhere: attach a worktree to it
+	// rather than trying to create it again.
+	if git.BranchExists(repoPath, branch) {
+		if err := git.CreateWorktree(repoPath, worktreePath, branch, false, ""); err != nil {
+			return "", err
+		}
+		return worktreePath, nil
+	}
+
+	// Fresh branch. Prefer origin/<default> so the worktree starts from the
+	// remote tip; fall back to the local default branch when there is no
+	// remote-tracking ref (never fetched, or a local-only repo).
+	startPoint := "origin/" + defaultBranch
+	if !git.RefExists(repoPath, startPoint) {
+		if git.RefExists(repoPath, defaultBranch) {
+			startPoint = defaultBranch
+		} else {
+			startPoint = "" // let git use HEAD
+		}
+	}
+	if err := git.CreateWorktree(repoPath, worktreePath, branch, true, startPoint); err != nil {
+		return "", err
+	}
+	return worktreePath, nil
+}
+
+// CreateAllWorktrees creates worktrees for all repos in the project concurrently
+// — the workflow is per project, so every repo always gets its own worktree on
+// the same branch. Each repo's error is tracked independently, and repos that
+// already have a worktree on the branch are adopted rather than re-created.
 func (fw *FeatureWorkflow) CreateAllWorktrees() error {
 	fw.mu.Lock()
 	fw.State = WorkflowInitializing
@@ -151,15 +217,16 @@ func (fw *FeatureWorkflow) CreateAllWorktrees() error {
 		go func(wr *WorkflowRepo) {
 			defer wg.Done()
 
-			startPoint := "origin/" + wr.DefaultBranch
-			err := git.CreateWorktree(wr.OriginalPath, wr.WorktreePath, fw.BranchName, true, startPoint)
+			path, err := ensureWorktree(wr.OriginalPath, wr.WorktreePath, fw.BranchName, wr.DefaultBranch)
 
 			fw.mu.Lock()
 			defer fw.mu.Unlock()
 			if err != nil {
 				wr.Error = fmt.Sprintf("create worktree: %v", err)
 			} else {
+				wr.WorktreePath = path
 				wr.WorktreeCreated = true
+				wr.Error = ""
 			}
 		}(wr)
 	}

@@ -44,6 +44,32 @@ func NewProject(def ProjectDef) *Project {
 	return project.NewProject(def)
 }
 
+// NewProjectFromInfo rebuilds a runtime *Project from the lean ProjectInfo
+// DTO the daemon returns for ProjectService.Load. The TUI needs a *Project
+// because the project-mode views still hold one directly (see the
+// phase-D-followup TODOs above); this is the client-side counterpart of
+// buildProjectInfo in internal/service/local.
+//
+// The returned project is unrefreshed — the caller (or the project view's
+// Init) triggers the first Refresh.
+func NewProjectFromInfo(info *ProjectInfo) *Project {
+	if info == nil {
+		return nil
+	}
+	def := ProjectDef{
+		Name:         info.Name,
+		ContextFiles: info.ContextFiles,
+	}
+	for _, r := range info.Repos {
+		def.Repos = append(def.Repos, RepoDef{
+			Name:          r.Name,
+			Path:          r.Path,
+			DefaultBranch: r.DefaultBranch,
+		})
+	}
+	return project.NewProject(def)
+}
+
 // LoadWorkflows / SaveWorkflows are transitional re-exports used by the
 // workflows view's local persistence path. TODO(phase-D-followup): route
 // through ProjectService.LoadWorkflows / SaveWorkflows on a handle.

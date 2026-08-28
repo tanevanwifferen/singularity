@@ -62,6 +62,11 @@ func (s *remoteProjectService) CreateWorkflow(ctx context.Context, handle servic
 	return s.c.ProjectCreateWorkflow(ctx, handle, branch, baseDir)
 }
 
+// RemoveWorkflow tears down the workflow for `branch`.
+func (s *remoteProjectService) RemoveWorkflow(ctx context.Context, handle service.ProjectHandle, branch string) (*service.FeatureWorkflow, error) {
+	return s.c.ProjectRemoveWorkflow(ctx, handle, branch)
+}
+
 // LoadWorkflows reads persisted workflows for the project from disk.
 func (s *remoteProjectService) LoadWorkflows(ctx context.Context, handle service.ProjectHandle) ([]*service.FeatureWorkflow, error) {
 	return s.c.ProjectLoadWorkflows(ctx, handle)

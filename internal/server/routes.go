@@ -152,6 +152,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/project/config_path", wrap(s.handleProjectConfigPath))
 	mux.HandleFunc("/api/project/subscribe", wrap(s.handleProjectSubscribe))
 	mux.HandleFunc("/api/project/workflow/create", wrap(s.handleWorkflowCreate))
+	mux.HandleFunc("/api/project/workflow/remove", wrap(s.handleWorkflowRemove))
 	mux.HandleFunc("/api/project/workflow/list", wrap(s.handleWorkflowList))
 	mux.HandleFunc("/api/project/workflow/save", wrap(s.handleWorkflowSave))
 	mux.HandleFunc("/api/project/workflow/discover", wrap(s.handleWorkflowDiscover))

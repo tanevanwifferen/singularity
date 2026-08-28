@@ -48,6 +48,12 @@ type WorkflowCreateRequest struct {
 	BaseDir string                `json:"base_dir"`
 }
 
+// WorkflowRemoveRequest is the body for POST /api/project/workflow/remove.
+type WorkflowRemoveRequest struct {
+	Handle service.ProjectHandle `json:"project_handle"`
+	Branch string                `json:"branch"`
+}
+
 // WorkflowListResponse is the body for GET /api/project/workflow/list.
 type WorkflowListResponse struct {
 	Workflows []*FeatureWorkflow `json:"workflows"`

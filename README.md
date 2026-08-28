@@ -8,8 +8,13 @@ A TUI-based git operations center built in Go with a server-client architecture.
 make build && make install
 
 # Start the TUI. Auto-spawns a local daemon on the default unix socket
-# if one isn't already running.
+# if one isn't already running, and opens the project from
+# ~/.config/singularity/projects.json that owns the current directory
+# (falling back to the first configured project).
 singularity
+
+# Open a specific project
+singularity --project pbd
 
 # Connect to an explicit endpoint
 singularity --server unix:///home/me/.config/singularity/daemon.sock
@@ -77,7 +82,15 @@ The classifier also assigns an effort level (low/medium/high) based on task comp
 
 ### Git Project Manager
 
-Project mode (`--project-config`) manages multiple repositories as a single unit. A cross-repo dashboard aggregates branch status, dirty state, and sync health across all repos.
+Project mode is the default: on startup the TUI asks the daemon for the
+projects in `~/.config/singularity/projects.json` and opens one — the project
+owning the current working directory, or the first configured project when the
+cwd sits outside all of them. `--project <key>` pins a specific one, `--repo
+<path>` opts out into single-repo mode, and `<` / `>` switch projects at
+runtime. With no project config at all, the TUI falls back to the repo at the
+current directory.
+
+Project mode manages multiple repositories as a single unit. A cross-repo dashboard aggregates branch status, dirty state, and sync health across all repos.
 
 **Workflows** coordinate operations across repos simultaneously:
 - **Multi-repo worktrees** — create matching feature branches across all project repos in one action
@@ -88,8 +101,8 @@ Project mode (`--project-config`) manages multiple repositories as a single unit
 Project config is generated automatically by scanning a directory:
 
 ```bash
-git-frontend --generate-config-from-dir ~/code/my-org
-git-frontend --init  # scan current directory
+singularity project generate-config ~/code/my-org
+singularity project init  # scan current directory
 ```
 
 ### Jira Integration
@@ -110,10 +123,11 @@ auto-spawns a daemon on the default unix socket when one isn't running.
 
 | Invocation | Description |
 |------------|-------------|
-| `singularity` | TUI; auto-spawns a local daemon on the default unix socket if needed |
+| `singularity` | TUI; auto-spawns a local daemon on the default unix socket if needed. Opens project mode from `projects.json` |
 | `singularity --server unix:///path/to/sock` | TUI against an explicit unix-socket endpoint |
 | `singularity --server http://host:port` | TUI against a TCP daemon (requires `SINGULARITY_TOKEN` or `~/.config/singularity/token`) |
-| `singularity --repo <path>` | TUI with a single-repo override |
+| `singularity --project <key>` | TUI opened on a specific project from `projects.json` |
+| `singularity --repo <path>` | TUI with a single-repo override (skips project mode) |
 | `singularity daemon` | Run the daemon in the foreground (systemd, debug) |
 | `singularity daemon --listen tcp://host:port` | Run the daemon bound to TCP (requires a token from `daemon init`) |
 
@@ -165,6 +179,7 @@ mode requires bearer-token authentication — generate the token with
 - `g` — git operations submenu
 - `Tab` / `Shift+Tab` — cycle views
 - `[` / `]` — cycle repos in project mode
+- `<` / `>` — switch projects (when more than one is configured)
 - `/` — search/filter in list views
 - `?` — help overlay
 - `Esc` — back/cancel
@@ -217,10 +232,10 @@ Generate a project config by scanning a directory:
 
 ```bash
 # Scan and print config to stdout (pipe-friendly)
-singularity --generate-config-from-dir ~/code/my-org
+singularity project generate-config ~/code/my-org
 
 # Scan current directory and add to projects config
-singularity --init
+singularity project init
 ```
 
 ## API

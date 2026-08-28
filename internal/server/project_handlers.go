@@ -209,6 +209,24 @@ func (s *Server) handleWorkflowCreate(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true, Data: wf})
 }
 
+// handleWorkflowRemove handles POST /api/project/workflow/remove.
+func (s *Server) handleWorkflowRemove(w http.ResponseWriter, r *http.Request) {
+	if !s.requireMethod(w, r, http.MethodPost) || !s.requireServices(w) {
+		return
+	}
+	var req api.WorkflowRemoveRequest
+	if err := s.parseJSON(r, &req); err != nil {
+		s.writeCoded(w, api.ErrCodeBadRequest, "invalid request")
+		return
+	}
+	wf, err := s.Services.Project.RemoveWorkflow(r.Context(), req.Handle, req.Branch)
+	if err != nil {
+		s.writeServiceErr(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true, Data: wf})
+}
+
 // handleWorkflowList handles GET /api/project/workflow/list.
 func (s *Server) handleWorkflowList(w http.ResponseWriter, r *http.Request) {
 	if !s.requireServices(w) {

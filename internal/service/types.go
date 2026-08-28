@@ -270,12 +270,16 @@ type ProjectHandle string
 // The full ProjectStatus (re-exported above) is still returned by
 // ProjectService.Status when views need the aggregated data.
 type ProjectInfo struct {
-	Handle  ProjectHandle `json:"handle"`
-	Key     string        `json:"key"`
-	Name    string        `json:"name"`
-	Repos   []RepoSummary `json:"repos"`
-	Loaded  bool          `json:"loaded"`
-	Context string        `json:"context_summary,omitempty"`
+	Handle ProjectHandle `json:"handle"`
+	Key    string        `json:"key"`
+	Name   string        `json:"name"`
+	Repos  []RepoSummary `json:"repos"`
+	Loaded bool          `json:"loaded"`
+	// ContextFiles are the project's configured agent-context file paths.
+	// Carried over the wire so a client rebuilding a *Project from this
+	// DTO keeps cross-repo context injection working.
+	ContextFiles []string `json:"context_files,omitempty"`
+	Context      string   `json:"context_summary,omitempty"`
 }
 
 // RepoSummary is the per-repo slice of ProjectInfo — just what overview /

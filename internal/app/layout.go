@@ -129,9 +129,33 @@ type RepoSelector struct {
 	RepoName   string
 }
 
+// ProjectSelector holds state for the project cycling indicator shown when
+// more than one project is configured.
+type ProjectSelector struct {
+	ActiveIdx     int
+	TotalProjects int
+}
+
 // RenderStatusBar renders the status bar at the bottom of the screen.
 // projectName is an optional fallback displayed when repoInfo is nil (e.g. project mode).
 func (l *Layout) RenderStatusBar(repoInfo *service.RepoInfo, viewName string, projectName string, repoSel ...RepoSelector) string {
+	return l.renderStatusBar(repoInfo, viewName, RenderOpts{ProjectName: projectName}, repoSel...)
+}
+
+// renderStatusBar is the full-fidelity status bar renderer; opt carries the
+// extras (project selector) that the legacy RenderStatusBar signature has no
+// room for.
+func (l *Layout) renderStatusBar(repoInfo *service.RepoInfo, viewName string, opt RenderOpts, repoSel ...RepoSelector) string {
+	projectName := opt.ProjectName
+
+	// projectCounter renders " <i/n>" when several projects are configured.
+	projectCounter := func() string {
+		if opt.ProjectSel == nil || opt.ProjectSel.TotalProjects <= 1 {
+			return ""
+		}
+		return l.mutedTextStyle.Render(fmt.Sprintf(" <%d/%d>", opt.ProjectSel.ActiveIdx+1, opt.ProjectSel.TotalProjects))
+	}
+
 	// Build status bar content
 	var status string
 
@@ -141,6 +165,7 @@ func (l *Layout) RenderStatusBar(repoInfo *service.RepoInfo, viewName string, pr
 		if projectName != "" {
 			status += l.mutedTextStyle.Render("P: ")
 			status += l.inactiveTabStyle.Render(projectName)
+			status += projectCounter()
 			status += l.mutedTextStyle.Render(" · ")
 		}
 
@@ -166,6 +191,7 @@ func (l *Layout) RenderStatusBar(repoInfo *service.RepoInfo, viewName string, pr
 		}
 	} else if projectName != "" {
 		status += l.primaryTextStyle.Render(projectName)
+		status += projectCounter()
 
 		// Repo selector indicator even without repoInfo
 		if len(repoSel) > 0 && repoSel[0].TotalRepos > 1 {
@@ -178,11 +204,14 @@ func (l *Layout) RenderStatusBar(repoInfo *service.RepoInfo, viewName string, pr
 		status += l.mutedTextStyle.Render("No repository")
 	}
 
-	// Right side: view name + repo cycling hint
+	// Right side: view name + cycling hints
 	if viewName != "" {
 		viewLabel := fmt.Sprintf("│ %s", viewName)
 		if len(repoSel) > 0 && repoSel[0].TotalRepos > 1 {
 			viewLabel += "  [ ]/[ ]: switch repo"
+		}
+		if opt.ProjectSel != nil && opt.ProjectSel.TotalProjects > 1 {
+			viewLabel += "  < >: project"
 		}
 		plainLen := len(stripAnsi(status)) + len(stripAnsi(viewLabel))
 		status += l.statusBarStyle.Width(l.width - plainLen).Render(viewLabel)
@@ -211,6 +240,7 @@ func (l *Layout) AvailableViewDimensions() (width, height int) {
 type RenderOpts struct {
 	ProjectName string
 	RepoSel     *RepoSelector
+	ProjectSel  *ProjectSelector
 }
 
 // Render renders the complete layout with the active view content.
@@ -256,9 +286,9 @@ func (l *Layout) Render(router *Router, repoInfo *service.RepoInfo, activeViewCo
 	if opt.RepoSel != nil {
 		repoSelArgs = []RepoSelector{*opt.RepoSel}
 	}
-	statusBar := l.RenderStatusBar(repoInfo, "", opt.ProjectName, repoSelArgs...)
+	statusBar := l.renderStatusBar(repoInfo, "", opt, repoSelArgs...)
 	if router != nil {
-		statusBar = l.RenderStatusBar(repoInfo, router.ActiveName(), opt.ProjectName, repoSelArgs...)
+		statusBar = l.renderStatusBar(repoInfo, router.ActiveName(), opt, repoSelArgs...)
 	}
 	output += statusBar
 
