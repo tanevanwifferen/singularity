@@ -225,6 +225,7 @@ const (
 const (
 	ForgeGitHub  = git.ForgeGitHub
 	ForgeGitLab  = git.ForgeGitLab
+	ForgeGitea   = git.ForgeGitea
 	ForgeUnknown = git.ForgeUnknown
 )
 
@@ -232,6 +233,7 @@ const (
 const (
 	ProviderGitHub  = git.ProviderGitHub
 	ProviderGitLab  = git.ProviderGitLab
+	ProviderGitea   = git.ProviderGitea
 	ProviderUnknown = git.ProviderUnknown
 )
 

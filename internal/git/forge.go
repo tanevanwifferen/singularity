@@ -13,6 +13,7 @@ const (
 	ForgeUnknown ForgeType = iota
 	ForgeGitHub
 	ForgeGitLab
+	ForgeGitea
 )
 
 // ForgeAuth holds authentication info for a forge
@@ -22,9 +23,15 @@ type ForgeAuth struct {
 	AuthToken string    `json:"auth_token"` // Token or OAuth token
 	APIURL    string    `json:"api_url"`
 	Valid     bool      `json:"valid"`
+	// Hint is an actionable remedy shown to the user when the forge CLI is
+	// missing or unauthenticated. Empty when everything is set up.
+	Hint string `json:"hint,omitempty"`
 }
 
-// DetectForgeAuth checks for existing authentication with GitHub or GitLab
+// DetectForgeAuth checks for existing authentication with GitHub, GitLab or
+// Gitea. Gitea is probed last so that an existing gh/glab setup — or the
+// GITHUB_TOKEN/GITLAB_TOKEN environment variables — keeps winning exactly as
+// it did before Gitea support was added.
 func DetectForgeAuth() (*ForgeAuth, error) {
 	// Try GitHub CLI first
 	if auth := detectGitHubAuth(); auth != nil {
@@ -41,7 +48,41 @@ func DetectForgeAuth() (*ForgeAuth, error) {
 		return auth, nil
 	}
 
-	return &ForgeAuth{Type: ForgeUnknown, Valid: false}, nil
+	// Try the tea CLI (Gitea / Forgejo)
+	if auth := detectGiteaAuth(); auth != nil {
+		return auth, nil
+	}
+
+	return &ForgeAuth{Type: ForgeUnknown, Valid: false, Hint: forgeSetupHint()}, nil
+}
+
+// forgeSetupHint names the three CLIs a user can set up when none is found.
+func forgeSetupHint() string {
+	return "no forge CLI authenticated — run `gh auth login`, `glab auth login`, " +
+		"or `tea logins add --name <host> --url https://<host> --token <token>`"
+}
+
+// detectGiteaAuth reports the Gitea login tea holds locally. The token stays
+// in tea's own config: every Gitea call in this package goes through tea, so
+// we deliberately never read it.
+func detectGiteaAuth() *ForgeAuth {
+	if !hasForgeCLI(teaBin) {
+		return nil
+	}
+	login, ok := teaDefaultLogin()
+	if !ok {
+		return &ForgeAuth{Type: ForgeGitea, Valid: false, Hint: teaLoginHint("")}
+	}
+	apiURL := strings.TrimSuffix(strings.TrimSpace(login.URL), "/")
+	if apiURL != "" {
+		apiURL += "/api/v1"
+	}
+	return &ForgeAuth{
+		Type:     ForgeGitea,
+		Username: login.User,
+		APIURL:   apiURL,
+		Valid:    true,
+	}
 }
 
 // detectGitHubAuth checks gh CLI authentication
@@ -171,6 +212,11 @@ func (a *ForgeAuth) IsGitLab() bool {
 	return a.Type == ForgeGitLab
 }
 
+// IsGitea returns true if the auth is for Gitea (or Forgejo)
+func (a *ForgeAuth) IsGitea() bool {
+	return a.Type == ForgeGitea
+}
+
 // String returns a string representation of the forge type
 func (f ForgeType) String() string {
 	switch f {
@@ -178,6 +224,8 @@ func (f ForgeType) String() string {
 		return "GitHub"
 	case ForgeGitLab:
 		return "GitLab"
+	case ForgeGitea:
+		return "Gitea"
 	default:
 		return "Unknown"
 	}

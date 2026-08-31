@@ -56,10 +56,20 @@ type PipelineInfo struct {
 	Pipeline    *Pipeline      `json:"pipeline"`
 	HasPipeline bool           `json:"has_pipeline"`
 	Status      PipelineStatus `json:"status"`
+	// Detail explains why there is no pipeline when that is not simply
+	// "nothing has run yet" — e.g. the instance has no Actions API, or the
+	// forge CLI is not authenticated. Empty on the happy path.
+	Detail string `json:"detail,omitempty"`
 }
 
 // GetPipelineStatus fetches the pipeline status for a branch
 func GetPipelineStatus(repoPath, branch string) (*PipelineInfo, error) {
+	// Gitea is resolved per repo: tea holds its own per-host credentials, so
+	// the ambient gh/glab auth cannot answer for a Gitea remote.
+	if DetectRemoteProvider(repoPath) == ProviderGitea {
+		return giteaPipelineStatus(repoPath, branch)
+	}
+
 	// Detect forge type
 	auth, err := DetectForgeAuth()
 	if err != nil {
@@ -241,6 +251,10 @@ func getGitHubWorkflow(repoPath, branch string, auth *ForgeAuth) (*Pipeline, err
 
 // RetryPipeline retries a failed pipeline
 func RetryPipeline(repoPath, branch string) error {
+	if DetectRemoteProvider(repoPath) == ProviderGitea {
+		return retryGiteaPipeline(repoPath, branch)
+	}
+
 	auth, err := DetectForgeAuth()
 	if err != nil || !auth.Valid {
 		return fmt.Errorf("no valid forge authentication")
@@ -304,9 +318,11 @@ func GetBranchPipelineStatuses(repoPath string, branches []BranchInfo) (map[stri
 
 	for _, branch := range branches {
 		info, err := GetPipelineStatus(repoPath, branch.Name)
-		if err != nil {
+		if err != nil && info == nil {
 			info = &PipelineInfo{Branch: branch.Name}
 		}
+		// A non-nil info alongside an error still carries Detail — the
+		// explanation is more useful to the user than a blank row.
 		statuses[branch.Name] = info
 	}
 

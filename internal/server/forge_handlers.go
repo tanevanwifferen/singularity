@@ -37,10 +37,18 @@ func (s *Server) handleForgeProvider(w http.ResponseWriter, r *http.Request) {
 	if !s.requireServices(w) {
 		return
 	}
-	provider, err := s.Services.Forge.DetectProvider(r.Context(), s.resolveRepoPath(r.URL.Query().Get("repo_path")))
+	info, err := s.Services.Forge.ProviderInfo(r.Context(), s.resolveRepoPath(r.URL.Query().Get("repo_path")))
 	if err != nil {
 		s.writeServiceErr(w, err)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true, Data: api.ForgeProviderResponse{Provider: provider}})
+	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true, Data: api.ForgeProviderResponse{
+		Provider:     info.Provider,
+		CLI:          info.CLI,
+		CLIInstalled: info.CLIInstalled,
+		HasLogin:     info.HasLogin,
+		Host:         info.Host,
+		User:         info.User,
+		Hint:         info.Hint,
+	}})
 }

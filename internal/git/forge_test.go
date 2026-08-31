@@ -2,6 +2,7 @@ package git
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -13,6 +14,7 @@ func TestForgeTypeString(t *testing.T) {
 		{ForgeUnknown, "Unknown"},
 		{ForgeGitHub, "GitHub"},
 		{ForgeGitLab, "GitLab"},
+		{ForgeGitea, "Gitea"},
 		{ForgeType(100), "Unknown"}, // Invalid type
 	}
 
@@ -50,7 +52,9 @@ func TestForgeAuthIsGitLab(t *testing.T) {
 
 func TestDetectForgeAuthNoCLI(t *testing.T) {
 	// This test checks that DetectForgeAuth returns a valid result
-	// even when gh/glab CLIs are not installed
+	// even when gh/glab/tea CLIs are not installed
+	installedCLIs(t)
+	fakeCLI(t, nil)
 	auth, err := DetectForgeAuth()
 	if err != nil {
 		t.Fatalf("DetectForgeAuth failed: %v", err)
@@ -196,6 +200,68 @@ func TestDetectGitLabAuthNotInstalled(t *testing.T) {
 	// If glab is not installed, should return nil
 	if auth != nil {
 		t.Log("glab appears to be installed, skipping nil check")
+	}
+}
+
+func TestForgeAuthIsGitea(t *testing.T) {
+	auth := &ForgeAuth{Type: ForgeGitea}
+	if !auth.IsGitea() {
+		t.Error("Expected IsGitea() to return true for Gitea auth")
+	}
+	if auth.IsGitHub() || auth.IsGitLab() {
+		t.Error("Gitea auth must not report as GitHub or GitLab")
+	}
+}
+
+func TestDetectGiteaAuthNotInstalled(t *testing.T) {
+	installedCLIs(t)
+	fakeCLI(t, nil)
+
+	if auth := detectGiteaAuth(); auth != nil {
+		t.Errorf("Expected nil auth when tea is not installed, got %+v", auth)
+	}
+}
+
+func TestDetectGiteaAuthNoLoginGivesHint(t *testing.T) {
+	installedCLIs(t, teaBin)
+	fakeCLI(t, func(recordedCall) cliResult { return cliResult{Stdout: "[]"} })
+
+	auth := detectGiteaAuth()
+	if auth == nil {
+		t.Fatal("Expected a Gitea auth struct when tea is installed but has no login")
+	}
+	if auth.Valid {
+		t.Error("Expected Valid=false with no tea login")
+	}
+	if !strings.Contains(auth.Hint, "tea logins add") {
+		t.Errorf("Hint = %q, want the tea logins add command", auth.Hint)
+	}
+}
+
+func TestDetectGiteaAuthWithLogin(t *testing.T) {
+	installedCLIs(t, teaBin)
+	fakeCLI(t, func(recordedCall) cliResult {
+		return cliResult{Stdout: teaLoginsJSON(teaLogin{
+			Name: "example", URL: "https://gitea.example.com", User: "dev", Default: "true",
+		})}
+	})
+
+	auth := detectGiteaAuth()
+	if auth == nil || !auth.Valid {
+		t.Fatalf("Expected a valid Gitea auth, got %+v", auth)
+	}
+	if auth.Type != ForgeGitea {
+		t.Errorf("Type = %v, want ForgeGitea", auth.Type)
+	}
+	if auth.Username != "dev" {
+		t.Errorf("Username = %q, want dev", auth.Username)
+	}
+	if auth.APIURL != "https://gitea.example.com/api/v1" {
+		t.Errorf("APIURL = %q, want https://gitea.example.com/api/v1", auth.APIURL)
+	}
+	// tea keeps the token in its own store; we must never surface one.
+	if auth.AuthToken != "" {
+		t.Error("Gitea auth must not carry a token — tea owns the credential")
 	}
 }
 

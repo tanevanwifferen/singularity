@@ -26,3 +26,8 @@ func (s *remoteForgeService) Detect(ctx context.Context) (*service.ForgeInfo, er
 func (s *remoteForgeService) DetectProvider(ctx context.Context, repoPath string) (service.RemoteProvider, error) {
 	return s.c.ForgeDetectProvider(ctx, repoPath)
 }
+
+// ProviderInfo returns the provider plus the state of the CLI that drives it.
+func (s *remoteForgeService) ProviderInfo(ctx context.Context, repoPath string) (*service.ForgeProviderInfo, error) {
+	return s.c.ForgeProviderInfo(ctx, repoPath)
+}

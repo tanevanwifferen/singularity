@@ -48,6 +48,9 @@ func runForgeInfo(ctx context.Context, _ []string) int {
 	if info.APIURL != "" {
 		md += fmt.Sprintf("API URL: `%s`  \n", info.APIURL)
 	}
+	if info.Hint != "" {
+		md += fmt.Sprintf("\n> %s\n", info.Hint)
+	}
 	return renderMarkdown(md)
 }
 
@@ -78,6 +81,9 @@ func runForgeAuth(ctx context.Context, _ []string) int {
 	if auth.APIURL != "" {
 		md += fmt.Sprintf("API URL: `%s`  \n", auth.APIURL)
 	}
+	if auth.Hint != "" {
+		md += fmt.Sprintf("\n> %s\n", auth.Hint)
+	}
 	// Do not print auth.AuthToken — credential in output.
 	return renderMarkdown(md)
 }
@@ -99,14 +105,35 @@ func runForgeProvider(ctx context.Context, args []string) int {
 	}
 	tctx, cancel := withTimeout(ctx)
 	defer cancel()
-	provider, err := c.ForgeDetectProvider(tctx, repoPath)
+	info, err := c.ForgeProviderInfo(tctx, repoPath)
 	if err != nil {
 		return die(err)
 	}
 	if globals.json {
-		return printJSON(map[string]string{"provider": string(provider)})
+		return printJSON(info)
 	}
 	md := "## Forge provider\n\n"
-	md += fmt.Sprintf("Provider: `%s`  \n", string(provider))
+	md += fmt.Sprintf("Provider: `%s`  \n", string(info.Provider))
+	if info.Host != "" {
+		md += fmt.Sprintf("Host: `%s`  \n", info.Host)
+	}
+	if info.CLI != "" {
+		md += fmt.Sprintf("CLI: `%s` (%s)  \n", info.CLI, yesNo(info.CLIInstalled))
+		md += fmt.Sprintf("Login for host: %s  \n", yesNo(info.HasLogin))
+	}
+	if info.User != "" {
+		md += fmt.Sprintf("User: `%s`  \n", info.User)
+	}
+	if info.Hint != "" {
+		md += fmt.Sprintf("\n> %s\n", info.Hint)
+	}
 	return renderMarkdown(md)
+}
+
+// yesNo renders a boolean the way the forge verbs phrase availability.
+func yesNo(ok bool) string {
+	if ok {
+		return "yes"
+	}
+	return "no"
 }

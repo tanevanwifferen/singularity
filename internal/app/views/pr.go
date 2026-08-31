@@ -570,11 +570,7 @@ func (v *PRView) View() string {
 
 	// Forge indicator
 	if v.forgeAuth != nil && v.forgeAuth.Valid {
-		forgeName := "GitHub"
-		if v.forgeAuth.IsGitLab() {
-			forgeName = "GitLab"
-		}
-		s.WriteString(th.DashboardAccentStyle.Render(forgeName))
+		s.WriteString(th.DashboardAccentStyle.Render(v.forgeAuth.Type.String()))
 		s.WriteString(" @ ")
 		s.WriteString(th.InfoStyle.Render(v.forgeAuth.Username))
 	} else {
