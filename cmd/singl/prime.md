@@ -66,10 +66,34 @@ same create is idempotent — existing worktrees on that branch are adopted.
 Exit code is `1` if any repo failed; check each repo's `error` field, the other
 worktrees are real and already tracked.
 
+**Deciding isolation is your job, before you spawn anything:**
+
+- **Unrelated changes ⇒ separate workflows.** Each gets its own branch and its own
+  worktree per repo, so it can be reviewed, landed and reverted independently.
+- **One change ⇒ one workflow.** Then either a single agent, or several agents on
+  *different* repo worktrees of that same workflow. Never two agents in one directory.
+- **Never spawn an agent in the user's live checkout for feature work.** A bare
+  `agents spawn --workdir <repo>` edits the tree the user is sitting in; that is only
+  for read-only inspection or an explicitly throwaway quick fix.
+
+Four unrelated changes = four `workflows create` calls on four branches, one agent
+per worktree — not one agent fed four messages:
+
+```
+singl --json workflows create --project proj-x --branch feat/agents-wait
+singl --json workflows create --project proj-x --branch feat/wait-all
+singl --json workflows create --project proj-x --branch feat/smart-route-default
+singl --json workflows create --project proj-x --branch fix/prompt-logging
+# then one agents spawn per worktree, one task each
+```
+
 **2 — spawn.**
 
 Spawn one agent per repo worktree for scoped work, or one agent on the workflow
 directory (`<base-dir>/<branch>/`) when the change genuinely spans repos.
+
+**One discrete task = one agent.** Never grow an agent's scope after spawning; a
+new task means a new agent (and, if unrelated, a new workflow).
 
 ```
 singl --json agents spawn --workdir ~/.worktrees/<project>/feature-x/api \
@@ -103,6 +127,11 @@ singl agents kill   --id <id>                       # soft close: ends the turn,
 singl agents remove --id <id>                       # terminates the process and drops the agent
 singl --json agents resume --id <id> --message "..." # NEW agent seeded with the old one's history (crash recovery)
 ```
+
+`agents input` is for correcting or unblocking the task the agent already has — it
+is **not** a queue for the next task. Queueing unrelated work onto a running agent
+produces one tangled diff across unrelated concerns that cannot be reviewed, landed
+or reverted separately. New task ⇒ new agent.
 
 "Clear a subagent" = `remove`, then `spawn` a fresh one on the same worktree.
 
@@ -163,6 +192,13 @@ Streaming (blocking) commands: `agents watch`, `agents watch-all`, `agents chat`
   repos must be isolated together or the branch cannot be landed as one change.
 - Prefer several small scoped agents over one broad one; when a change spans repos,
   one agent per repo worktree, all inside the same workflow.
+- One discrete task = one agent. Decide *before* spawning whether agents must be
+  isolated (unrelated work ⇒ one workflow each) or should collaborate inside one
+  workflow (same change ⇒ separate repo worktrees, never the same directory).
+- Never use `agents input` to hand an agent a second, unrelated task — spawn a new one.
+- Too big for one agent? Sequence dependent steps as separate agents on the same
+  worktree, spawning the next only after reviewing the previous diff; parallelise
+  independent work across separate workflows.
 - Always pass `--timeout` for unattended work; a runaway agent otherwise runs forever.
 - Poll `agents get` for terminal state (`complete`, `error`, `killed`) and drain
   `agents output --offset` before acting on a result.
