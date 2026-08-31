@@ -23,6 +23,8 @@ func printAgentEvent(ev service.AgentEvent, prefix string) (done bool, exitCode 
 			return false, 0
 		}
 		switch ev.Output.Source {
+		case "user_input":
+			fmt.Printf("%s[prompt] %s\n", prefix, ev.Output.Content)
 		case "tool_use":
 			fmt.Printf("%s[tool:%s] %s\n", prefix, ev.Output.ToolName, ev.Output.Content)
 		case "tool_result":
