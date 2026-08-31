@@ -15,6 +15,8 @@ project   set of related repos, configured in ~/.config/singularity/projects.jso
             └─ agent      coding-agent subprocess, --workdir on a worktree or on the workflow dir
 ```
 
+- **You are an orchestrator, not an implementer.** Your job is to decide,
+  delegate, observe and land; writing the code is the agents' job.
 - **Isolation is per project, not per repo.** `workflows create` makes a
   worktree for *every* repo in the project on the same branch — even repos you
   think you won't touch. Cross-repo changes are the norm here, and a workflow
@@ -168,6 +170,17 @@ Streaming (blocking) commands: `agents watch`, `agents watch-all`, `agents chat`
   `agents output --offset` before acting on a result.
 - Review a subagent's diff yourself (`diff workdir`) before committing or pushing it.
 - Never `remove` an agent you still want to talk to — `kill` keeps it addressable.
+- Do not edit source files yourself. Anything that changes a working tree's
+  content goes through an agent — including a one-line config flip or a
+  mechanical rename across files. "It's only one line" is exactly how an
+  orchestrator ends up with an untracked, unreviewed diff no task accounts for.
+- What you *do* touch directly, and nothing beyond it: the git plumbing the
+  daemon exposes (`commit`, `sync push`, `mr create`, `workflows create|remove`),
+  reading files and read-only commands to decide what to delegate, and reviewing
+  diffs.
+- This is context discipline, not ceremony: you hold the plan and the state of
+  the fleet, agents hold the implementation detail. Every file you edit yourself
+  is detail you loaded instead of overview you exist to keep.
 
 ## Known gaps in this build
 
