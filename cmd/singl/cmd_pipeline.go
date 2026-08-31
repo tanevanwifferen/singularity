@@ -71,11 +71,17 @@ func runPipelineStatus(ctx context.Context, args []string) int {
 	for _, branchName := range keys {
 		info := pipelines[branchName]
 		status := "unknown"
+		detail := ""
 		if info != nil {
 			status = string(info.Status)
 			if !info.HasPipeline {
 				status = "none"
 			}
+			detail = info.Detail
+		}
+		if detail != "" {
+			md += fmt.Sprintf("- `%s` — %s (%s)  \n", branchName, status, detail)
+			continue
 		}
 		md += fmt.Sprintf("- `%s` — %s  \n", branchName, status)
 	}

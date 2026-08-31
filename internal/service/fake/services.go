@@ -259,6 +259,9 @@ func (forgeStub) Detect(context.Context) (*service.ForgeInfo, error)     { retur
 func (forgeStub) DetectProvider(context.Context, string) (service.RemoteProvider, error) {
 	return service.ProviderUnknown, unavail()
 }
+func (forgeStub) ProviderInfo(context.Context, string) (*service.ForgeProviderInfo, error) {
+	return nil, unavail()
+}
 
 // projectStub ------------------------------------------------------------------
 

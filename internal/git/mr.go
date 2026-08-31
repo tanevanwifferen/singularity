@@ -31,6 +31,13 @@ type MergeRequest struct {
 
 // CreateMR creates a merge request
 func CreateMR(repoPath, sourceBranch, targetBranch, title, description string, reviewers []string) (*MergeRequest, error) {
+	// Gitea is resolved from the repo, not from the ambient forge auth: tea
+	// carries its own per-host credentials, and a globally configured gh or
+	// glab says nothing about a Gitea remote.
+	if DetectRemoteProvider(repoPath) == ProviderGitea {
+		return createGiteaPR(repoPath, sourceBranch, targetBranch, title, description)
+	}
+
 	// Detect forge type
 	auth, err := DetectForgeAuth()
 	if err != nil {
@@ -49,6 +56,27 @@ func CreateMR(repoPath, sourceBranch, targetBranch, title, description string, r
 	}
 
 	return nil, fmt.Errorf("unsupported forge type: %s", auth.Type)
+}
+
+// createGiteaPR opens a pull request on a Gitea or Forgejo instance through
+// tea. tea has no machine-readable output for `pulls create`, so the returned
+// MergeRequest is assembled from the request plus the URL tea prints.
+func createGiteaPR(repoPath, sourceBranch, targetBranch, title, description string) (*MergeRequest, error) {
+	url, gr, err := createGiteaPull(repoPath, sourceBranch, targetBranch, title, description)
+	if err != nil {
+		return nil, err
+	}
+	return &MergeRequest{
+		Number:       giteaPullNumber(url),
+		Title:        title,
+		Description:  description,
+		SourceBranch: sourceBranch,
+		TargetBranch: targetBranch,
+		Author:       gr.Login.User,
+		State:        "open",
+		URL:          url,
+		WebURL:       url,
+	}, nil
 }
 
 // getCurrentGitLabUserID fetches the current authenticated user's ID from GitLab.

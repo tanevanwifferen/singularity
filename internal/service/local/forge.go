@@ -44,6 +44,7 @@ func (s *localForgeService) Detect(ctx context.Context) (*service.ForgeInfo, err
 		HasAuth: auth.Valid,
 		APIURL:  auth.APIURL,
 		User:    auth.Username,
+		Hint:    auth.Hint,
 	}
 	if !auth.Valid {
 		return info, service.ErrNoForge
@@ -51,10 +52,27 @@ func (s *localForgeService) Detect(ctx context.Context) (*service.ForgeInfo, err
 	return info, nil
 }
 
-// DetectProvider returns the RemoteProvider for a repo (gh/gl/none).
+// DetectProvider returns the RemoteProvider for a repo (gh/gl/tea/none).
 func (s *localForgeService) DetectProvider(ctx context.Context, repoPath string) (service.RemoteProvider, error) {
 	if err := checkCtx(ctx); err != nil {
 		return "", err
 	}
 	return git.DetectRemoteProvider(repoPath), nil
+}
+
+// ProviderInfo returns the provider plus the state of the CLI that drives it.
+func (s *localForgeService) ProviderInfo(ctx context.Context, repoPath string) (*service.ForgeProviderInfo, error) {
+	if err := checkCtx(ctx); err != nil {
+		return nil, err
+	}
+	st := git.DetectProviderStatus(repoPath)
+	return &service.ForgeProviderInfo{
+		Provider:     st.Provider,
+		CLI:          st.CLI,
+		CLIInstalled: st.CLIInstalled,
+		HasLogin:     st.HasLogin,
+		Host:         st.Host,
+		User:         st.User,
+		Hint:         st.Hint,
+	}, nil
 }

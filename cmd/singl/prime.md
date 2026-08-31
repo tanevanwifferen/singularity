@@ -214,6 +214,14 @@ Streaming (blocking) commands: `agents watch`, `agents watch-all`, `agents chat`
 `agents wait` / `agents wait-all` block too, but poll instead of stream and
 fully support `--json` — they are the scripted counterparts of watch/watch-all.
 
+<!-- gitea-forge -->
+The forge layer drives **github** (`gh`), **gitlab** (`glab`) and **gitea**/Forgejo (`tea`).
+Provider is detected from the origin URL; for a self-hosted instance on a neutral domain,
+pin it with `git config singularity.forge gitea` (or `SINGULARITY_FORGE=gitea`).
+`singl --json forge provider --repo <path>` reports whether the CLI is installed and logged
+in for that host, and prints the exact `tea logins add` command when it is not.
+<!-- /gitea-forge -->
+
 ## Orchestration rules
 
 - Check `agents stats` before spawning — the pool has a hard concurrency cap and
