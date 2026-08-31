@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/config"
 )
@@ -75,12 +76,13 @@ type Agent struct {
 	mu      sync.Mutex
 
 	// Configuration
-	backend      Backend
-	model        string
-	effort       string
-	allowedTools []string
-	maxTurns     int
-	contextFiles []string
+	backend       Backend
+	model         string
+	effort        string
+	allowedTools  []string
+	maxTurns      int
+	contextFiles  []string
+	promptLogNote string // logged instead of the full task (see AgentOptions.PromptLogNote)
 
 	// Cost tracking (populated from BackendResult event)
 	TotalCostUSD float64 `json:"total_cost_usd,omitempty"`
@@ -126,21 +128,22 @@ func newAgent(id, workDir, task string, opts AgentOptions, backend Backend) *Age
 		summary = extractSummary(task)
 	}
 	return &Agent{
-		ID:           id,
-		WorkDir:      workDir,
-		Task:         task,
-		Summary:      summary,
-		State:        AgentIdle,
-		CreatedAt:    time.Now(),
-		output:       make([]OutputEntry, 0),
-		done:         make(chan struct{}),
-		backend:      backend,
-		model:        opts.Model,
-		effort:       opts.Effort,
-		allowedTools: opts.AllowedTools,
-		maxTurns:     opts.MaxTurns,
-		contextFiles: opts.ContextFiles,
-		useWorktree:  opts.UseWorktree,
+		ID:            id,
+		WorkDir:       workDir,
+		Task:          task,
+		Summary:       summary,
+		State:         AgentIdle,
+		CreatedAt:     time.Now(),
+		output:        make([]OutputEntry, 0),
+		done:          make(chan struct{}),
+		backend:       backend,
+		model:         opts.Model,
+		effort:        opts.Effort,
+		allowedTools:  opts.AllowedTools,
+		maxTurns:      opts.MaxTurns,
+		contextFiles:  opts.ContextFiles,
+		promptLogNote: opts.PromptLogNote,
+		useWorktree:   opts.UseWorktree,
 	}
 }
 
@@ -222,9 +225,15 @@ func (a *Agent) start() error {
 		a.stdinMu.Unlock()
 	}
 
-	// Send the initial task.
+	// Send the initial task, logging what was actually sent so the output
+	// stream shows the conversation from the beginning.
 	go func() {
 		task := a.buildTask()
+		logText := a.promptLogNote
+		if logText == "" {
+			logText = task
+		}
+		a.appendOutput("user_input", truncateForLog(logText, promptLogLimit))
 		if err := a.sendInitialInput(task); err != nil {
 			a.appendOutput("error", fmt.Sprintf("Failed to send initial task: %v", err))
 		}
@@ -530,7 +539,7 @@ func (a *Agent) sendInput(message string) error {
 		return fmt.Errorf("write to stdin: %w (process may have exited)", err)
 	}
 
-	a.appendOutput("user_input", message)
+	a.appendOutput("user_input", truncateForLog(message, promptLogLimit))
 	return nil
 }
 
@@ -781,6 +790,23 @@ func formatToolUseSummary(name string, input map[string]interface{}) string {
 	default:
 		return name
 	}
+}
+
+// promptLogLimit caps how much of a prompt is copied into the output stream.
+// The full task stays available via the agent's Task field (`agents get`).
+const promptLogLimit = 4000
+
+// truncateForLog shortens s to at most max bytes (snapped to a rune boundary),
+// appending an explicit marker with the elided size — never a silent cut.
+func truncateForLog(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return fmt.Sprintf("%s\n… [%d bytes elided; full task available via agents get]", s[:cut], len(s)-cut)
 }
 
 // truncate shortens a string to maxLen, adding "..." if truncated.

@@ -29,6 +29,10 @@ func cmdAgents(ctx context.Context, verb string, args []string) int {
 		return runAgentsOutput(ctx, args)
 	case "input":
 		return runAgentsInput(ctx, args)
+	case "wait":
+		return runAgentsWait(ctx, args)
+	case "wait-all":
+		return runAgentsWaitAll(ctx, args)
 	case "watch":
 		return runAgentsWatch(ctx, args)
 	case "watch-all":
@@ -38,7 +42,7 @@ func cmdAgents(ctx context.Context, verb string, args []string) int {
 	case "stats":
 		return runAgentsStats(ctx, args)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown agents verb: %q\nverbs: list get spawn resume kill remove output input watch watch-all chat stats\n", verb)
+		fmt.Fprintf(os.Stderr, "unknown agents verb: %q\nverbs: list get spawn resume kill remove output input wait wait-all watch watch-all chat stats\n", verb)
 		return 2
 	}
 }
@@ -128,7 +132,7 @@ func runAgentsSpawn(ctx context.Context, args []string) int {
 	prompt := fs.String("prompt", "", "task prompt (required)")
 	model := fs.String("model", "", "model override")
 	effort := fs.String("effort", "", "effort level: low|medium|high")
-	smartRoute := fs.Bool("smart-route", false, "enable smart LLM routing")
+	smartRoute := smartRouteFlags(fs)
 	maxTurns := fs.Int("max-turns", 0, "max agent turns (0 = unlimited)")
 	timeout := fs.Int("timeout", 0, "timeout in seconds (0 = no timeout)")
 	backend := fs.String("backend", "", "agent backend: claude or pi (default: daemon default)")
@@ -142,7 +146,7 @@ func runAgentsSpawn(ctx context.Context, args []string) int {
 	opts := api.AgentOptions{
 		Model:       *model,
 		Effort:      *effort,
-		SmartRoute:  *smartRoute,
+		SmartRoute:  smartRoute(*model, *effort),
 		MaxTurns:    *maxTurns,
 		BackendName: *backend,
 	}
@@ -242,6 +246,8 @@ func runAgentsOutput(ctx context.Context, args []string) int {
 	md := fmt.Sprintf("## Output for agent `%s`\n\n", *id)
 	for _, e := range entries {
 		switch e.Source {
+		case "user_input":
+			md += fmt.Sprintf("**[prompt]** %s  \n", e.Content)
 		case "tool_use":
 			md += fmt.Sprintf("**[tool:%s]** %s  \n", e.ToolName, e.Content)
 		case "tool_result":
@@ -270,7 +276,7 @@ func runAgentsResume(ctx context.Context, args []string) int {
 	message := fs.String("message", "", "follow-up message (required)")
 	model := fs.String("model", "", "model override")
 	effort := fs.String("effort", "", "effort level: low|medium|high")
-	smartRoute := fs.Bool("smart-route", false, "enable smart LLM routing")
+	smartRoute := smartRouteFlags(fs)
 	maxTurns := fs.Int("max-turns", 0, "max agent turns")
 	timeout := fs.Int("timeout", 0, "timeout in seconds")
 	backend := fs.String("backend", "", "agent backend: claude or pi (default: daemon default)")
@@ -284,7 +290,7 @@ func runAgentsResume(ctx context.Context, args []string) int {
 	opts := api.AgentOptions{
 		Model:       *model,
 		Effort:      *effort,
-		SmartRoute:  *smartRoute,
+		SmartRoute:  smartRoute(*model, *effort),
 		MaxTurns:    *maxTurns,
 		BackendName: *backend,
 	}
@@ -352,6 +358,37 @@ func runAgentsStats(ctx context.Context, _ []string) int {
 	md += fmt.Sprintf("Total: %d — Completed: %d, Errored: %d, Killed: %d  \n",
 		stats.Total, stats.Completed, stats.Errored, stats.Killed)
 	return renderMarkdown(md)
+}
+
+// smartRouteFlags registers --smart-route and --no-smart-route on fs and
+// returns a resolver to call after fs.Parse with the final --model/--effort
+// values. Routing defaults to ON when the user pinned neither model nor
+// effort; --no-smart-route always wins.
+func smartRouteFlags(fs *flag.FlagSet) func(model, effort string) bool {
+	sr := fs.Bool("smart-route", false, "force Haiku routing on (--smart-route=false forces off; default: on unless --model/--effort given)")
+	nsr := fs.Bool("no-smart-route", false, "disable smart routing")
+	return func(model, effort string) bool {
+		explicit := false
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "smart-route" {
+				explicit = true
+			}
+		})
+		return resolveSmartRoute(explicit, *sr, *nsr, model, effort)
+	}
+}
+
+// resolveSmartRoute decides whether to ask the daemon for Haiku routing.
+// Precedence: --no-smart-route > explicit --smart-route[=bool] > default,
+// where the default is ON only when the user gave neither model nor effort.
+func resolveSmartRoute(explicit, smartRoute, noSmartRoute bool, model, effort string) bool {
+	if noSmartRoute {
+		return false
+	}
+	if explicit {
+		return smartRoute
+	}
+	return model == "" && effort == ""
 }
 
 // fmtAgent formats a single AgentSnapshotDTO as a markdown section.

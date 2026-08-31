@@ -78,8 +78,17 @@ singl --json agents spawn --workdir ~/.worktrees/<project>/feature-x/api \
 # → {"agent_id": "a1b2c3"}
 ```
 
-Flags: `--model`, `--effort low|medium|high`, `--smart-route` (Haiku picks model +
-effort from the prompt), `--max-turns`, `--timeout <secs>`, `--backend claude|pi`.
+Flags: `--model`, `--effort low|medium|high`, `--max-turns`, `--timeout <secs>`,
+`--backend claude|pi`, `--smart-route[=bool]`, `--no-smart-route`.
+
+Smart routing is **on by default**: a Haiku classifier reads the prompt and
+picks the model (planning → opus, implementation → sonnet) and effort
+(low/medium/high). Passing `--model` or `--effort` overrides the corresponding
+part of routing — an explicit `--model` disables the classifier entirely, an
+explicit `--effort` is never overwritten by it. Pass `--no-smart-route` (or
+`--smart-route=false`) to disable routing and use backend defaults. If the
+classifier fails, the agent starts on backend defaults and an `error` output
+entry says so.
 
 **3 — observe by polling, not streaming.**
 
@@ -91,8 +100,29 @@ singl --json agents stats                           # active/max — check capac
 ```
 
 Keep your own per-agent output cursor and advance `--offset`.
+The output stream includes the prompts: the initial task and every follow-up
+appear as `user_input` entries (rendered `[prompt]`; very long prompts are
+truncated with an explicit elision marker — `agents get` has the full task),
+so the log reads as a complete conversation.
+
+To block until an agent finishes, use `wait` — it polls quietly (no streaming)
+and supports `--json`:
+
+```
+singl --json agents wait     --id <id> [--timeout <secs>] [--interval <secs>]
+singl --json agents wait-all [--timeout <secs>] [--interval <secs>]
+```
+
+`wait` takes one or more ids (repeat `--id` or comma-separate); `wait-all`
+snapshots the currently active agents and waits for those — agents spawned
+later don't extend the wait. Default poll `--interval` is 2s; `--timeout 0`
+(the default) waits forever. Exit `0` only when every waited agent ended
+`complete`; `1` on `error`/`killed` or timeout (JSON then carries the last
+known state plus `"timed_out": true`).
+
 `agents watch --id <id>` and `agents watch-all` stream live to stdout and **block
-until the agent stops** — use them only when a human is watching.
+until the agent stops** — use them only when a human is watching; `wait` and
+`wait-all` are their non-streaming, `--json`-capable counterparts.
 
 **4 — chat, correct, clear.**
 
@@ -134,7 +164,7 @@ idempotent for the repos that already cleaned.
 | Noun | Verbs | Key flags |
 |---|---|---|
 | `status` | — | — |
-| `agents` | list get spawn resume kill remove output input watch watch-all chat stats | `--id` `--workdir` `--prompt` `--message` `--offset` `--model` `--effort` `--smart-route` `--max-turns` `--timeout` `--backend` |
+| `agents` | list get spawn resume kill remove output input wait wait-all watch watch-all chat stats | `--id` `--workdir` `--prompt` `--message` `--offset` `--model` `--effort` `--smart-route` `--max-turns` `--timeout` `--interval` `--backend` |
 | `project` | list status load info refresh branch-check context workflows | `--name` (load) `--project` (handle) `--branch` |
 | `workflows` | list create remove discover | `--project` `--branch` `--base-dir` (create makes a worktree per repo; remove tears the whole workflow down) |
 | `branches` | list checkout create delete head compare | `--repo` `--branch` `--start-point` `--base` `--head` `--force` |
@@ -152,6 +182,8 @@ idempotent for the repos that already cleaned.
 
 Streaming (blocking) commands: `agents watch`, `agents watch-all`, `agents chat`,
 `sync fetch|pull|push|pull-rebase|all`, `workflows discover`. They reject `--json`.
+`agents wait` / `agents wait-all` block too, but poll instead of stream and
+fully support `--json` — they are the scripted counterparts of watch/watch-all.
 
 ## Orchestration rules
 
@@ -164,8 +196,10 @@ Streaming (blocking) commands: `agents watch`, `agents watch-all`, `agents chat`
 - Prefer several small scoped agents over one broad one; when a change spans repos,
   one agent per repo worktree, all inside the same workflow.
 - Always pass `--timeout` for unattended work; a runaway agent otherwise runs forever.
-- Poll `agents get` for terminal state (`complete`, `error`, `killed`) and drain
-  `agents output --offset` before acting on a result.
+- `agents wait --id <id> --timeout <secs>` is the preferred way to block on
+  unattended work (`watch` is for humans): it polls for a terminal state
+  (`complete`, `error`, `killed`) without streaming and its exit code tells you
+  the outcome. Then drain `agents output --offset` before acting on a result.
 - Review a subagent's diff yourself (`diff workdir`) before committing or pushing it.
 - Never `remove` an agent you still want to talk to — `kill` keeps it addressable.
 

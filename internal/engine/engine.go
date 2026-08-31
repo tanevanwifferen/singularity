@@ -24,6 +24,11 @@ type AgentOptions struct {
 	UseWorktree  bool          // Create a git worktree for isolation; merge back on completion
 	Summary      string        // One-line summary for display in agent list (auto-generated if empty)
 	WorkflowID   string        // Optional workflow ID (branch name) this agent belongs to
+	// PromptLogNote, when non-empty, is logged to the output stream instead of
+	// the full task text. Used by ResumeWithHistory so the seeded history is
+	// not replayed as a giant prompt entry. Engine-internal: the HTTP request
+	// DTOs (api.AgentStartRequest etc.) do not carry it.
+	PromptLogNote string
 	// Backend overrides the engine's default backend for this agent.
 	// nil means use the engine default (or resolve from BackendName).
 	Backend Backend
@@ -155,10 +160,15 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 		agent.appendOutput("system", "Routing via Haiku...")
 		go func() {
 			route, err := RoutePrompt(task, backend)
-			if err == nil {
+			if err != nil {
+				agent.appendOutput("error", fmt.Sprintf("Smart routing failed (%v); falling back to backend defaults", err))
+			} else {
 				agent.mu.Lock()
 				agent.model = route.Model
-				agent.effort = route.Effort
+				// An explicit --effort from the user beats the classifier.
+				if opts.Effort == "" {
+					agent.effort = route.Effort
+				}
 				agent.RouteResult = route
 				if route.Summary != "" {
 					agent.Summary = route.Summary
@@ -275,6 +285,16 @@ func (e *Engine) ResumeWithHistory(oldAgentID string, userMessage string, opts A
 	if opts.Summary == "" {
 		opts.Summary = "[resumed] " + extractSummary(originalTask)
 	}
+
+	// Log a compact note instead of the composite task: replaying the seeded
+	// history as one giant prompt entry would drown the new agent's log.
+	note := fmt.Sprintf("Resumed from %s with seeded conversation history (%d chars).", oldAgentID, len(history))
+	if userMessage != "" {
+		note += "\nThe user says: " + userMessage
+	} else {
+		note += "\nPlease continue where you left off."
+	}
+	opts.PromptLogNote = note
 
 	return e.StartAgent(workDir, task.String(), opts)
 }

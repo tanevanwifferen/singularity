@@ -22,7 +22,7 @@ func TestPrimeGuideCoversDispatcher(t *testing.T) {
 
 	agentVerbs := []string{
 		"list", "get", "spawn", "resume", "kill", "remove", "output", "input",
-		"watch", "watch-all", "chat", "stats",
+		"wait", "wait-all", "watch", "watch-all", "chat", "stats",
 	}
 	for _, verb := range agentVerbs {
 		if !strings.Contains(primeGuide, verb) {
