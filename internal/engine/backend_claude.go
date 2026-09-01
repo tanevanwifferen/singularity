@@ -185,3 +185,14 @@ func (b *claudeBackend) parseResultEvent(event map[string]interface{}) *BackendE
 		IsResultError: isError,
 	}
 }
+
+// UnattendedSessionCommand runs a full claude session with tool-permission
+// prompts bypassed. The argv is byte-identical to the invocation that
+// worktree.go hardcoded before the backend abstraction existed.
+func (b *claudeBackend) UnattendedSessionCommand(prompt string) (string, []string, error) {
+	return "claude", []string{
+		"--print",
+		"--permission-mode", "bypassPermissions",
+		"-p", prompt,
+	}, nil
+}

@@ -23,6 +23,9 @@ func (stubBackend) ParseEvent(line []byte) ([]*BackendEvent, error) { return []*
 func (stubBackend) OneShotCommand(prompt string) (string, []string) {
 	return "true", nil
 }
+func (stubBackend) UnattendedSessionCommand(prompt string) (string, []string, error) {
+	return "true", nil, nil
+}
 func (stubBackend) FollowUpInput(message, _ string, _ bool) ([]byte, error) {
 	return []byte(message + "\n"), nil
 }
