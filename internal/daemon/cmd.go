@@ -15,6 +15,7 @@ import (
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/config"
 	"gitlab.com/tanevanwifferen1/singularity/internal/engine"
+	"gitlab.com/tanevanwifferen1/singularity/internal/oneshot"
 	"gitlab.com/tanevanwifferen1/singularity/internal/project"
 	"gitlab.com/tanevanwifferen1/singularity/internal/server"
 	"gitlab.com/tanevanwifferen1/singularity/internal/service/local"
@@ -169,6 +170,11 @@ func Run(opts RunOptions) error {
 			log.Printf("agent backend: %s (from config AI.Provider)", cfg.AI.Provider)
 		}
 	}
+
+	// Install the same backend for one-shot prompt calls (commit messages, MR
+	// descriptions). Packages outside the engine — internal/git — read this
+	// process-wide default instead of importing the engine.
+	oneshot.SetDefault(srv.Engine().DefaultBackend())
 	srv.SetServices(local.New(srv.Engine(), loader, jiraCfg))
 
 	log.Printf("singularity daemon listening at %s (pid %d)", listenURL, os.Getpid())

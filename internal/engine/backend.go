@@ -36,9 +36,11 @@ type Backend interface {
 	// Returns zero or more normalised events; never returns nil slice on success.
 	ParseEvent(line []byte) ([]*BackendEvent, error)
 
-	// ClassifyCommand returns the binary and args for a lightweight one-shot
-	// classification call used by the smart router (classifier.go).
-	ClassifyCommand(prompt string) (binary string, args []string)
+	// OneShotCommand returns the binary and args for a lightweight one-shot
+	// prompt call: one prompt in, one text answer out, on a cheap model.
+	// Used by the smart router (classifier.go) and by the one-shot prompt
+	// helper in internal/oneshot (commit messages, MR descriptions).
+	OneShotCommand(prompt string) (binary string, args []string)
 }
 
 // BackendEventKind identifies the normalised event category.

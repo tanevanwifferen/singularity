@@ -72,14 +72,13 @@ func (b *claudeBackend) formatEnvelope(message, sessionID string) ([]byte, error
 	return append(data, '\n'), nil
 }
 
-// ClassifyCommand returns args for a cheap one-shot Haiku classification call.
-func (b *claudeBackend) ClassifyCommand(prompt string) (string, []string) {
+// OneShotCommand returns args for a cheap one-shot Haiku prompt call.
+func (b *claudeBackend) OneShotCommand(prompt string) (string, []string) {
 	return "claude", []string{
 		"--print",
 		"--model", "haiku",
 		"--output-format", "text",
-		"--max-turns", "1",
-		prompt,
+		"-p", prompt,
 	}
 }
 

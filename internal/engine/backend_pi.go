@@ -131,8 +131,8 @@ func (b *piBackend) encodePrompt(message string) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
-// ClassifyCommand runs a cheap one-shot prompt via pi --print.
-func (b *piBackend) ClassifyCommand(prompt string) (string, []string) {
+// OneShotCommand runs a cheap one-shot prompt via pi --print.
+func (b *piBackend) OneShotCommand(prompt string) (string, []string) {
 	return "pi", []string{
 		"--print",
 		"--no-session",

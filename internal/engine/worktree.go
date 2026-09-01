@@ -1,12 +1,21 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"gitlab.com/tanevanwifferen1/singularity/internal/oneshot"
 )
+
+// oneShotPrompt is the seam through which this package reaches the configured
+// coding-agent CLI for one-shot prompts. Tests replace it to stay hermetic.
+var oneShotPrompt = func(ctx context.Context, backend Backend, req oneshot.Request) (string, error) {
+	return oneshot.Run(ctx, backend, req)
+}
 
 // setupWorktree creates a temporary git worktree for agent isolation.
 // It creates a new branch based on the current HEAD and sets up the worktree
@@ -66,7 +75,7 @@ func (a *Agent) mergeWorktreeBack() string {
 	// Auto-commit any uncommitted changes left by the agent.
 	// If auto-commit fails (e.g. hook rejection), log the error but still attempt
 	// to merge any commits the agent already made — don't skip the merge entirely.
-	if committed, err := autoCommitWorktree(wtPath, a.ID, a.Task); err != nil {
+	if committed, err := autoCommitWorktree(a.backend, wtPath, a.ID, a.Task); err != nil {
 		a.appendOutput("error", fmt.Sprintf("Warning: auto-commit of remaining changes failed: %v", err))
 	} else if committed {
 		a.appendOutput("system", "Worktree: auto-committed uncommitted changes before merge")
@@ -104,7 +113,7 @@ func (a *Agent) mergeWorktreeBack() string {
 func (a *Agent) attemptMerge(repoPath, sourceBranch, wtBranch string) string {
 	logCmd := exec.Command("git", "-C", repoPath, "log", "--oneline", fmt.Sprintf("%s..%s", sourceBranch, wtBranch))
 	logOut, _ := logCmd.Output()
-	mergeMsg := generateMergeMessage(string(logOut), a.Task, a.ID)
+	mergeMsg := generateMergeMessage(a.backend, string(logOut), a.Task, a.ID)
 
 	cmd := exec.Command("git", "-C", repoPath, "merge", wtBranch, "--no-ff", "-m", mergeMsg)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -161,7 +170,7 @@ func cleanupWorktree(repoPath, wtPath, branch string) {
 
 // autoCommitWorktree stages and commits any uncommitted changes in the worktree.
 // Returns true if a commit was made, false if the worktree was already clean.
-func autoCommitWorktree(wtPath, agentID, task string) (bool, error) {
+func autoCommitWorktree(backend Backend, wtPath, agentID, task string) (bool, error) {
 	// Check for any changes (staged, unstaged, or untracked)
 	statusCmd := exec.Command("git", "-C", wtPath, "status", "--porcelain")
 	out, err := statusCmd.Output()
@@ -182,8 +191,8 @@ func autoCommitWorktree(wtPath, agentID, task string) (bool, error) {
 	diffCmd := exec.Command("git", "-C", wtPath, "diff", "--cached", "--stat")
 	diffOut, _ := diffCmd.Output()
 
-	// Generate a descriptive commit message using Claude
-	commitMsg := generateCommitMessage(string(diffOut), task, agentID)
+	// Generate a descriptive commit message via the configured backend
+	commitMsg := generateCommitMessage(backend, string(diffOut), task, agentID)
 	commitCmd := exec.Command("git", "-C", wtPath, "commit", "-m", commitMsg)
 	if out, err := commitCmd.CombinedOutput(); err != nil {
 		return false, fmt.Errorf("git commit: %w\n%s", err, string(out))
@@ -223,9 +232,10 @@ func gitCurrentBranch(repoPath string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// generateCommitMessage calls Claude (haiku) to produce a concise commit message
-// from the staged diff stats and the agent's task. Falls back to a static message on failure.
-func generateCommitMessage(diffStat, task, agentID string) string {
+// generateCommitMessage asks the agent's backend (cheap model) for a concise
+// commit message from the staged diff stats and the agent's task.
+// Falls back to a static message on failure.
+func generateCommitMessage(backend Backend, diffStat, task, agentID string) string {
 	fallback := fmt.Sprintf("Agent work from %s", agentID)
 
 	prompt := fmt.Sprintf(
@@ -233,14 +243,11 @@ func generateCommitMessage(diffStat, task, agentID string) string {
 		task, diffStat,
 	)
 
-	cmd := exec.Command("claude", "--print", "--model", "haiku", "-p", prompt)
-	cmd.Env = append(os.Environ(), "CLAUDE_NO_ANALYTICS=true")
-	out, err := cmd.Output()
+	msg, err := oneShotPrompt(context.Background(), backend, oneshot.Request{Prompt: prompt})
 	if err != nil {
 		return fallback
 	}
 
-	msg := strings.TrimSpace(string(out))
 	// Strip wrapping quotes if present
 	if len(msg) >= 2 && msg[0] == '"' && msg[len(msg)-1] == '"' {
 		msg = msg[1 : len(msg)-1]
@@ -252,9 +259,10 @@ func generateCommitMessage(diffStat, task, agentID string) string {
 	return msg
 }
 
-// generateMergeMessage calls Claude (haiku) to produce a concise merge commit message
-// from the branch's commit log and the agent's task. Falls back to a static message on failure.
-func generateMergeMessage(commitLog, task, agentID string) string {
+// generateMergeMessage asks the agent's backend (cheap model) for a concise merge
+// commit message from the branch's commit log and the agent's task.
+// Falls back to a static message on failure.
+func generateMergeMessage(backend Backend, commitLog, task, agentID string) string {
 	fallback := fmt.Sprintf("Merge agent work from %s", agentID)
 
 	prompt := fmt.Sprintf(
@@ -262,14 +270,11 @@ func generateMergeMessage(commitLog, task, agentID string) string {
 		task, commitLog,
 	)
 
-	cmd := exec.Command("claude", "--print", "--model", "haiku", "-p", prompt)
-	cmd.Env = append(os.Environ(), "CLAUDE_NO_ANALYTICS=true")
-	out, err := cmd.Output()
+	msg, err := oneShotPrompt(context.Background(), backend, oneshot.Request{Prompt: prompt})
 	if err != nil {
 		return fallback
 	}
 
-	msg := strings.TrimSpace(string(out))
 	if len(msg) >= 2 && msg[0] == '"' && msg[len(msg)-1] == '"' {
 		msg = msg[1 : len(msg)-1]
 	}
