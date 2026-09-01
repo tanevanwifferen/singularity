@@ -16,8 +16,8 @@ import (
 type AgentOptions struct {
 	Model        string        // Model to use (empty = backend default)
 	Effort       string        // Effort level: "low", "medium", "high" (empty = default)
-	AllowedTools []string      // Restrict available tools (claude only; pi uses its own config)
-	MaxTurns     int           // Max conversation turns (0 = unlimited; claude only)
+	AllowedTools []string      // Restrict available tools (pi maps these onto its own tool names)
+	MaxTurns     int           // Max conversation turns (0 = unlimited; claude only, pi warns)
 	Timeout      time.Duration // Kill agent after this duration (0 = no timeout)
 	ContextFiles []string      // Files to read and inject into the prompt on startup
 	SmartRoute   bool          // Use cheap model to classify prompt and pick model/effort

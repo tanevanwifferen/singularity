@@ -1,5 +1,11 @@
 package engine
 
+import (
+	"sync/atomic"
+
+	"gitlab.com/tanevanwifferen1/singularity/internal/config"
+)
+
 // Backend abstracts the coding-agent subprocess protocol.
 // Two implementations are provided: ClaudeBackend (stream-json) and PiBackend (RPC).
 // Each agent owns its own Backend instance so implementations may keep per-agent state.
@@ -12,6 +18,13 @@ type Backend interface {
 
 	// Args returns the CLI args for launching the subprocess.
 	// model and effort may be empty strings (use backend defaults).
+	//
+	// Not every backend can honour every option: pi has no turn limit
+	// (no CLI flag, no RPC command, no setting), and its tool allowlist
+	// uses its own built-in tool names. A backend that cannot apply an
+	// option must not drop it silently — it reports the fact as a
+	// BackendError event on the agent's output stream so the user learns
+	// the flag is a no-op for this backend.
 	Args(model, effort string, maxTurns int, allowedTools []string) []string
 
 	// Env returns additional environment variables for the subprocess.
@@ -85,6 +98,27 @@ type BackendEvent struct {
 	IsResultError bool
 }
 
+// currentModels holds the active model table. nil means "use the compiled-in
+// defaults", which keeps backend construction free of filesystem access.
+var currentModels atomic.Pointer[config.ModelsConfig]
+
+// SetModels installs the model table used by all backends to resolve short
+// model names and the classifier model. Call once at startup; when unset the
+// compiled-in defaults from config.DefaultModelsConfig apply. Entries the
+// table omits are filled in from those defaults.
+func SetModels(models *config.ModelsConfig) {
+	models.ApplyDefaults()
+	currentModels.Store(models)
+}
+
+// Models returns the active model table. Never nil.
+func Models() *config.ModelsConfig {
+	if models := currentModels.Load(); models != nil {
+		return models
+	}
+	return config.DefaultModelsConfig()
+}
+
 // NewClaudeBackend returns a Backend that drives the claude CLI via stream-json.
 func NewClaudeBackend() Backend { return &claudeBackend{} }
 
@@ -103,10 +137,8 @@ func BackendByName(name string) Backend {
 
 // NewPiBackend returns a Backend that drives the pi CLI via RPC mode.
 // classifyModel is the full model ID used for one-shot classification
-// (e.g. "anthropic/claude-haiku-4-5"). Defaults to claude-haiku-4-5 if empty.
+// (e.g. "anthropic/claude-haiku-4-5"). When empty the classifier model is
+// resolved from the model table (see Models) at call time.
 func NewPiBackend(classifyModel string) Backend {
-	if classifyModel == "" {
-		classifyModel = "anthropic/claude-haiku-4-5"
-	}
 	return &piBackend{classifyModel: classifyModel}
 }

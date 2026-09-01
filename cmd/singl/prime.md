@@ -80,6 +80,9 @@ singl --json agents spawn --workdir ~/.worktrees/<project>/feature-x/api \
 
 Flags: `--model`, `--effort low|medium|high`, `--smart-route` (Haiku picks model +
 effort from the prompt), `--max-turns`, `--timeout <secs>`, `--backend claude|pi`.
+`--max-turns` is claude-only — pi has no turn limit and says so in the agent
+output; use `--timeout` there. Model short names (`sonnet`/`opus`/`haiku`) are
+mapped per backend by `~/.config/singularity/models.json`.
 
 **3 — observe by polling, not streaming.**
 

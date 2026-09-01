@@ -160,6 +160,10 @@ func Run(opts RunOptions) error {
 	// the configured cap on the shared instance before any agent starts.
 	srv.Engine().SetMaxAgents(maxAgents)
 
+	// Model aliases and classifier models live in models.json next to
+	// config.json; the file is created with the defaults when absent.
+	engine.SetModels(config.LoadDefaultModelsConfig())
+
 	var jiraCfg config.JiraConfig
 	if cfg, lerr := config.LoadDefaultConfig(); lerr == nil && cfg != nil {
 		jiraCfg = cfg.Jira
