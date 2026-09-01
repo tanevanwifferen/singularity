@@ -114,7 +114,10 @@ part of routing — an explicit `--model` disables the classifier entirely, an
 explicit `--effort` is never overwritten by it. Pass `--no-smart-route` (or
 `--smart-route=false`) to disable routing and use backend defaults. If the
 classifier fails, the agent starts on backend defaults and an `error` output
-entry says so.
+entry says so. `--max-turns` is claude-only — pi has no turn limit and says so
+in the agent output; use `--timeout` there. Model short names
+(`sonnet`/`opus`/`haiku`) are mapped per backend by
+`~/.config/singularity/models.json`.
 
 **3 — observe by polling, not streaming.**
 

@@ -22,7 +22,7 @@ func (b *claudeBackend) Args(model, effort string, maxTurns int, allowedTools []
 		"--permission-mode", "bypassPermissions",
 	}
 	if model != "" {
-		args = append(args, "--model", model)
+		args = append(args, "--model", Models().ResolveModel("claude", model))
 	}
 	if effort != "" {
 		args = append(args, "--effort", effort)
@@ -72,11 +72,12 @@ func (b *claudeBackend) formatEnvelope(message, sessionID string) ([]byte, error
 	return append(data, '\n'), nil
 }
 
-// ClassifyCommand returns args for a cheap one-shot Haiku classification call.
+// ClassifyCommand returns args for a cheap one-shot classification call.
+// The model comes from the configurable model table (see Models).
 func (b *claudeBackend) ClassifyCommand(prompt string) (string, []string) {
 	return "claude", []string{
 		"--print",
-		"--model", "haiku",
+		"--model", Models().ClassifierModel("claude"),
 		"--output-format", "text",
 		"--max-turns", "1",
 		prompt,

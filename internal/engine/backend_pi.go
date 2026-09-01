@@ -5,14 +5,29 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 )
 
-// piModelAliases maps Claude short-names to pi-compatible model IDs.
-// Pass-through if already in "provider/model" form.
-var piModelAliases = map[string]string{
-	"haiku":  "anthropic/claude-haiku-4-5",
-	"sonnet": "anthropic/claude-sonnet-4-20250514",
-	"opus":   "anthropic/claude-opus-4-5",
+// piSessionInitID correlates the get_state command issued at start-up with its
+// response, which is where pi reports the resolved model and session id.
+const piSessionInitID = "singularity-session-init"
+
+// piToolAliases maps a tool name from an agent's allowed-tools list to pi's
+// built-in tool name. pi's built-ins are read, bash, powershell, edit, write,
+// grep, find and ls (pi docs: usage.md, settings.md); the Claude-style names
+// callers use (Read, Glob, ...) have to be translated or the --tools allowlist
+// would match nothing and disable every tool. pi's own names pass through.
+var piToolAliases = map[string]string{
+	"read":       "read",
+	"write":      "write",
+	"edit":       "edit",
+	"multiedit":  "edit",
+	"bash":       "bash",
+	"powershell": "powershell",
+	"grep":       "grep",
+	"glob":       "find",
+	"find":       "find",
+	"ls":         "ls",
 }
 
 // piEffortLevels maps AgentOptions effort strings to pi thinking levels.
@@ -27,6 +42,10 @@ var piEffortLevels = map[string]string{
 type piBackend struct {
 	classifyModel string
 
+	// option warnings queued by Args, flushed into the event stream by ParseEvent
+	warnMu   sync.Mutex
+	warnings []string
+
 	// text accumulation across streaming deltas
 	textBuf strings.Builder
 
@@ -39,7 +58,9 @@ type piBackend struct {
 func (b *piBackend) Name() string   { return "pi" }
 func (b *piBackend) Binary() string { return "pi" }
 
-func (b *piBackend) Args(model, effort string, maxTurns int, _ []string) []string {
+func (b *piBackend) Args(model, effort string, maxTurns int, allowedTools []string) []string {
+	b.clearWarnings()
+
 	args := []string{"--mode", "rpc", "--no-session"}
 
 	if model != "" {
@@ -47,22 +68,84 @@ func (b *piBackend) Args(model, effort string, maxTurns int, _ []string) []strin
 	}
 
 	// effort → thinking level is handled via PostStartCommands, not a launch flag.
-	// maxTurns and allowedTools have no pi CLI equivalent.
 	_ = effort
-	_ = maxTurns
+
+	// pi has no turn limit: no CLI flag, no RPC command and no setting exposes
+	// one. Say so rather than dropping the option silently.
+	if maxTurns > 0 {
+		b.warn(fmt.Sprintf("max_turns=%d is not supported by the pi backend (pi has no turn limit); "+
+			"the agent will run until it finishes — use a timeout to bound it", maxTurns))
+	}
+
+	if len(allowedTools) > 0 {
+		tools, dropped := piResolveTools(allowedTools)
+		if len(dropped) > 0 {
+			b.warn(fmt.Sprintf("allowed_tools entries with no pi equivalent were dropped: %s "+
+				"(pi built-ins: read, bash, powershell, edit, write, grep, find, ls)",
+				strings.Join(dropped, ", ")))
+		}
+		if len(tools) == 0 {
+			b.warn("allowed_tools resolved to no pi tool; the allowlist was not applied and " +
+				"the agent runs with pi's default tools")
+		} else {
+			args = append(args, "--tools", strings.Join(tools, ","))
+		}
+	}
 
 	return args
 }
 
-// resolveModel translates short model names to pi-compatible IDs.
+// piResolveTools translates an allowed-tools list into pi built-in tool names,
+// preserving order and de-duplicating. Names with no pi equivalent (WebFetch,
+// Task, ...) are returned separately so the caller can report them.
+func piResolveTools(allowedTools []string) (tools, dropped []string) {
+	seen := map[string]bool{}
+	for _, tool := range allowedTools {
+		name := strings.TrimSpace(tool)
+		if name == "" {
+			continue
+		}
+		resolved, ok := piToolAliases[strings.ToLower(name)]
+		if !ok {
+			dropped = append(dropped, name)
+			continue
+		}
+		if seen[resolved] {
+			continue
+		}
+		seen[resolved] = true
+		tools = append(tools, resolved)
+	}
+	return tools, dropped
+}
+
+// warn queues an option warning for the next ParseEvent call.
+func (b *piBackend) warn(msg string) {
+	b.warnMu.Lock()
+	b.warnings = append(b.warnings, msg)
+	b.warnMu.Unlock()
+}
+
+// clearWarnings drops queued warnings, so a relaunch does not repeat them.
+func (b *piBackend) clearWarnings() {
+	b.warnMu.Lock()
+	b.warnings = nil
+	b.warnMu.Unlock()
+}
+
+// takeWarnings returns and clears the queued warnings.
+func (b *piBackend) takeWarnings() []string {
+	b.warnMu.Lock()
+	warnings := b.warnings
+	b.warnings = nil
+	b.warnMu.Unlock()
+	return warnings
+}
+
+// resolveModel translates short model names to pi-compatible IDs using the
+// configured model table. Already-qualified ids pass through untouched.
 func (b *piBackend) resolveModel(model string) string {
-	if strings.Contains(model, "/") {
-		return model // already fully qualified
-	}
-	if resolved, ok := piModelAliases[strings.ToLower(model)]; ok {
-		return resolved
-	}
-	return model
+	return Models().ResolveModel("pi", model)
 }
 
 func (b *piBackend) Env() []string {
@@ -97,6 +180,13 @@ func (b *piBackend) PostStartCommands(effort string) [][]byte {
 			"level": level,
 		}))
 	}
+
+	// pi emits no session-init event, so ask for the state once everything is
+	// configured. The response carries the resolved model and the session id.
+	cmds = append(cmds, encode(map[string]interface{}{
+		"type": "get_state",
+		"id":   piSessionInitID,
+	}))
 
 	return cmds
 }
@@ -133,16 +223,38 @@ func (b *piBackend) encodePrompt(message string) ([]byte, error) {
 
 // ClassifyCommand runs a cheap one-shot prompt via pi --print.
 func (b *piBackend) ClassifyCommand(prompt string) (string, []string) {
+	model := b.classifyModel
+	if model == "" {
+		model = Models().ClassifierModel("pi")
+	}
 	return "pi", []string{
 		"--print",
 		"--no-session",
-		"--model", b.classifyModel,
+		"--model", model,
 		prompt,
 	}
 }
 
-// ParseEvent parses one JSONL line from pi's RPC stdout.
+// ParseEvent parses one JSONL line from pi's RPC stdout. Option warnings queued
+// by Args are flushed ahead of the first successfully parsed event so they reach
+// the agent's output stream.
 func (b *piBackend) ParseEvent(line []byte) ([]*BackendEvent, error) {
+	events, err := b.parseEvent(line)
+	if err != nil {
+		return nil, err
+	}
+	warnings := b.takeWarnings()
+	if len(warnings) == 0 {
+		return events, nil
+	}
+	out := make([]*BackendEvent, 0, len(warnings)+len(events))
+	for _, msg := range warnings {
+		out = append(out, &BackendEvent{Kind: BackendError, Content: msg})
+	}
+	return append(out, events...), nil
+}
+
+func (b *piBackend) parseEvent(line []byte) ([]*BackendEvent, error) {
 	var event map[string]interface{}
 	if err := json.Unmarshal(line, &event); err != nil {
 		return nil, fmt.Errorf("JSON parse: %w", err)
@@ -162,6 +274,9 @@ func (b *piBackend) ParseEvent(line []byte) ([]*BackendEvent, error) {
 
 	case "agent_end":
 		return b.parseAgentEnd(event)
+
+	case "response":
+		return b.parseResponse(event)
 
 	case "auto_retry_end":
 		success, _ := event["success"].(bool)
@@ -186,6 +301,44 @@ func (b *piBackend) ParseEvent(line []byte) ([]*BackendEvent, error) {
 		// response acks, compaction events, queue_update, etc.
 		return []*BackendEvent{{Kind: BackendIgnore}}, nil
 	}
+}
+
+// parseResponse turns the get_state reply issued by PostStartCommands into a
+// session-init event. pi has no session_init event of its own; the get_state
+// response is the only message carrying both the resolved model and the
+// session id. Other command responses are acks and carry nothing actionable.
+func (b *piBackend) parseResponse(event map[string]interface{}) ([]*BackendEvent, error) {
+	ignore := []*BackendEvent{{Kind: BackendIgnore}}
+
+	if cmd, _ := event["command"].(string); cmd != "get_state" {
+		return ignore, nil
+	}
+	if success, _ := event["success"].(bool); !success {
+		return ignore, nil
+	}
+	data, ok := event["data"].(map[string]interface{})
+	if !ok {
+		return ignore, nil
+	}
+
+	sessionID, _ := data["sessionId"].(string)
+
+	var model string
+	if m, ok := data["model"].(map[string]interface{}); ok {
+		model, _ = m["id"].(string)
+		if provider, _ := m["provider"].(string); provider != "" && model != "" {
+			model = provider + "/" + model
+		}
+	}
+
+	if model == "" && sessionID == "" {
+		return ignore, nil
+	}
+	return []*BackendEvent{{
+		Kind:      BackendSessionInit,
+		Model:     model,
+		SessionID: sessionID,
+	}}, nil
 }
 
 // parseMessageUpdate handles streaming text / thinking / toolcall deltas.
