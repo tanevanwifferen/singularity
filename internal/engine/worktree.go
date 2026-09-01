@@ -1,12 +1,37 @@
 package engine
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// commandRunner runs an external command to completion in dir with env and
+// returns its combined output. It is a seam: tests substitute a fake so the
+// unattended rebase session can be asserted on without spawning a process.
+type commandRunner func(ctx context.Context, dir string, env []string, binary string, args ...string) ([]byte, error)
+
+// runCommand is the production runner. Tests swap it out and restore it.
+var runCommand commandRunner = func(ctx context.Context, dir string, env []string, binary string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd.Dir = dir
+	cmd.Env = env
+	return cmd.CombinedOutput()
+}
+
+// rebaseSessionTimeout bounds the unattended conflict-resolution session. A
+// coding agent that wedges (waiting on input, stuck in a loop, hung network)
+// must not hold the merge path open forever. It is a var so tests can shrink it.
+var rebaseSessionTimeout = 30 * time.Minute
+
+// maxSessionOutput caps how much session output is embedded in an error. A full
+// agent session can emit megabytes; the tail is the part worth reporting.
+const maxSessionOutput = 8192
 
 // setupWorktree creates a temporary git worktree for agent isolation.
 // It creates a new branch based on the current HEAD and sets up the worktree
@@ -52,7 +77,7 @@ func (a *Agent) setupWorktree() error {
 // mergeWorktreeBack merges the worktree branch back into the source branch.
 // Returns the merge result status. Does NOT clean up the worktree — cleanup
 // is deferred to kill() so follow-up messages can still be sent after completion.
-// On merge conflict, launches a Claude session to rebase and retries.
+// On merge conflict, launches an unattended backend session to rebase and retries.
 func (a *Agent) mergeWorktreeBack() string {
 	if a.worktreePath == "" || a.sourceRepoPath == "" {
 		return ""
@@ -86,9 +111,10 @@ func (a *Agent) mergeWorktreeBack() string {
 	// First merge attempt
 	result := a.attemptMerge(repoPath, sourceBranch, wtBranch)
 	if result == "conflict" {
-		// Launch a Claude session to rebase the worktree branch onto the source branch
-		a.appendOutput("system", fmt.Sprintf("Worktree: merge conflict — launching Claude session to rebase %s onto %s", wtBranch, sourceBranch))
-		if rebaseErr := rebaseWithClaude(wtPath, sourceBranch, a.Task); rebaseErr != nil {
+		// Launch an unattended coding session to rebase the worktree branch onto
+		// the source branch. The backend decides which CLI that is.
+		a.appendOutput("system", fmt.Sprintf("Worktree: merge conflict — launching %s session to rebase %s onto %s", backendLabel(a.backend), wtBranch, sourceBranch))
+		if rebaseErr := rebaseWithAgent(context.Background(), a.backend, wtPath, sourceBranch, a.Task); rebaseErr != nil {
 			a.appendOutput("error", fmt.Sprintf("Rebase session failed: %v", rebaseErr))
 			return "conflict"
 		}
@@ -118,10 +144,17 @@ func (a *Agent) attemptMerge(repoPath, sourceBranch, wtBranch string) string {
 	return "merged"
 }
 
-// rebaseWithClaude launches a non-interactive Claude session to rebase the worktree
-// branch onto sourceBranch, resolving any conflicts. Called when a direct merge fails.
-func rebaseWithClaude(wtPath, sourceBranch, task string) error {
-	prompt := fmt.Sprintf(
+// backendLabel returns a human-readable backend name, tolerating a nil backend.
+func backendLabel(b Backend) string {
+	if b == nil {
+		return "agent"
+	}
+	return b.Name()
+}
+
+// rebaseConflictPrompt builds the instruction given to the unattended session.
+func rebaseConflictPrompt(sourceBranch, task string) string {
+	return fmt.Sprintf(
 		"Rebase the current git branch onto %s to resolve merge conflicts. "+
 			"The original task context was: %s\n\n"+
 			"Steps:\n"+
@@ -132,15 +165,58 @@ func rebaseWithClaude(wtPath, sourceBranch, task string) error {
 			"5. Do not abort the rebase — resolve all conflicts",
 		sourceBranch, task, sourceBranch,
 	)
+}
 
-	cmd := exec.Command("claude", "--print", "--permission-mode", "bypassPermissions", "-p", prompt)
-	cmd.Dir = wtPath
-	cmd.Env = append(os.Environ(), "CLAUDE_NO_ANALYTICS=true")
-	out, err := cmd.CombinedOutput()
+// rebaseWithAgent launches an unattended coding session in wtPath to rebase the
+// worktree branch onto sourceBranch, resolving any conflicts. Called when a
+// direct merge fails.
+//
+// The session must never block on input: this runs on the merge path with no
+// human attached, so a permission prompt would wedge it silently. Backends that
+// cannot promise that are refused up front rather than launched. The session is
+// additionally bounded by rebaseSessionTimeout, and any failure aborts an
+// in-flight rebase so the worktree is left on a clean, reportable branch state
+// instead of a half-applied rebase.
+func rebaseWithAgent(ctx context.Context, backend Backend, wtPath, sourceBranch, task string) error {
+	if backend == nil {
+		return errors.New("no backend configured: refusing to launch a rebase session")
+	}
+
+	binary, args, err := backend.UnattendedSessionCommand(rebaseConflictPrompt(sourceBranch, task))
 	if err != nil {
-		return fmt.Errorf("claude rebase session: %w\n%s", err, string(out))
+		return fmt.Errorf("backend %q cannot run an unattended rebase session: %w", backend.Name(), err)
+	}
+
+	sessionCtx, cancel := context.WithTimeout(ctx, rebaseSessionTimeout)
+	defer cancel()
+
+	out, runErr := runCommand(sessionCtx, wtPath, backend.Env(), binary, args...)
+
+	if errors.Is(sessionCtx.Err(), context.DeadlineExceeded) {
+		abortRebase(ctx, wtPath)
+		return fmt.Errorf("%s rebase session timed out after %s; rebase aborted\n%s",
+			backend.Name(), rebaseSessionTimeout, tailOutput(out))
+	}
+	if runErr != nil {
+		abortRebase(ctx, wtPath)
+		return fmt.Errorf("%s rebase session: %w; rebase aborted\n%s",
+			backend.Name(), runErr, tailOutput(out))
 	}
 	return nil
+}
+
+// abortRebase clears any rebase left in progress in the worktree. It is a no-op
+// when no rebase is running, so the error is intentionally ignored.
+func abortRebase(ctx context.Context, wtPath string) {
+	_, _ = runCommand(ctx, wtPath, os.Environ(), "git", "-C", wtPath, "rebase", "--abort")
+}
+
+// tailOutput returns the last maxSessionOutput bytes of session output.
+func tailOutput(out []byte) string {
+	if len(out) <= maxSessionOutput {
+		return string(out)
+	}
+	return "...(truncated)...\n" + string(out[len(out)-maxSessionOutput:])
 }
 
 // cleanupWorktree removes the worktree and deletes the temporary branch.

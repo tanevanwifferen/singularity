@@ -39,6 +39,17 @@ type Backend interface {
 	// ClassifyCommand returns the binary and args for a lightweight one-shot
 	// classification call used by the smart router (classifier.go).
 	ClassifyCommand(prompt string) (binary string, args []string)
+
+	// UnattendedSessionCommand returns the binary and args for a full agent
+	// session (tools enabled, multi-turn) that runs to completion without ever
+	// blocking on interactive input. The prompt is passed on the command line.
+	//
+	// Callers use this on unattended code paths such as automatic rebase-conflict
+	// resolution, where a session that stops to ask for permission would hang
+	// silently. A backend that cannot guarantee non-interactive execution must
+	// return an error explaining why; the caller is then required to fail loudly
+	// instead of launching something that may block.
+	UnattendedSessionCommand(prompt string) (binary string, args []string, err error)
 }
 
 // BackendEventKind identifies the normalised event category.
