@@ -49,9 +49,13 @@ type Backend interface {
 	// Returns zero or more normalised events; never returns nil slice on success.
 	ParseEvent(line []byte) ([]*BackendEvent, error)
 
-	// ClassifyCommand returns the binary and args for a lightweight one-shot
-	// classification call used by the smart router (classifier.go).
-	ClassifyCommand(prompt string) (binary string, args []string)
+	// OneShotCommand returns the binary and args for a lightweight one-shot
+	// prompt call: one prompt in, one text answer out, on the cheap model the
+	// model table configures for this backend (see Models.ClassifierModel).
+	// Used by the smart router (classifier.go) and by the one-shot prompt
+	// helper in internal/oneshot (commit messages, MR titles and descriptions,
+	// worktree auto-commit and merge messages).
+	OneShotCommand(prompt string) (binary string, args []string)
 }
 
 // BackendEventKind identifies the normalised event category.
@@ -136,9 +140,9 @@ func BackendByName(name string) Backend {
 }
 
 // NewPiBackend returns a Backend that drives the pi CLI via RPC mode.
-// classifyModel is the full model ID used for one-shot classification
-// (e.g. "anthropic/claude-haiku-4-5"). When empty the classifier model is
-// resolved from the model table (see Models) at call time.
-func NewPiBackend(classifyModel string) Backend {
-	return &piBackend{classifyModel: classifyModel}
+// oneShotModel is the full model ID used for one-shot prompt calls
+// (e.g. "anthropic/claude-haiku-4-5"). When empty it is resolved from the
+// model table's classifier_model entry (see Models) at call time.
+func NewPiBackend(oneShotModel string) Backend {
+	return &piBackend{oneShotModel: oneShotModel}
 }

@@ -40,7 +40,7 @@ var piEffortLevels = map[string]string{
 // piBackend drives the pi CLI using --mode rpc.
 // It keeps per-agent state for streaming text accumulation and in-flight tool calls.
 type piBackend struct {
-	classifyModel string
+	oneShotModel string
 
 	// option warnings queued by Args, flushed into the event stream by ParseEvent
 	warnMu   sync.Mutex
@@ -221,9 +221,11 @@ func (b *piBackend) encodePrompt(message string) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
-// ClassifyCommand runs a cheap one-shot prompt via pi --print.
-func (b *piBackend) ClassifyCommand(prompt string) (string, []string) {
-	model := b.classifyModel
+// OneShotCommand runs a cheap one-shot prompt via pi --print. The model is the
+// backend's configured one-shot model, falling back to the model table's entry
+// for pi, so one-shot calls never inherit the agent's (expensive) model.
+func (b *piBackend) OneShotCommand(prompt string) (string, []string) {
+	model := b.oneShotModel
 	if model == "" {
 		model = Models().ClassifierModel("pi")
 	}

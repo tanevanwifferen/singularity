@@ -180,6 +180,9 @@ singl --json mr title  --repo <worktree> --source feature/x --target main
 singl --json mr create --repo <worktree> --source feature/x --target main --title "..." --desc "..."
 ```
 
+`commit suggest` and `mr title/create` generate text with a cheap one-shot prompt on
+the provider from `ai.provider` (claude or pi); both fall back to heuristics if it fails.
+
 **6 — clean up.** One command tears the whole workflow down: every repo's
 worktree removed, local **and remote** feature branches deleted, workflow
 dropped from persistence. Only run it after the MRs are merged (or the work is

@@ -52,7 +52,7 @@ func ClassifyPrompt(ctx context.Context, prompt string, backend Backend) (*Class
 	if backend == nil {
 		backend = NewPiBackend("")
 	}
-	binary, args := backend.ClassifyCommand(classifyInput)
+	binary, args := backend.OneShotCommand(classifyInput)
 
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Env = append(os.Environ(), "CLAUDE_NO_ANALYTICS=true")

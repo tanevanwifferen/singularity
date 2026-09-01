@@ -327,14 +327,14 @@ func TestPiPostStartCommandsRequestState(t *testing.T) {
 	}
 }
 
-func TestPiClassifyCommandUsesModelTable(t *testing.T) {
+func TestPiOneShotCommandUsesModelTable(t *testing.T) {
 	SetModels(config.DefaultModelsConfig())
 	t.Cleanup(func() { SetModels(nil) })
 
 	tests := []struct {
-		name          string
-		classifyModel string
-		want          string
+		name         string
+		oneShotModel string
+		want         string
 	}{
 		{"table default", "", "anthropic/claude-haiku-4-5"},
 		{"explicit override", "openai/gpt-5-mini", "openai/gpt-5-mini"},
@@ -342,8 +342,8 @@ func TestPiClassifyCommandUsesModelTable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			b := &piBackend{classifyModel: tt.classifyModel}
-			binary, args := b.ClassifyCommand("hello")
+			b := &piBackend{oneShotModel: tt.oneShotModel}
+			binary, args := b.OneShotCommand("hello")
 			if binary != "pi" {
 				t.Errorf("binary = %q, want pi", binary)
 			}

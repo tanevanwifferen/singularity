@@ -10,7 +10,18 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"gitlab.com/tanevanwifferen1/singularity/internal/oneshot"
 )
+
+// oneShotPrompt is the seam through which this package reaches the configured
+// coding-agent CLI. It resolves the backend lazily from the process-wide
+// default that the daemon installs at startup (oneshot.SetDefault), so the git
+// package never has to import internal/engine. Tests replace it to stay
+// hermetic; when no backend is configured the callers fall back to heuristics.
+var oneShotPrompt = func(ctx context.Context, req oneshot.Request) (string, error) {
+	return oneshot.Run(ctx, nil, req)
+}
 
 // CommitMessage holds a generated commit message
 type CommitMessage struct {
@@ -22,8 +33,8 @@ type CommitMessage struct {
 	Full    string   `json:"full"`    // complete commit message
 }
 
-// claudeConfig holds configuration for Claude API calls
-var claudeConfig = struct {
+// genConfig holds configuration for the one-shot generation calls.
+var genConfig = struct {
 	Timeout    time.Duration
 	Enabled    bool
 	MaxRetries int
@@ -63,9 +74,10 @@ func GetUnstagedDiff(path string) (string, error) {
 	return output.String(), nil
 }
 
-// GenerateCommitMessage creates a commit message from the staged diff
-// Uses claude -p for enterprise API limits (not full interactive session)
-// Results are cached to avoid redundant API calls for the same diff
+// GenerateCommitMessage creates a commit message from the staged diff.
+// Uses a cheap one-shot prompt on the configured backend (not a full
+// interactive session). Results are cached to avoid redundant API calls
+// for the same diff.
 func GenerateCommitMessage(path string) (*CommitMessage, error) {
 	diff, err := GetStagedDiff(path)
 	if err != nil {
@@ -86,14 +98,14 @@ func GenerateCommitMessage(path string) (*CommitMessage, error) {
 		}
 	}
 
-	// Try Claude first
-	if msg := generateWithClaude(path, diff); msg != nil {
-		log.Printf("[commitmsg] generated message via claude -p: %s: %s", msg.Type, msg.Subject)
+	// Try the configured coding-agent CLI first
+	if msg := generateWithAgent(path, diff); msg != nil {
+		log.Printf("[commitmsg] generated message via agent one-shot: %s: %s", msg.Type, msg.Subject)
 		cache.Set(cacheKey, msg)
 		return msg, nil
 	}
 
-	log.Printf("[commitmsg] claude unavailable, using heuristic fallback")
+	log.Printf("[commitmsg] agent unavailable, using heuristic fallback")
 
 	// Fallback to heuristic-based generation
 	msg := analyzeDiffAndGenerateMessage(diff)
@@ -107,11 +119,12 @@ func commitMsgCacheKey(diff string) string {
 	return "commitmsg:" + hex.EncodeToString(hash[:16])
 }
 
-// generateWithClaude uses claude -p to generate a commit message
-// Returns nil if Claude is unavailable or fails
-func generateWithClaude(path, diff string) *CommitMessage {
-	if !claudeConfig.Enabled {
-		log.Printf("[commitmsg] claude generation disabled by config")
+// generateWithAgent asks the configured coding-agent CLI for a commit message.
+// Returns nil if the agent is unavailable or fails, so the caller can fall back
+// to the heuristic generator.
+func generateWithAgent(path, diff string) *CommitMessage {
+	if !genConfig.Enabled {
+		log.Printf("[commitmsg] agent generation disabled by config")
 		return nil
 	}
 
@@ -126,40 +139,31 @@ Diff:
 %s`, diff)
 
 	var lastErr error
-	for attempt := 0; attempt <= claudeConfig.MaxRetries; attempt++ {
-		msg, err := attemptClaudeGenerate(path, prompt)
+	for attempt := 0; attempt <= genConfig.MaxRetries; attempt++ {
+		msg, err := attemptAgentGenerate(path, prompt)
 		if err == nil && msg != nil {
 			return msg
 		}
 		lastErr = err
 		if err != nil {
-			log.Printf("[commitmsg] claude attempt %d failed: %v", attempt+1, err)
+			log.Printf("[commitmsg] agent attempt %d failed: %v", attempt+1, err)
 		}
 	}
 
-	log.Printf("[commitmsg] claude generation failed after %d attempts: %v", claudeConfig.MaxRetries+1, lastErr)
+	log.Printf("[commitmsg] agent generation failed after %d attempts: %v", genConfig.MaxRetries+1, lastErr)
 	return nil
 }
 
-// attemptClaudeGenerate makes a single attempt to generate a commit message using claude -p
-func attemptClaudeGenerate(path, prompt string) (*CommitMessage, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), claudeConfig.Timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "claude", "--model", "haiku", "--print", "--dangerously-skip-permissions", "-p", prompt)
-	cmd.Dir = path
-
-	output, err := cmd.Output()
+// attemptAgentGenerate makes a single attempt to generate a commit message via
+// the configured backend's one-shot prompt call.
+func attemptAgentGenerate(path, prompt string) (*CommitMessage, error) {
+	result, err := oneShotPrompt(context.Background(), oneshot.Request{
+		Prompt:  prompt,
+		Dir:     path,
+		Timeout: genConfig.Timeout,
+	})
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("claude -p timed out after %v", claudeConfig.Timeout)
-		}
-		return nil, fmt.Errorf("claude -p failed: %w", err)
-	}
-
-	result := strings.TrimSpace(string(output))
-	if result == "" {
-		return nil, fmt.Errorf("empty response from claude -p")
+		return nil, err
 	}
 
 	// Parse the output into type and subject
@@ -178,14 +182,14 @@ func attemptClaudeGenerate(path, prompt string) (*CommitMessage, error) {
 
 	// Validate the type is conventional
 	if !isValidCommitType(msgType) {
-		log.Printf("[commitmsg] invalid commit type from claude: %q, using 'feat'", msgType)
+		log.Printf("[commitmsg] invalid commit type from agent: %q, using 'feat'", msgType)
 		msgType = "feat"
 	}
 
 	return &CommitMessage{
 		Type:    msgType,
 		Subject: subject,
-		Body:    "", // Claude didn't provide body
+		Body:    "", // the one-shot answer is a single line
 		Full:    result,
 	}, nil
 }

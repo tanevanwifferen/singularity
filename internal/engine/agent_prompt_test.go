@@ -20,7 +20,7 @@ func (stubBackend) Env() []string                                   { return nil
 func (stubBackend) InitialInput(task, _ string) ([]byte, error)     { return []byte(task + "\n"), nil }
 func (stubBackend) PostStartCommands(string) [][]byte               { return nil }
 func (stubBackend) ParseEvent(line []byte) ([]*BackendEvent, error) { return []*BackendEvent{}, nil }
-func (stubBackend) ClassifyCommand(prompt string) (string, []string) {
+func (stubBackend) OneShotCommand(prompt string) (string, []string) {
 	return "true", nil
 }
 func (stubBackend) FollowUpInput(message, _ string, _ bool) ([]byte, error) {

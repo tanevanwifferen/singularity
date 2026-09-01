@@ -1,16 +1,18 @@
 package git
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os/exec"
 	"strings"
 	"time"
+
+	"gitlab.com/tanevanwifferen1/singularity/internal/oneshot"
 )
 
 // ErrMRAlreadyExists is returned when a merge/pull request already exists for the branch.
@@ -239,10 +241,10 @@ type MRContent struct {
 	Description string
 }
 
-// GenerateMRContent generates an intelligent MR title and description using Claude.
+// GenerateMRContent generates an intelligent MR title and description.
 // It collects the commit log and diff stat between baseBranch and HEAD, then
-// asks Claude to produce a concise title and a structured description.
-// Falls back to branch-name-based defaults if Claude is unavailable.
+// asks the configured coding-agent CLI for a concise title and a structured
+// description. Falls back to branch-name-based defaults if it is unavailable.
 func GenerateMRContent(repoPath, baseBranch string) (*MRContent, error) {
 	if baseBranch == "" {
 		baseBranch = "main"
@@ -291,30 +293,27 @@ Rules:
 - Do not include any text outside the JSON`,
 		commits, stat)
 
-	content := callClaudeForMR(repoPath, prompt)
+	content := callAgentForMR(repoPath, prompt)
 	if content != nil {
 		return content, nil
 	}
 	return fallbackMRContent(repoPath, baseBranch), nil
 }
 
-// callClaudeForMR invokes claude --print and parses the JSON response.
-func callClaudeForMR(repoPath, prompt string) *MRContent {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "claude", "--model", "haiku", "--print",
-		"--dangerously-skip-permissions", "-p", prompt)
-	cmd.Dir = repoPath
-
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
+// callAgentForMR runs a one-shot prompt on the configured backend and parses
+// the JSON response. Returns nil on any failure so the caller can fall back.
+func callAgentForMR(repoPath, prompt string) *MRContent {
+	raw, err := oneShotPrompt(context.Background(), oneshot.Request{
+		Prompt:  prompt,
+		Dir:     repoPath,
+		Timeout: 30 * time.Second,
+	})
+	if err != nil {
+		log.Printf("[mr] agent generation failed: %v", err)
 		return nil
 	}
 
-	raw := strings.TrimSpace(out.String())
-	// Extract JSON object in case Claude wraps it in markdown fences
+	// Extract JSON object in case the answer is wrapped in markdown fences
 	if i := strings.Index(raw, "{"); i >= 0 {
 		if j := strings.LastIndex(raw, "}"); j > i {
 			raw = raw[i : j+1]
