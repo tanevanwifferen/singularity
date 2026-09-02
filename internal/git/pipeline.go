@@ -70,14 +70,14 @@ func GetPipelineStatus(repoPath, branch string) (*PipelineInfo, error) {
 		return giteaPipelineStatus(repoPath, branch)
 	}
 
-	// Detect forge type
-	auth, err := DetectForgeAuth()
+	// Detect forge credentials, preferring the repo's origin host.
+	auth, err := DetectForgeAuthForRepo(repoPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect forge auth: %w", err)
 	}
 
 	if !auth.Valid {
-		return nil, fmt.Errorf("no valid forge authentication found")
+		return nil, noForgeAuthError(auth)
 	}
 
 	info := &PipelineInfo{
@@ -255,9 +255,12 @@ func RetryPipeline(repoPath, branch string) error {
 		return retryGiteaPipeline(repoPath, branch)
 	}
 
-	auth, err := DetectForgeAuth()
-	if err != nil || !auth.Valid {
-		return fmt.Errorf("no valid forge authentication")
+	auth, err := DetectForgeAuthForRepo(repoPath)
+	if err != nil {
+		return fmt.Errorf("failed to detect forge auth: %w", err)
+	}
+	if !auth.Valid {
+		return noForgeAuthError(auth)
 	}
 
 	if auth.IsGitLab() {

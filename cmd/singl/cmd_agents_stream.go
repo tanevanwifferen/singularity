@@ -58,8 +58,8 @@ func runAgentsWatch(ctx context.Context, args []string) int {
 	}
 	fs := flag.NewFlagSet("agents-watch", flag.ContinueOnError)
 	id := fs.String("id", "", "agent ID (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *id == "" {
 		fmt.Fprintln(os.Stderr, "error: --id is required")
@@ -142,8 +142,8 @@ func runAgentsChat(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("agents-chat", flag.ContinueOnError)
 	id := fs.String("id", "", "agent ID (required)")
 	message := fs.String("message", "", "message to send (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *id == "" || *message == "" {
 		fmt.Fprintln(os.Stderr, "error: --id and --message are required")

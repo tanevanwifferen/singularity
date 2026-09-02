@@ -37,6 +37,14 @@ func NewFeatureWorkflow(proj *Project, branch, baseDir string) *FeatureWorkflow 
 	return project.NewFeatureWorkflow(proj, branch, baseDir)
 }
 
+// DefaultWorkflowBaseDir returns the default worktree base directory for a
+// project (~/.worktrees/<slug>, reusing a pre-existing legacy raw-name dir).
+// Pure path computation plus one Stat; views call this instead of duplicating
+// the slug/fallback rules.
+func DefaultWorkflowBaseDir(projectName string) string {
+	return project.DefaultWorkflowBaseDir(projectName)
+}
+
 // NewProject constructs a runtime project from a config def. Transitional
 // re-export for the auto-discover code path in app.go; should be removed
 // once project loading is fully daemon-side.

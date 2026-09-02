@@ -75,5 +75,47 @@ func AmendCommitMessage(repoPath, newMessage string) error {
 	return nil
 }
 
+// StageFiles stages the given paths into the index (git add). With all set,
+// every change in the working tree is staged (git add -A) and paths are
+// ignored. At least one of paths/all must be provided.
+func StageFiles(repoPath string, paths []string, all bool) error {
+	args := []string{"-C", repoPath, "add"}
+	if all {
+		args = append(args, "-A")
+	} else {
+		if len(paths) == 0 {
+			return fmt.Errorf("no files to stage: pass file paths or use all")
+		}
+		args = append(args, "--")
+		args = append(args, paths...)
+	}
+	cmd := exec.Command("git", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("stage failed: %s", strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// CreateCommit commits the staged changes with the given message and returns
+// the new commit hash.
+func CreateCommit(repoPath, message string) (string, error) {
+	if message == "" {
+		return "", fmt.Errorf("commit message cannot be empty")
+	}
+	cmd := exec.Command("git", "-C", repoPath, "commit", "-m", message)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("commit failed: %s", strings.TrimSpace(string(output)))
+	}
+	hashCmd := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD")
+	hashOut, err := hashCmd.Output()
+	if err != nil {
+		// The commit itself succeeded; missing hash is not fatal.
+		return "", nil
+	}
+	return strings.TrimSpace(string(hashOut)), nil
+}
+
 // CopyToClipboard moved to internal/app/clipboard during the daemon/client
 // migration — clipboard is OS-local and not a git operation.

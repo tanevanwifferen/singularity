@@ -33,8 +33,7 @@ func cmdProject(ctx context.Context, verb string, args []string) int {
 		}
 		return cmdWorkflows(ctx, args[0], args[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "unknown project verb: %q\nverbs: list status load info refresh branch-check context workflows\n", verb)
-		return 2
+		return nounHelp("project", verb)
 	}
 }
 
@@ -65,8 +64,8 @@ func runProjectList(ctx context.Context, _ []string) int {
 func runProjectLoad(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("project-load", flag.ContinueOnError)
 	name := fs.String("name", "", "project key (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *name == "" {
 		fmt.Fprintln(os.Stderr, "error: --name is required")
@@ -100,8 +99,8 @@ func runProjectLoad(ctx context.Context, args []string) int {
 func runProjectInfo(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("project-info", flag.ContinueOnError)
 	project := fs.String("project", "", "project handle (see: singl project list)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	handle := service.ProjectHandle(*project)
 	if handle == "" {
@@ -143,8 +142,8 @@ func runProjectInfo(ctx context.Context, args []string) int {
 func runProjectRefresh(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("project-refresh", flag.ContinueOnError)
 	project := fs.String("project", "", "project handle (see: singl project list)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	handle := service.ProjectHandle(*project)
 	if handle == "" {
@@ -172,8 +171,8 @@ func runProjectBranchCheck(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("project-branch-check", flag.ContinueOnError)
 	project := fs.String("project", "", "project handle (see: singl project list)")
 	branch := fs.String("branch", "", "branch name (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	handle := service.ProjectHandle(*project)
 	if handle == "" || *branch == "" {
@@ -207,8 +206,8 @@ func runProjectBranchCheck(ctx context.Context, args []string) int {
 func runProjectContext(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("project-context", flag.ContinueOnError)
 	project := fs.String("project", "", "project handle (see: singl project list)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	handle := service.ProjectHandle(*project)
 	if handle == "" {
@@ -237,8 +236,8 @@ func runProjectContext(ctx context.Context, args []string) int {
 func runProjectStatus(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("project-status", flag.ContinueOnError)
 	project := fs.String("project", "", "project handle (see: singl project list)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	handle := service.ProjectHandle(*project)
 	if handle == "" {

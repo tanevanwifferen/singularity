@@ -31,7 +31,7 @@ func fakeGetter(states map[string][]string) agentGetter {
 
 func TestWaitForAgentsImmediateTerminal(t *testing.T) {
 	get := fakeGetter(map[string][]string{"a": {"complete"}})
-	snaps, waited, timedOut, err := waitForAgents(context.Background(), get, []string{"a"}, 0, time.Hour)
+	snaps, waited, timedOut, err := waitForAgents(context.Background(), get, []string{"a"}, false, 0, time.Hour)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestWaitForAgentsTransitions(t *testing.T) {
 		"b": {"running", "error"},
 	})
 	snaps, _, timedOut, err := waitForAgents(context.Background(), get,
-		[]string{"a", "b"}, 0, time.Millisecond)
+		[]string{"a", "b"}, false, 0, time.Millisecond)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestWaitForAgentsTransitions(t *testing.T) {
 func TestWaitForAgentsTimeout(t *testing.T) {
 	get := fakeGetter(map[string][]string{"a": {"running"}})
 	snaps, _, timedOut, err := waitForAgents(context.Background(), get,
-		[]string{"a"}, 20*time.Millisecond, 5*time.Millisecond)
+		[]string{"a"}, false, 20*time.Millisecond, 5*time.Millisecond)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestWaitForAgentsTimeout(t *testing.T) {
 
 func TestWaitForAgentsGetterError(t *testing.T) {
 	get := fakeGetter(map[string][]string{})
-	_, _, _, err := waitForAgents(context.Background(), get, []string{"ghost"}, 0, time.Millisecond)
+	_, _, _, err := waitForAgents(context.Background(), get, []string{"ghost"}, false, 0, time.Millisecond)
 	if err == nil {
 		t.Fatal("expected error for unknown agent")
 	}
@@ -91,7 +91,7 @@ func TestWaitForAgentsContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	get := fakeGetter(map[string][]string{"a": {"running"}})
-	_, _, _, err := waitForAgents(ctx, get, []string{"a"}, 0, time.Hour)
+	_, _, _, err := waitForAgents(ctx, get, []string{"a"}, false, 0, time.Hour)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
@@ -139,8 +139,9 @@ func TestAgentsWaitUsageErrors(t *testing.T) {
 	}
 }
 
-// TestUnknownVerbsExitTwo guards the usage-error contract: an unknown or
-// missing verb must exit 2, never 0.
+// TestUnknownVerbsExitTwo guards the usage-error contract: an unknown verb
+// must exit 2, never 0, while a bare noun is an explicit help request and
+// exits 0 after printing the noun's verb reference.
 func TestUnknownVerbsExitTwo(t *testing.T) {
 	ctx := context.Background()
 	dispatchers := map[string]func(context.Context, string, []string) int{
@@ -154,8 +155,31 @@ func TestUnknownVerbsExitTwo(t *testing.T) {
 		if code := fn(ctx, "definitely-not-a-verb", nil); code != 2 {
 			t.Errorf("%s with unknown verb: code = %d, want 2", noun, code)
 		}
-		if code := fn(ctx, "", nil); code != 2 {
-			t.Errorf("%s with no verb: code = %d, want 2", noun, code)
+		if code := fn(ctx, "", nil); code != 0 {
+			t.Errorf("%s with no verb: code = %d, want 0 (help)", noun, code)
 		}
+	}
+}
+
+// TestWaitForAgentsAny returns as soon as the first agent settles instead of
+// waiting for its still-running peer (the --any flag).
+func TestWaitForAgentsAny(t *testing.T) {
+	get := fakeGetter(map[string][]string{
+		"a": {"complete"},
+		"b": {"running"},
+	})
+	snaps, _, timedOut, err := waitForAgents(context.Background(), get,
+		[]string{"a", "b"}, true, 0, time.Hour)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if timedOut {
+		t.Error("should not time out when one agent already settled")
+	}
+	if snaps[0].State != "complete" {
+		t.Errorf("snaps[0].State = %q, want complete", snaps[0].State)
+	}
+	if snaps[1].State != "running" {
+		t.Errorf("snaps[1].State = %q, want the unsettled peer's last state", snaps[1].State)
 	}
 }

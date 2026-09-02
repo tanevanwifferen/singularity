@@ -27,16 +27,15 @@ func cmdDiff(ctx context.Context, verb string, args []string) int {
 	case "all-repos":
 		return runDiffAllRepos(ctx, args)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown diff verb: %q\nverbs: workdir branch file staged unstaged merge-base all-repos\n", verb)
-		return 2
+		return nounHelp("diff", verb)
 	}
 }
 
 func runDiffWorkdir(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("diff-workdir", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -91,8 +90,8 @@ func runDiffBranch(ctx context.Context, args []string) int {
 	repo := fs.String("repo", "", "repo path")
 	base := fs.String("base", "", "base branch/ref (required)")
 	head := fs.String("head", "", "head branch/ref (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *base == "" || *head == "" {
@@ -135,8 +134,8 @@ func runDiffFile(ctx context.Context, args []string) int {
 	base := fs.String("base", "", "base ref (required)")
 	head := fs.String("head", "", "head ref (required)")
 	file := fs.String("file", "", "file path (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *base == "" || *head == "" || *file == "" {
@@ -166,8 +165,8 @@ func runDiffStaged(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("diff-staged", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
 	file := fs.String("file", "", "file path (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *file == "" {
@@ -197,8 +196,8 @@ func runDiffUnstaged(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("diff-unstaged", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
 	file := fs.String("file", "", "file path (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *file == "" {
@@ -229,8 +228,8 @@ func runDiffMergeBase(ctx context.Context, args []string) int {
 	repo := fs.String("repo", "", "repo path")
 	base := fs.String("base", "", "base ref (required)")
 	head := fs.String("head", "", "head ref (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *base == "" || *head == "" {
@@ -256,8 +255,8 @@ func runDiffMergeBase(ctx context.Context, args []string) int {
 func runDiffAllRepos(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("diff-all-repos", flag.ContinueOnError)
 	project := fs.String("project", "", "project handle (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *project == "" {
 		fmt.Fprintln(os.Stderr, "error: --project is required (use `singl project list` for handles)")

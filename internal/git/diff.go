@@ -294,7 +294,7 @@ func GetFileContent(repoPath, ref, filePath string) (string, error) {
 // are already present in the base branch (squash-merge false positive detection).
 type FilteredDiffHunk struct {
 	DiffHunk
-	AlreadyInBase bool
+	AlreadyInBase bool `json:"already_in_base"`
 }
 
 // GetDeepFileDiff gets the diff between diffBase and headRef for filePath,
@@ -365,22 +365,22 @@ func isHunkAlreadyInBase(hunk DiffHunk, baseLineSet map[string]bool) bool {
 
 // WorkdirStatus holds status info for a file in the working directory
 type WorkdirStatus struct {
-	Path              string // File path
-	StagedStatus      string // Status in staging area (A/M/D/R/?)
-	UnstagedStatus    string // Status in working tree (A/M/D/R/?)
-	StagedAdditions   int
-	StagedDeletions   int
-	UnstagedAdditions int
-	UnstagedDeletions int
+	Path              string `json:"path"`            // File path
+	StagedStatus      string `json:"staged_status"`   // Status in staging area (A/M/D/R/?)
+	UnstagedStatus    string `json:"unstaged_status"` // Status in working tree (A/M/D/R/?)
+	StagedAdditions   int    `json:"staged_additions"`
+	StagedDeletions   int    `json:"staged_deletions"`
+	UnstagedAdditions int    `json:"unstaged_additions"`
+	UnstagedDeletions int    `json:"unstaged_deletions"`
 }
 
 // WorkdirDiff holds all working directory changes
 type WorkdirDiff struct {
-	Files             []WorkdirStatus
-	TotalStagedAdds   int
-	TotalStagedDels   int
-	TotalUnstagedAdds int
-	TotalUnstagedDels int
+	Files             []WorkdirStatus `json:"files"`
+	TotalStagedAdds   int             `json:"total_staged_adds"`
+	TotalStagedDels   int             `json:"total_staged_dels"`
+	TotalUnstagedAdds int             `json:"total_unstaged_adds"`
+	TotalUnstagedDels int             `json:"total_unstaged_dels"`
 }
 
 // GetWorkdirStatus returns the status of all changed files in the working directory
@@ -638,18 +638,18 @@ func GetCommitFullDiff(repoPath, hash string) (string, error) {
 
 // DiffHunk represents a single hunk in a unified diff
 type DiffHunk struct {
-	Header   string     // The @@ header line
-	Lines    []DiffLine // All lines in this hunk (context, additions, deletions)
-	OldStart int
-	OldCount int
-	NewStart int
-	NewCount int
+	Header   string     `json:"header"` // The @@ header line
+	Lines    []DiffLine `json:"lines"`  // All lines in this hunk (context, additions, deletions)
+	OldStart int        `json:"old_start"`
+	OldCount int        `json:"old_count"`
+	NewStart int        `json:"new_start"`
+	NewCount int        `json:"new_count"`
 }
 
 // DiffLine represents a single line within a diff hunk
 type DiffLine struct {
-	Content  string
-	LineType string // "+", "-", " " (context)
+	Content  string `json:"content"`
+	LineType string `json:"line_type"` // "+", "-", " " (context)
 }
 
 // ParseHunks parses raw unified diff output into structured hunks.

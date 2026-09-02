@@ -72,7 +72,18 @@ func TestDetectForgeAuthNoCLI(t *testing.T) {
 	}
 }
 
+// isolateForgeEnv makes DetectForgeAuth hermetic: no gh/glab binaries on
+// PATH and an empty glab config dir, so only env vars can produce auth.
+// Never let these tests read the developer's real credentials — a real
+// token in a test-failure message would leak into logs.
+func isolateForgeEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("PATH", "")
+	t.Setenv("GLAB_CONFIG_DIR", t.TempDir())
+}
+
 func TestDetectForgeAuthEnvGitHub(t *testing.T) {
+	isolateForgeEnv(t)
 	// Set GitHub environment variables
 	os.Setenv("GITHUB_TOKEN", "test-token")
 	os.Setenv("GITHUB_USERNAME", "testuser")
@@ -104,6 +115,7 @@ func TestDetectForgeAuthEnvGitHub(t *testing.T) {
 }
 
 func TestDetectForgeAuthEnvGitLab(t *testing.T) {
+	isolateForgeEnv(t)
 	// Set GitLab environment variables
 	os.Setenv("GITLAB_TOKEN", "glab-test-token")
 	os.Setenv("GITLAB_USERNAME", "glabuser")
@@ -140,7 +152,7 @@ func TestDetectEnvAuthGitHubUserEnv(t *testing.T) {
 		os.Unsetenv("GITHUB_USER")
 	}()
 
-	auth := detectEnvAuth()
+	auth, _ := detectEnvAuth("")
 	if auth == nil {
 		t.Fatal("Expected non-nil auth from detectEnvAuth")
 	}
@@ -160,7 +172,7 @@ func TestDetectEnvAuthGitLabUserEnv(t *testing.T) {
 		os.Unsetenv("GITLAB_USER")
 	}()
 
-	auth := detectEnvAuth()
+	auth, _ := detectEnvAuth("")
 	if auth == nil {
 		t.Fatal("Expected non-nil auth from detectEnvAuth")
 	}
@@ -179,27 +191,31 @@ func TestDetectEnvAuthNoToken(t *testing.T) {
 	os.Unsetenv("GITLAB_USERNAME")
 	os.Unsetenv("GITLAB_USER")
 
-	auth := detectEnvAuth()
+	auth, _ := detectEnvAuth("")
 	if auth != nil {
 		t.Error("Expected nil auth when no env vars are set")
 	}
 }
 
 func TestDetectGitHubAuthNotInstalled(t *testing.T) {
-	// This test just verifies the function doesn't crash when gh is not installed
-	auth := detectGitHubAuth()
-	// If gh is not installed, should return nil
+	isolateForgeEnv(t)
+	auth, note := detectGitHubAuth()
 	if auth != nil {
-		t.Log("gh appears to be installed, skipping nil check")
+		t.Error("expected nil auth with empty PATH")
+	}
+	if note == "" {
+		t.Error("expected a tried-source note for the Detail aggregation")
 	}
 }
 
 func TestDetectGitLabAuthNotInstalled(t *testing.T) {
-	// This test just verifies the function doesn't crash when glab is not installed
-	auth := detectGitLabAuth()
-	// If glab is not installed, should return nil
+	isolateForgeEnv(t)
+	auth, note := detectGitLabAuth("")
 	if auth != nil {
-		t.Log("glab appears to be installed, skipping nil check")
+		t.Error("expected nil auth with empty PATH and empty config dir")
+	}
+	if note == "" {
+		t.Error("expected a tried-source note for the Detail aggregation")
 	}
 }
 
@@ -217,7 +233,7 @@ func TestDetectGiteaAuthNotInstalled(t *testing.T) {
 	installedCLIs(t)
 	fakeCLI(t, nil)
 
-	if auth := detectGiteaAuth(); auth != nil {
+	if auth, _ := detectGiteaAuth(); auth != nil {
 		t.Errorf("Expected nil auth when tea is not installed, got %+v", auth)
 	}
 }
@@ -226,7 +242,7 @@ func TestDetectGiteaAuthNoLoginGivesHint(t *testing.T) {
 	installedCLIs(t, teaBin)
 	fakeCLI(t, func(recordedCall) cliResult { return cliResult{Stdout: "[]"} })
 
-	auth := detectGiteaAuth()
+	auth, _ := detectGiteaAuth()
 	if auth == nil {
 		t.Fatal("Expected a Gitea auth struct when tea is installed but has no login")
 	}
@@ -246,7 +262,7 @@ func TestDetectGiteaAuthWithLogin(t *testing.T) {
 		})}
 	})
 
-	auth := detectGiteaAuth()
+	auth, _ := detectGiteaAuth()
 	if auth == nil || !auth.Valid {
 		t.Fatalf("Expected a valid Gitea auth, got %+v", auth)
 	}
@@ -288,5 +304,126 @@ func TestForgeAuthFields(t *testing.T) {
 	}
 	if !auth.Valid {
 		t.Error("Expected Valid=true")
+	}
+}
+
+func TestParseGlabConfig(t *testing.T) {
+	data := `# comment
+git_protocol: ssh
+host: gitlab.com
+hosts:
+    gitlab.com:
+        # Your GitLab access token.
+        token:
+        api_host: gitlab.com
+    gitlab.example.nl:
+        token: secret-token
+        api_host: gitlab.example.nl
+        api_protocol: https
+        user: someone
+last_seen_version: v1.0.0
+`
+	defaultHost, hosts := parseGlabConfig(data)
+	if defaultHost != "gitlab.com" {
+		t.Errorf("defaultHost = %q, want gitlab.com", defaultHost)
+	}
+	if len(hosts) != 2 {
+		t.Fatalf("len(hosts) = %d, want 2", len(hosts))
+	}
+	if hosts[0].Name != "gitlab.com" || hosts[0].Token != "" {
+		t.Errorf("hosts[0] = %+v, want gitlab.com without token", hosts[0])
+	}
+	h := hosts[1]
+	if h.Name != "gitlab.example.nl" || h.Token != "secret-token" || h.User != "someone" {
+		t.Errorf("hosts[1] = %+v", h)
+	}
+	if got := h.apiURL(); got != "https://gitlab.example.nl/api/v4" {
+		t.Errorf("apiURL = %q", got)
+	}
+}
+
+// writeGlabConfig writes a config.yml into a temp GLAB_CONFIG_DIR and
+// isolates PATH so only the file-based detection can succeed.
+func writeGlabConfig(t *testing.T, content string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/config.yml", []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "")
+	t.Setenv("GLAB_CONFIG_DIR", dir)
+}
+
+func TestDetectGitLabAuthHostPreference(t *testing.T) {
+	writeGlabConfig(t, `host: gitlab.com
+hosts:
+    gitlab.com:
+        token:
+    gitlab.example.nl:
+        token: example-token
+        user: someone
+`)
+
+	// Preferring the self-hosted instance finds its token.
+	auth, note := detectGitLabAuth("gitlab.example.nl")
+	if auth == nil {
+		t.Fatalf("expected auth, got note %q", note)
+	}
+	if auth.Host != "gitlab.example.nl" || auth.AuthToken != "example-token" {
+		t.Errorf("auth = %+v", auth)
+	}
+	if auth.APIURL != "https://gitlab.example.nl/api/v4" {
+		t.Errorf("APIURL = %q", auth.APIURL)
+	}
+
+	// No preference: the default host has no token, so the only tokened
+	// host wins.
+	auth, _ = detectGitLabAuth("")
+	if auth == nil || auth.Host != "gitlab.example.nl" {
+		t.Errorf("no-preference auth = %+v", auth)
+	}
+
+	// Preferring a host without a token must fail with a note naming the
+	// host and the hosts that do carry one.
+	auth, note = detectGitLabAuth("gitlab.com")
+	if auth != nil {
+		t.Errorf("expected nil auth for tokenless host, got %+v", auth)
+	}
+	if !strings.Contains(note, "gitlab.com") || !strings.Contains(note, "gitlab.example.nl") {
+		t.Errorf("note should name the missing and available hosts: %q", note)
+	}
+}
+
+func TestDetectForgeAuthForHostPrefersGlabForNonGitHub(t *testing.T) {
+	writeGlabConfig(t, `hosts:
+    gitlab.example.nl:
+        token: example-token
+`)
+	auth, err := DetectForgeAuthForHost("gitlab.example.nl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !auth.Valid || !auth.IsGitLab() || auth.Host != "gitlab.example.nl" {
+		t.Errorf("auth = %+v", auth)
+	}
+}
+
+func TestDetectForgeAuthDetailListsSources(t *testing.T) {
+	isolateForgeEnv(t)
+	for _, v := range []string{"GITHUB_TOKEN", "GITLAB_TOKEN"} {
+		t.Setenv(v, "")
+		os.Unsetenv(v)
+	}
+	auth, err := DetectForgeAuth()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auth.Valid {
+		t.Fatal("expected invalid auth in isolated env")
+	}
+	for _, want := range []string{"gh CLI", "glab config", "GITLAB_TOKEN"} {
+		if !strings.Contains(auth.Detail, want) {
+			t.Errorf("Detail missing %q: %q", want, auth.Detail)
+		}
 	}
 }

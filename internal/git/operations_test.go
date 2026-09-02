@@ -173,3 +173,51 @@ func TestResetToCommitInvalidMode(t *testing.T) {
 		t.Fatal("expected error for invalid mode")
 	}
 }
+
+func TestStageFilesAndCreateCommit(t *testing.T) {
+	dir := initOpsTestRepo(t)
+
+	// Stage a single new file by path.
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := StageFiles(dir, []string{"a.txt"}, false); err != nil {
+		t.Fatalf("StageFiles: %v", err)
+	}
+	hash, err := CreateCommit(dir, "add a.txt")
+	if err != nil {
+		t.Fatalf("CreateCommit: %v", err)
+	}
+	if hash == "" || hash != opsGetHEAD(t, dir) {
+		t.Errorf("CreateCommit hash = %q, HEAD = %q", hash, opsGetHEAD(t, dir))
+	}
+	if msg := opsGetHEADMessage(t, dir); msg != "add a.txt" {
+		t.Errorf("commit message = %q", msg)
+	}
+
+	// Stage everything with all=true.
+	if err := os.WriteFile(filepath.Join(dir, "b.txt"), []byte("b\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("changed\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := StageFiles(dir, nil, true); err != nil {
+		t.Fatalf("StageFiles all: %v", err)
+	}
+	if _, err := CreateCommit(dir, "stage all"); err != nil {
+		t.Fatalf("CreateCommit after all: %v", err)
+	}
+
+	// Guard rails: no paths and no all is an error; empty message is an error.
+	if err := StageFiles(dir, nil, false); err == nil {
+		t.Error("StageFiles without paths or all should fail")
+	}
+	if _, err := CreateCommit(dir, ""); err == nil {
+		t.Error("CreateCommit with empty message should fail")
+	}
+	// Committing with nothing staged surfaces git's error.
+	if _, err := CreateCommit(dir, "empty"); err == nil {
+		t.Error("CreateCommit with clean index should fail")
+	}
+}

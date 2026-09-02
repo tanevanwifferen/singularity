@@ -17,16 +17,15 @@ func cmdRepos(ctx context.Context, verb string, args []string) int {
 	case "find":
 		return runReposFind(ctx, args)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown repos verb: %q\nverbs: info open find\n", verb)
-		return 2
+		return nounHelp("repos", verb)
 	}
 }
 
 func runReposInfo(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("repos-info", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -66,8 +65,8 @@ func runReposInfo(ctx context.Context, args []string) int {
 func runReposOpen(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("repos-open", flag.ContinueOnError)
 	path := fs.String("path", "", "path to open (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *path == "" {
 		fmt.Fprintln(os.Stderr, "error: --path is required")
@@ -97,8 +96,8 @@ func runReposOpen(ctx context.Context, args []string) int {
 func runReposFind(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("repos-find", flag.ContinueOnError)
 	path := fs.String("path", "", "path to search from (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *path == "" {
 		fmt.Fprintln(os.Stderr, "error: --path is required")

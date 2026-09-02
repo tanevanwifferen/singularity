@@ -21,8 +21,12 @@ project   set of related repos, configured in ~/.config/singularity/projects.jso
   worktree for *every* repo in the project on the same branch — even repos you
   think you won't touch. Cross-repo changes are the norm here, and a workflow
   whose repos are half-isolated cannot be pushed or MR'd as one unit.
-- Layout: `<base-dir>/<branch>/<repo>`, base-dir defaults to `~/.worktrees/<project>`.
-  Slashes in the branch name become dashes in the directory name.
+- Layout: `<base-dir>/<branch>/<repo>`, base-dir defaults to
+  `~/.worktrees/<project-slug>` — the slug is the lowercased project name with
+  non-alphanumerics collapsed to `-` ("PBD Development" → `pbd-development`),
+  so worktree paths never contain spaces. A legacy directory named after the
+  raw project name is reused if it already exists. Slashes in the branch name
+  become dashes in the directory name.
 - Project handles are `proj-<key>` (the bare key also works); agent IDs are opaque strings.
 - One agent per directory. Never point two agents at the same workdir.
 - An agent spawned through `singl` runs **directly in `--workdir`** — it gets no
@@ -32,7 +36,11 @@ project   set of related repos, configured in ~/.config/singularity/projects.jso
 
 - Default output is markdown: rendered on a TTY, raw when piped.
 - `--json` works on every non-streaming command. **Always use it when parsing.**
+  All JSON uses snake_case field names (`work_dir`, `total_staged_adds`, ...).
 - Exit codes: `0` ok, `1` error (message on stderr), `2` usage error. Check the code.
+- Every noun answers `--help`, `-h`, `help`, or a bare invocation
+  (`singl agents`) with its verb + flag reference; every verb answers `--help`
+  with its flag defaults (`singl agents wait --help`). Explicit help exits 0.
 - Global flags: `--server <url>`, `--json`, `--repo <path>`.
   Env: `SINGL_SERVER`, `SINGL_REPO`, `SINGL_FORMAT=json`. File: `.singl.json` in cwd or a parent.
 - `--repo` defaults to the git root of the cwd, so most repo commands work bare.
@@ -128,6 +136,16 @@ singl --json agents list
 singl --json agents stats                           # active/max — check capacity before spawning
 ```
 
+`get`/`list` JSON is a **compact** snapshot: `id`, `state`, `work_dir`,
+`summary`, timestamps, `duration_secs`, `total_cost_usd`, `merge_result`.
+`exit_code` appears **only** once the state is terminal — while an agent runs
+the field is absent, never a lying `0`. The full task prompt (can be
+kilobytes) is only included with `--full`; `get --last N` appends the last N
+output entries. Output entries carry a `type` discriminator (`text | tool_use
+| tool_result | system | error | result | user_input`, with `source` as a
+legacy alias) plus `tool_name`/`tool_id`/`is_error` for tool events;
+`output --tail N` keeps only the last N entries (applied after `--offset`).
+
 Keep your own per-agent output cursor and advance `--offset`.
 The output stream includes the prompts: the initial task and every follow-up
 appear as `user_input` entries (rendered `[prompt]`; very long prompts are
@@ -138,11 +156,13 @@ To block until an agent finishes, use `wait` — it polls quietly (no streaming)
 and supports `--json`:
 
 ```
-singl --json agents wait     --id <id> [--timeout <secs>] [--interval <secs>]
+singl --json agents wait     --id <id> [--id <id2> ...] [--timeout <secs>] [--interval <secs>] [--any]
 singl --json agents wait-all [--timeout <secs>] [--interval <secs>]
 ```
 
-`wait` takes one or more ids (repeat `--id` or comma-separate); `wait-all`
+`wait` takes one or more ids (repeat `--id` or comma-separate); with multiple
+ids `--any` returns as soon as the first agent finishes instead of waiting for
+all of them. `wait-all`
 snapshots the currently active agents and waits for those — agents spawned
 later don't extend the wait. Default poll `--interval` is 2s; `--timeout 0`
 (the default) waits forever. Exit `0` only when every waited agent ended
@@ -174,7 +194,9 @@ or reverted separately. New task ⇒ new agent.
 
 ```
 singl --json diff workdir     --repo <worktree>
+singl --json commit stage     --repo <worktree> --all             # or --file a --file b
 singl --json commit suggest   --repo <worktree>     # AI commit message from the current diff
+singl --json commit create    --repo <worktree> --message "..."   # → {"status":"committed","hash":...}
 singl sync push               --repo <worktree>
 singl --json mr title  --repo <worktree> --source feature/x --target main
 singl --json mr create --repo <worktree> --source feature/x --target main --title "..." --desc "..."
@@ -182,6 +204,16 @@ singl --json mr create --repo <worktree> --source feature/x --target main --titl
 
 `commit suggest` and `mr title/create` generate text with a cheap one-shot prompt on
 the provider from `ai.provider` (claude or pi); both fall back to heuristics if it fails.
+`commit suggest`/`generate` use the staged diff and fall back to the unstaged
+diff when nothing is staged, so they only fail when the working tree is fully
+clean.
+
+Forge credentials for `mr create` and `pipeline status` are resolved per host:
+the gh CLI, glab's config file (`~/.config/glab-cli/config.yml`, per-host
+`token:` entries — self-hosted GitLab instances work), the
+GITHUB_TOKEN / GITLAB_TOKEN env vars, and finally `tea` for Gitea/Forgejo,
+preferring whatever matches the repo's origin host. When nothing is found the
+error lists every source checked and how to fix it.
 
 **6 — clean up.** One command tears the whole workflow down: every repo's
 worktree removed, local **and remote** feature branches deleted, workflow
@@ -201,12 +233,12 @@ idempotent for the repos that already cleaned.
 | Noun | Verbs | Key flags |
 |---|---|---|
 | `status` | — | — |
-| `agents` | list get spawn resume kill remove output input wait wait-all watch watch-all chat stats | `--id` `--workdir` `--prompt` `--message` `--offset` `--model` `--effort` `--smart-route` `--max-turns` `--timeout` `--interval` `--backend` |
+| `agents` | list get spawn resume kill remove output input wait wait-all watch watch-all chat stats | `--id` `--workdir` `--prompt` `--message` `--offset` `--tail` `--last` `--full` `--model` `--effort` `--smart-route` `--max-turns` `--timeout` `--interval` `--any` `--backend` |
 | `project` | list status load info refresh branch-check context workflows | `--name` (load) `--project` (handle) `--branch` |
 | `workflows` | list create remove discover | `--project` `--branch` `--base-dir` (create makes a worktree per repo; remove tears the whole workflow down) |
 | `branches` | list checkout create delete head compare | `--repo` `--branch` `--start-point` `--base` `--head` `--force` |
 | `diff` | workdir branch file staged unstaged merge-base all-repos | `--repo` `--base` `--head` `--file` `--project` |
-| `commit` | suggest generate files diff file-diff cherry-pick reset amend | `--repo` `--hash` `--file` `--message` `--mode soft\|mixed\|hard` |
+| `commit` | suggest generate stage create files diff file-diff cherry-pick reset amend | `--repo` `--hash` `--file` (repeatable) `--all` `--message` `--mode soft\|mixed\|hard` |
 | `mr` | title desc create cli | `--repo` `--source` `--target` `--title` `--desc` `--reviewers` `--base` |
 | `sync` | fetch pull push pull-rebase set-upstream upstream-status last-fetch all | `--repo` `--remote` `--force` `--project` |
 | `rebase` | plan status continue skip abort onto-main todo context | `--repo` `--base` `--current` `--main` `--conflicts` |

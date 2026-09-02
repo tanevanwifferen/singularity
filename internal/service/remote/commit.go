@@ -47,6 +47,16 @@ func (s *remoteCommitService) AmendMessage(ctx context.Context, repoPath, messag
 	return s.c.CommitAmend(ctx, repoPath, message)
 }
 
+// Stage stages the given paths (or everything with all) into the index.
+func (s *remoteCommitService) Stage(ctx context.Context, repoPath string, paths []string, all bool) error {
+	return s.c.CommitStage(ctx, repoPath, paths, all)
+}
+
+// Create commits the staged changes and returns the new commit hash.
+func (s *remoteCommitService) Create(ctx context.Context, repoPath, message string) (string, error) {
+	return s.c.CommitCreate(ctx, repoPath, message)
+}
+
 // GenerateMessage is the structured variant of SuggestMessage.
 func (s *remoteCommitService) GenerateMessage(ctx context.Context, repoPath string) (*service.CommitMessage, error) {
 	return s.c.CommitGenerateMessage(ctx, repoPath)

@@ -82,6 +82,26 @@ func (s *localCommitService) AmendMessage(ctx context.Context, repoPath, message
 	return wrapErr(git.AmendCommitMessage(repoPath, message))
 }
 
+// Stage stages the given paths (or everything with all) into the index.
+func (s *localCommitService) Stage(ctx context.Context, repoPath string, paths []string, all bool) error {
+	if err := checkCtx(ctx); err != nil {
+		return err
+	}
+	return wrapErr(git.StageFiles(repoPath, paths, all))
+}
+
+// Create commits the staged changes and returns the new commit hash.
+func (s *localCommitService) Create(ctx context.Context, repoPath, message string) (string, error) {
+	if err := checkCtx(ctx); err != nil {
+		return "", err
+	}
+	hash, err := git.CreateCommit(repoPath, message)
+	if err != nil {
+		return "", wrapErr(err)
+	}
+	return hash, nil
+}
+
 // GenerateMessage is the structured variant of SuggestMessage.
 func (s *localCommitService) GenerateMessage(ctx context.Context, repoPath string) (*service.CommitMessage, error) {
 	if err := checkCtx(ctx); err != nil {
