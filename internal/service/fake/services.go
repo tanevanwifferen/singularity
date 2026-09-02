@@ -124,6 +124,8 @@ func (commitStub) FullDiff(context.Context, string, string) (string, error) { re
 func (commitStub) CherryPick(context.Context, string, string) error         { return unavail() }
 func (commitStub) Reset(context.Context, string, string, string) error      { return unavail() }
 func (commitStub) AmendMessage(context.Context, string, string) error       { return unavail() }
+func (commitStub) Stage(context.Context, string, []string, bool) error      { return unavail() }
+func (commitStub) Create(context.Context, string, string) (string, error)   { return "", unavail() }
 func (commitStub) GenerateMessage(context.Context, string) (*service.CommitMessage, error) {
 	return nil, unavail()
 }

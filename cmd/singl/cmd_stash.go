@@ -32,16 +32,15 @@ func cmdStash(ctx context.Context, verb string, args []string) int {
 	case "apply-all":
 		return runStashApplyAll(ctx, args)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown stash verb: %q\nverbs: list create apply pop drop get clear list-all all apply-all\n", verb)
-		return 2
+		return nounHelp("stash", verb)
 	}
 }
 
 func runStashList(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("stash-list", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -77,8 +76,8 @@ func runStashCreate(ctx context.Context, args []string) int {
 	repo := fs.String("repo", "", "repo path")
 	message := fs.String("message", "", "stash message")
 	untracked := fs.Bool("untracked", false, "include untracked files")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -106,8 +105,8 @@ func runStashApply(ctx context.Context, args []string) int {
 	repo := fs.String("repo", "", "repo path (required)")
 	index := fs.Int("index", -1, "stash index (required)")
 	pop := fs.Bool("pop", false, "pop (apply and drop) instead of just apply")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *index < 0 {
@@ -137,8 +136,8 @@ func runStashPop(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("stash-pop", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path (required)")
 	index := fs.Int("index", -1, "stash index (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *index < 0 {
@@ -164,8 +163,8 @@ func runStashGet(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("stash-get", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path (required)")
 	index := fs.Int("index", -1, "stash index (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *index < 0 {
@@ -194,8 +193,8 @@ func runStashGet(ctx context.Context, args []string) int {
 func runStashClear(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("stash-clear", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -220,8 +219,8 @@ func runStashClear(ctx context.Context, args []string) int {
 func runStashListAll(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("stash-list-all", flag.ContinueOnError)
 	project := fs.String("project", "", "project handle (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *project == "" {
 		fmt.Fprintln(os.Stderr, "error: --project is required (use `singl project list` for handles)")
@@ -264,8 +263,8 @@ func runStashAll(ctx context.Context, args []string) int {
 	project := fs.String("project", "", "project handle (required)")
 	message := fs.String("message", "", "stash message")
 	untracked := fs.Bool("untracked", false, "include untracked files")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *project == "" {
 		fmt.Fprintln(os.Stderr, "error: --project is required")
@@ -302,8 +301,8 @@ func runStashApplyAll(ctx context.Context, args []string) int {
 	project := fs.String("project", "", "project handle (required)")
 	pop := fs.Bool("pop", false, "pop (apply and drop) instead of just apply")
 	message := fs.String("message", "", "match by stash message (optional)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *project == "" {
 		fmt.Fprintln(os.Stderr, "error: --project is required")
@@ -343,8 +342,8 @@ func runStashDrop(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("stash-drop", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path (required)")
 	index := fs.Int("index", -1, "stash index (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *index < 0 {

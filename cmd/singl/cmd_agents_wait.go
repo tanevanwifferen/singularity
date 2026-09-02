@@ -52,10 +52,11 @@ func agentGetterFor(c *client.Client) agentGetter {
 }
 
 // waitForAgents polls get for every id until all reach a terminal state, the
-// timeout elapses (0 = wait forever), or ctx is cancelled. It returns the last
-// known snapshot per id (in ids order), the total wait duration, and whether
-// the wait timed out. Already-terminal agents cost one poll and no sleep.
-func waitForAgents(ctx context.Context, get agentGetter, ids []string, timeout, interval time.Duration) ([]api.AgentSnapshotDTO, time.Duration, bool, error) {
+// timeout elapses (0 = wait forever), or ctx is cancelled. With anyDone it
+// returns as soon as the first agent settles. It returns the last known
+// snapshot per id (in ids order), the total wait duration, and whether the
+// wait timed out. Already-terminal agents cost one poll and no sleep.
+func waitForAgents(ctx context.Context, get agentGetter, ids []string, anyDone bool, timeout, interval time.Duration) ([]api.AgentSnapshotDTO, time.Duration, bool, error) {
 	start := time.Now()
 	var deadline <-chan time.Time
 	if timeout > 0 {
@@ -67,8 +68,10 @@ func waitForAgents(ctx context.Context, get agentGetter, ids []string, timeout, 
 	settled := make([]bool, len(ids))
 	for {
 		allSettled := true
+		anySettled := false
 		for i, id := range ids {
 			if settled[i] {
+				anySettled = true
 				continue
 			}
 			a, err := get(ctx, id)
@@ -78,11 +81,12 @@ func waitForAgents(ctx context.Context, get agentGetter, ids []string, timeout, 
 			snaps[i] = *a
 			if terminalAgentState(a.State) {
 				settled[i] = true
+				anySettled = true
 			} else {
 				allSettled = false
 			}
 		}
-		if allSettled {
+		if allSettled || (anyDone && anySettled) {
 			return snaps, time.Since(start), false, nil
 		}
 		select {
@@ -103,8 +107,9 @@ func runAgentsWait(ctx context.Context, args []string) int {
 	fs.Var(&ids, "id", "agent ID to wait for (repeatable, or comma-separated)")
 	timeout := fs.Int("timeout", 0, "give up after N seconds (0 = wait forever)")
 	interval := fs.Int("interval", 2, "poll interval in seconds")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	anyDone := fs.Bool("any", false, "with multiple --id: return as soon as one agent finishes (default: wait for all)")
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if len(ids) == 0 {
 		fmt.Fprintln(os.Stderr, "error: --id is required")
@@ -119,7 +124,7 @@ func runAgentsWait(ctx context.Context, args []string) int {
 	}
 	// A single id reports the bare agent object (agents get shape) plus wait
 	// fields; multiple ids use the list envelope shared with wait-all.
-	return awaitAndReport(ctx, agentGetterFor(c), ids, *timeout, *interval, len(ids) > 1)
+	return awaitAndReport(ctx, agentGetterFor(c), ids, *anyDone, *timeout, *interval, len(ids) > 1)
 }
 
 // runAgentsWaitAll blocks until every agent that is non-terminal *now* reaches
@@ -128,8 +133,8 @@ func runAgentsWaitAll(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("agents-wait-all", flag.ContinueOnError)
 	timeout := fs.Int("timeout", 0, "give up after N seconds (0 = wait forever)")
 	interval := fs.Int("interval", 2, "poll interval in seconds")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if code := validateWaitFlags(*timeout, *interval); code != 0 {
 		return code
@@ -158,7 +163,7 @@ func runAgentsWaitAll(ctx context.Context, args []string) int {
 		}
 		return renderMarkdown("No active agents to wait for.\n")
 	}
-	return awaitAndReport(ctx, agentGetterFor(c), ids, *timeout, *interval, true)
+	return awaitAndReport(ctx, agentGetterFor(c), ids, false, *timeout, *interval, true)
 }
 
 func validateWaitFlags(timeout, interval int) int {
@@ -176,10 +181,10 @@ func validateWaitFlags(timeout, interval int) int {
 // awaitAndReport runs the wait and renders the result. Exit code: 0 when every
 // waited agent completed successfully; 1 on error/killed outcomes or timeout.
 // listShape selects the {"agents":[...]} JSON envelope over the single-agent one.
-func awaitAndReport(ctx context.Context, get agentGetter, ids []string, timeoutSecs, intervalSecs int, listShape bool) int {
+func awaitAndReport(ctx context.Context, get agentGetter, ids []string, anyDone bool, timeoutSecs, intervalSecs int, listShape bool) int {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	snaps, waited, timedOut, err := waitForAgents(ctx, get, ids,
+	snaps, waited, timedOut, err := waitForAgents(ctx, get, ids, anyDone,
 		time.Duration(timeoutSecs)*time.Second, time.Duration(intervalSecs)*time.Second)
 	if err != nil {
 		return die(err)
@@ -190,9 +195,16 @@ func awaitAndReport(ctx context.Context, get agentGetter, ids []string, timeoutS
 	}
 	completed := 0
 	for _, a := range snaps {
-		if a.State == "complete" {
+		switch {
+		case a.State == "complete":
 			completed++
-		} else {
+		case terminalAgentState(a.State):
+			// error/killed is a failure regardless of the wait mode.
+			code = 1
+		case !anyDone:
+			// Still running while we were waiting for all of them: only
+			// reachable on timeout. With --any, unsettled peers are expected
+			// and must not turn a successful wait into a failure.
 			code = 1
 		}
 	}

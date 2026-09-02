@@ -27,8 +27,7 @@ func cmdWorkflows(ctx context.Context, verb string, args []string) int {
 	case "discover":
 		return runWorkflowDiscover(ctx, args)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown workflows verb: %q\nverbs: list create remove discover\n", verb)
-		return 2
+		return nounHelp("workflows", verb)
 	}
 }
 

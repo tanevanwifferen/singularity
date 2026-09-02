@@ -323,31 +323,49 @@ func mapError(code, msg string) error {
 	}
 	switch code {
 	case api.ErrCodeMRAlreadyExists:
-		return fmt.Errorf("%s: %w", msg, service.ErrMRAlreadyExists)
+		return sentinelErr{msg, service.ErrMRAlreadyExists}
 	case api.ErrCodeNotFound:
-		return fmt.Errorf("%s: %w", msg, service.ErrNotFound)
+		return sentinelErr{msg, service.ErrNotFound}
 	case api.ErrCodeConflict:
-		return fmt.Errorf("%s: %w", msg, service.ErrConflict)
+		return sentinelErr{msg, service.ErrConflict}
 	case api.ErrCodeAgentLimit:
-		return fmt.Errorf("%s: %w", msg, service.ErrAgentLimit)
+		return sentinelErr{msg, service.ErrAgentLimit}
 	case api.ErrCodeNoForge:
-		return fmt.Errorf("%s: %w", msg, service.ErrNoForge)
+		return sentinelErr{msg, service.ErrNoForge}
 	case api.ErrCodeRebaseInProgress:
-		return fmt.Errorf("%s: %w", msg, service.ErrRebaseInProgress)
+		return sentinelErr{msg, service.ErrRebaseInProgress}
 	case api.ErrCodeNoRebaseInProgress:
-		return fmt.Errorf("%s: %w", msg, service.ErrNoRebaseInProgress)
+		return sentinelErr{msg, service.ErrNoRebaseInProgress}
 	case api.ErrCodePermissionDenied:
-		return fmt.Errorf("%s: %w", msg, service.ErrPermissionDenied)
+		return sentinelErr{msg, service.ErrPermissionDenied}
 	case api.ErrCodeUnavailable:
-		return fmt.Errorf("%s: %w", msg, service.ErrUnavailable)
+		return sentinelErr{msg, service.ErrUnavailable}
 	case api.ErrCodeCanceled:
-		return fmt.Errorf("%s: %w", msg, service.ErrCanceled)
+		return sentinelErr{msg, service.ErrCanceled}
 	}
 	if msg == "" {
 		return errors.New("unknown error")
 	}
 	return errors.New(msg)
 }
+
+// sentinelErr carries the server's human-readable message while unwrapping
+// to the matching service sentinel. Unlike fmt.Errorf("%s: %w", msg, sent),
+// it never duplicates the sentinel text when the message already is (or
+// starts with) the sentinel's own wording.
+type sentinelErr struct {
+	msg      string
+	sentinel error
+}
+
+func (e sentinelErr) Error() string {
+	if e.msg == "" {
+		return e.sentinel.Error()
+	}
+	return e.msg
+}
+
+func (e sentinelErr) Unwrap() error { return e.sentinel }
 
 // post is a tiny helper for the common-case POST + decode pattern. result
 // may be nil for endpoints that don't return data.

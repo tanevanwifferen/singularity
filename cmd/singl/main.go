@@ -107,7 +107,7 @@ Commands:
   branches   list | checkout | create | delete | head | compare | merge
   repos      info | open | find
   diff       workdir | branch | file | staged | unstaged | merge-base | all-repos
-  commit     suggest | generate | files | diff | file-diff | cherry-pick | reset | amend
+  commit     suggest | generate | stage | create | files | diff | file-diff | cherry-pick | reset | amend
   mr         title | desc | create | cli
   rebase     plan | status | continue | skip | abort | onto-main | todo | context
   stash      list | get | create | apply | pop | drop | clear | list-all | all | apply-all

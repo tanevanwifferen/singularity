@@ -35,6 +35,24 @@ type CommitAmendRequest struct {
 	Message  string `json:"message"`
 }
 
+// CommitStageRequest is the body for POST /api/commit/stage.
+type CommitStageRequest struct {
+	RepoPath string   `json:"repo_path"`
+	Files    []string `json:"files,omitempty"`
+	All      bool     `json:"all,omitempty"`
+}
+
+// CommitCreateRequest is the body for POST /api/commit/create.
+type CommitCreateRequest struct {
+	RepoPath string `json:"repo_path"`
+	Message  string `json:"message"`
+}
+
+// CommitCreateResponse is the body for POST /api/commit/create.
+type CommitCreateResponse struct {
+	Hash string `json:"hash"`
+}
+
 // CommitFilesResponse is the body for GET /api/commit/files.
 type CommitFilesResponse struct {
 	Files []FileChange `json:"files"`

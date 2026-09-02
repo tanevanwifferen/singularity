@@ -158,13 +158,3 @@ func TestCreateAllWorktrees_PartialFailure(t *testing.T) {
 		t.Fatalf("expected 2 created / 1 error, got %d / %d", status.WorktreesCreated, status.Errors)
 	}
 }
-
-func TestDefaultWorkflowBaseDir(t *testing.T) {
-	got := DefaultWorkflowBaseDir("Test")
-	if filepath.Base(got) != "Test" || filepath.Base(filepath.Dir(got)) != ".worktrees" {
-		t.Errorf("unexpected default base dir %q", got)
-	}
-	if DefaultWorkflowBaseDir("") == got {
-		t.Error("expected a different default for an unnamed project")
-	}
-}

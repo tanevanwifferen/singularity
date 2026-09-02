@@ -14,6 +14,10 @@ func cmdCommit(ctx context.Context, verb string, args []string) int {
 		return runCommitSuggest(ctx, args)
 	case "generate":
 		return runCommitGenerate(ctx, args)
+	case "stage":
+		return runCommitStage(ctx, args)
+	case "create":
+		return runCommitCreate(ctx, args)
 	case "files":
 		return runCommitFiles(ctx, args)
 	case "diff":
@@ -27,16 +31,82 @@ func cmdCommit(ctx context.Context, verb string, args []string) int {
 	case "amend":
 		return runCommitAmend(ctx, args)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown commit verb: %q\nverbs: suggest generate files diff file-diff cherry-pick reset amend\n", verb)
+		return nounHelp("commit", verb)
+	}
+}
+
+// runCommitStage stages files into the index: `commit stage --repo r
+// --file a --file b` or `commit stage --repo r --all`.
+func runCommitStage(ctx context.Context, args []string) int {
+	fs := flag.NewFlagSet("commit-stage", flag.ContinueOnError)
+	repo := fs.String("repo", "", "repo path")
+	var files idListFlag
+	fs.Var(&files, "file", "file path to stage (repeatable, or comma-separated)")
+	all := fs.Bool("all", false, "stage all working-tree changes (git add -A)")
+	if code, done := parseArgs(fs, args); done {
+		return code
+	}
+	repoPath := repoArg(*repo)
+	if repoPath == "" {
+		fmt.Fprintln(os.Stderr, "error: --repo is required (or set --repo globally)")
 		return 2
 	}
+	if len(files) == 0 && !*all {
+		fmt.Fprintln(os.Stderr, "error: pass at least one --file, or --all")
+		return 2
+	}
+	c, err := newClient()
+	if err != nil {
+		return die(err)
+	}
+	tctx, cancel := withTimeout(ctx)
+	defer cancel()
+	if err := c.CommitStage(tctx, repoPath, files, *all); err != nil {
+		return die(err)
+	}
+	if globals.json {
+		return printJSON(map[string]any{"status": "staged", "files": []string(files), "all": *all})
+	}
+	if *all {
+		return renderMarkdown("Staged all changes.\n")
+	}
+	return renderMarkdown(fmt.Sprintf("Staged %d file(s).\n", len(files)))
+}
+
+// runCommitCreate commits the staged changes with the given message.
+func runCommitCreate(ctx context.Context, args []string) int {
+	fs := flag.NewFlagSet("commit-create", flag.ContinueOnError)
+	repo := fs.String("repo", "", "repo path")
+	message := fs.String("message", "", "commit message (required)")
+	if code, done := parseArgs(fs, args); done {
+		return code
+	}
+	repoPath := repoArg(*repo)
+	if repoPath == "" || *message == "" {
+		fmt.Fprintln(os.Stderr, "error: --repo and --message are required")
+		return 2
+	}
+	c, err := newClient()
+	if err != nil {
+		return die(err)
+	}
+	tctx, cancel := withTimeout(ctx)
+	defer cancel()
+	hash, err := c.CommitCreate(tctx, repoPath, *message)
+	if err != nil {
+		return die(err)
+	}
+	if globals.json {
+		return printJSON(map[string]string{"status": "committed", "hash": hash})
+	}
+	return renderMarkdown(fmt.Sprintf("Commit created: `%s`\n", hash))
 }
 
 func runCommitSuggest(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("commit-suggest", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -62,8 +132,8 @@ func runCommitSuggest(ctx context.Context, args []string) int {
 func runCommitGenerate(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("commit-generate", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -109,8 +179,8 @@ func runCommitFiles(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("commit-files", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
 	hash := fs.String("hash", "", "commit hash (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *hash == "" {
@@ -164,8 +234,8 @@ func runCommitDiff(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("commit-diff", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
 	hash := fs.String("hash", "", "commit hash (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *hash == "" {
@@ -196,8 +266,8 @@ func runCommitFileDiff(ctx context.Context, args []string) int {
 	repo := fs.String("repo", "", "repo path")
 	hash := fs.String("hash", "", "commit hash (required)")
 	file := fs.String("file", "", "file path (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *hash == "" || *file == "" {
@@ -227,8 +297,8 @@ func runCommitCherryPick(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("commit-cherry-pick", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
 	hash := fs.String("hash", "", "commit hash (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *hash == "" {
@@ -255,8 +325,8 @@ func runCommitReset(ctx context.Context, args []string) int {
 	repo := fs.String("repo", "", "repo path")
 	hash := fs.String("hash", "", "commit hash (required)")
 	mode := fs.String("mode", "mixed", "reset mode: soft|mixed|hard")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *hash == "" {
@@ -282,8 +352,8 @@ func runCommitAmend(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("commit-amend", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
 	message := fs.String("message", "", "new commit message (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *message == "" {

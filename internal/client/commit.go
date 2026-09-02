@@ -59,6 +59,20 @@ func (c *Client) CommitAmend(ctx context.Context, repoPath, message string) erro
 	return c.post(ctx, "/api/commit/amend", api.CommitAmendRequest{RepoPath: repoPath, Message: message}, nil)
 }
 
+// CommitStage calls Commit.Stage.
+func (c *Client) CommitStage(ctx context.Context, repoPath string, files []string, all bool) error {
+	return c.post(ctx, "/api/commit/stage", api.CommitStageRequest{RepoPath: repoPath, Files: files, All: all}, nil)
+}
+
+// CommitCreate calls Commit.Create.
+func (c *Client) CommitCreate(ctx context.Context, repoPath, message string) (string, error) {
+	var resp api.CommitCreateResponse
+	if err := c.post(ctx, "/api/commit/create", api.CommitCreateRequest{RepoPath: repoPath, Message: message}, &resp); err != nil {
+		return "", err
+	}
+	return resp.Hash, nil
+}
+
 // CommitGenerateMessage calls Commit.GenerateMessage.
 func (c *Client) CommitGenerateMessage(ctx context.Context, repoPath string) (*api.CommitMessage, error) {
 	var msg api.CommitMessage

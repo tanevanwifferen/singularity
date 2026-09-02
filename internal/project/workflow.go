@@ -111,19 +111,45 @@ func sanitizeBranchForPath(branch string) string {
 	return strings.ReplaceAll(branch, "/", "-")
 }
 
-// DefaultWorkflowBaseDir returns the default root under which a project's
-// workflow worktrees live: ~/.worktrees/<project>/<branch>/<repo>. Callers that
-// let the user pick a base dir should fall back to this when it is empty, so
-// the layout stays identical between the TUI and the CLI.
+// SlugifyForPath converts a project name/key into a shell-friendly directory
+// name: lowercase, every run of non-alphanumeric characters collapsed to a
+// single '-', leading/trailing dashes trimmed. "PBD Development" → "pbd-development".
+func SlugifyForPath(name string) string {
+	var b strings.Builder
+	dash := false
+	for _, r := range strings.ToLower(name) {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			dash = false
+		default:
+			if !dash && b.Len() > 0 {
+				b.WriteByte('-')
+			}
+			dash = true
+		}
+	}
+	return strings.TrimRight(b.String(), "-")
+}
+
+// DefaultWorkflowBaseDir returns the default base directory for a project's
+// workflow worktrees: ~/.worktrees/<slug>, with the project name slugified so
+// paths never contain spaces or other shell-hostile characters. If a legacy
+// directory named after the raw project name already exists (created before
+// slugging), it is reused so existing workflows keep resolving.
 func DefaultWorkflowBaseDir(projectName string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		home = os.TempDir()
+		home = "/tmp"
 	}
-	if projectName == "" {
-		return filepath.Join(home, ".worktrees")
+	slugDir := filepath.Join(home, ".worktrees", SlugifyForPath(projectName))
+	legacyDir := filepath.Join(home, ".worktrees", projectName)
+	if legacyDir != slugDir {
+		if st, err := os.Stat(legacyDir); err == nil && st.IsDir() {
+			return legacyDir
+		}
 	}
-	return filepath.Join(home, ".worktrees", projectName)
+	return slugDir
 }
 
 // NewFeatureWorkflow creates a workflow that tracks a feature branch across all repos in a project

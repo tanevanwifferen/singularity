@@ -9,7 +9,6 @@ import (
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/clipboard"
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
 	"gitlab.com/tanevanwifferen1/singularity/internal/config"
-	"gitlab.com/tanevanwifferen1/singularity/internal/project"
 	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
@@ -123,11 +122,10 @@ func NewWorkflowsView(proj *service.Project) *WorkflowsView {
 	return v
 }
 
-// defaultWorkflowBaseDir returns ~/.worktrees/<projectName>/. Delegates to the
-// project package so the TUI and `singl project workflows create` never drift
-// into two different worktree layouts.
+// defaultWorkflowBaseDir returns the default worktree base dir for the
+// project: ~/.worktrees/<slug>/ (or the legacy raw-name dir when it exists).
 func defaultWorkflowBaseDir(projectName string) string {
-	return project.DefaultWorkflowBaseDir(projectName)
+	return service.DefaultWorkflowBaseDir(projectName)
 }
 
 // HasActiveWorkflow returns true if any feature workflows exist.

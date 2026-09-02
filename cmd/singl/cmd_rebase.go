@@ -30,8 +30,7 @@ func cmdRebase(ctx context.Context, verb string, args []string) int {
 	case "context":
 		return runRebaseContext(ctx, args)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown rebase verb: %q\nverbs: plan status continue skip abort onto-main todo context\n", verb)
-		return 2
+		return nounHelp("rebase", verb)
 	}
 }
 
@@ -40,8 +39,8 @@ func runRebasePlan(ctx context.Context, args []string) int {
 	repo := fs.String("repo", "", "repo path")
 	base := fs.String("base", "", "base branch/ref (required)")
 	current := fs.String("current", "", "current branch/ref (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *base == "" || *current == "" {
@@ -84,8 +83,8 @@ func runRebasePlan(ctx context.Context, args []string) int {
 func runRebaseStatus(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("rebase-status", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -114,8 +113,8 @@ func runRebaseStatus(ctx context.Context, args []string) int {
 func runRebaseContinue(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("rebase-continue", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -140,8 +139,8 @@ func runRebaseContinue(ctx context.Context, args []string) int {
 func runRebaseSkip(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("rebase-skip", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -166,8 +165,8 @@ func runRebaseSkip(ctx context.Context, args []string) int {
 func runRebaseAbort(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("rebase-abort", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -192,8 +191,8 @@ func runRebaseAbort(ctx context.Context, args []string) int {
 func runRebaseOntoMain(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("rebase-onto-main", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {
@@ -222,8 +221,8 @@ func runRebaseTodo(ctx context.Context, args []string) int {
 	repo := fs.String("repo", "", "repo path")
 	base := fs.String("base", "", "base branch/ref (required)")
 	current := fs.String("current", "", "current branch/ref (required)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *base == "" || *current == "" {
@@ -260,8 +259,8 @@ func runRebaseContext(ctx context.Context, args []string) int {
 	repo := fs.String("repo", "", "repo path")
 	main := fs.String("main", "", "main/target branch (required)")
 	conflicts := fs.String("conflicts", "", "comma-separated conflict file paths")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" || *main == "" {

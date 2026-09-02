@@ -11,11 +11,11 @@ import (
 
 // UpstreamStatus holds the sync status of the current branch relative to its upstream.
 type UpstreamStatus struct {
-	Branch   string
-	Upstream string
-	Ahead    int
-	Behind   int
-	IsDirty  bool
+	Branch   string `json:"branch"`
+	Upstream string `json:"upstream"`
+	Ahead    int    `json:"ahead"`
+	Behind   int    `json:"behind"`
+	IsDirty  bool   `json:"is_dirty"`
 }
 
 // GetUpstreamStatus returns the current branch's relationship to its upstream.

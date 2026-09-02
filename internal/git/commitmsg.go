@@ -74,7 +74,9 @@ func GetUnstagedDiff(path string) (string, error) {
 	return output.String(), nil
 }
 
-// GenerateCommitMessage creates a commit message from the staged diff.
+// GenerateCommitMessage creates a commit message from the staged diff,
+// falling back to the unstaged diff when nothing is staged yet (so a message
+// can be suggested before the caller decides what to stage).
 // Uses a cheap one-shot prompt on the configured backend (not a full
 // interactive session). Results are cached to avoid redundant API calls
 // for the same diff.
@@ -85,7 +87,14 @@ func GenerateCommitMessage(path string) (*CommitMessage, error) {
 	}
 
 	if diff == "" {
-		return nil, fmt.Errorf("no staged changes to commit")
+		diff, err = GetUnstagedDiff(path)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if diff == "" {
+		return nil, fmt.Errorf("no staged or unstaged changes to commit")
 	}
 
 	// Check cache first

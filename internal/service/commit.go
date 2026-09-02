@@ -31,6 +31,14 @@ type CommitService interface {
 	// AmendMessage rewrites the message of the most recent commit.
 	AmendMessage(ctx context.Context, repoPath, message string) error
 
+	// Stage stages the given paths into the index; with all set every
+	// working-tree change is staged and paths is ignored.
+	Stage(ctx context.Context, repoPath string, paths []string, all bool) error
+
+	// Create commits the staged changes with the given message and
+	// returns the new commit hash.
+	Create(ctx context.Context, repoPath, message string) (string, error)
+
 	// GenerateMessage is the structured variant of SuggestMessage that
 	// also returns the parsed type/scope/subject/body. Mirrors the
 	// existing /api/commit/message endpoint.

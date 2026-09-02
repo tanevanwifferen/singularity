@@ -16,8 +16,7 @@ func cmdForge(ctx context.Context, verb string, args []string) int {
 	case "provider":
 		return runForgeProvider(ctx, args)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown forge verb: %q\nverbs: info auth provider\n", verb)
-		return 2
+		return nounHelp("forge", verb)
 	}
 }
 
@@ -91,8 +90,8 @@ func runForgeAuth(ctx context.Context, _ []string) int {
 func runForgeProvider(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("forge-provider", flag.ContinueOnError)
 	repo := fs.String("repo", "", "repo path")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	repoPath := repoArg(*repo)
 	if repoPath == "" {

@@ -44,17 +44,18 @@ func TestParseAgentState(t *testing.T) {
 func TestDtoToSnapshot(t *testing.T) {
 	now := time.Now().UTC().Round(time.Millisecond)
 	later := now.Add(time.Second)
+	exitCode := 3
 	dto := api.AgentSnapshotDTO{
 		ID:           "agent-123",
 		WorkDir:      "/tmp/repo",
 		Task:         "fix the bug",
 		Summary:      "fixes the bug",
-		State:        "running",
+		State:        "error",
 		CreatedAt:    now,
 		StartedAt:    &now,
 		EndedAt:      &later,
-		ExitCode:     0,
-		Error:        "",
+		ExitCode:     &exitCode,
+		Error:        "boom",
 		TotalCostUSD: 0.42,
 		MergeResult:  "merged",
 	}
@@ -62,11 +63,11 @@ func TestDtoToSnapshot(t *testing.T) {
 	snap := dtoToSnapshot(dto)
 	if snap.ID != dto.ID || snap.WorkDir != dto.WorkDir || snap.Task != dto.Task ||
 		snap.Summary != dto.Summary || snap.MergeResult != dto.MergeResult ||
-		snap.TotalCostUSD != dto.TotalCostUSD || snap.ExitCode != dto.ExitCode {
+		snap.TotalCostUSD != dto.TotalCostUSD || snap.ExitCode != exitCode {
 		t.Errorf("scalar field mismatch: %+v vs %+v", snap, dto)
 	}
-	if snap.State != engine.AgentRunning {
-		t.Errorf("State = %v, want %v", snap.State, engine.AgentRunning)
+	if snap.State != engine.AgentError {
+		t.Errorf("State = %v, want %v", snap.State, engine.AgentError)
 	}
 	if !snap.CreatedAt.Equal(dto.CreatedAt) {
 		t.Errorf("CreatedAt mismatch")

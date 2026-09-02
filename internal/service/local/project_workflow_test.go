@@ -124,7 +124,9 @@ func TestCreateWorkflowDefaultsBaseDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
-	want := filepath.Join(home, ".worktrees", "Alpha")
+	// The default base dir slugifies the project name (see
+	// project.DefaultWorkflowBaseDir), so paths never contain spaces or caps.
+	want := filepath.Join(home, ".worktrees", "alpha")
 	if wf.BaseDir != want {
 		t.Errorf("base dir %q, want %q", wf.BaseDir, want)
 	}

@@ -22,25 +22,29 @@ type (
 // and inside the agent_started / agent_complete WS payloads when a full
 // snapshot is broadcast.
 type AgentSnapshotDTO struct {
-	ID           string     `json:"id"`
-	WorkDir      string     `json:"work_dir"`
-	Task         string     `json:"task"`
-	Summary      string     `json:"summary"`
-	State        string     `json:"state"`
-	CreatedAt    time.Time  `json:"created_at"`
-	StartedAt    *time.Time `json:"started_at,omitempty"`
-	EndedAt      *time.Time `json:"ended_at,omitempty"`
-	ExitCode     int        `json:"exit_code"`
-	Error        string     `json:"error,omitempty"`
-	TotalCostUSD float64    `json:"total_cost_usd,omitempty"`
-	MergeResult  string     `json:"merge_result,omitempty"`
+	ID        string     `json:"id"`
+	WorkDir   string     `json:"work_dir"`
+	Task      string     `json:"task"`
+	Summary   string     `json:"summary"`
+	State     string     `json:"state"`
+	CreatedAt time.Time  `json:"created_at"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
+	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	// ExitCode is only set once the agent reached a terminal state
+	// (complete/error/killed); nil (omitted) while it is still running.
+	ExitCode     *int    `json:"exit_code,omitempty"`
+	Error        string  `json:"error,omitempty"`
+	TotalCostUSD float64 `json:"total_cost_usd,omitempty"`
+	MergeResult  string  `json:"merge_result,omitempty"`
 }
 
 // AgentSnapshotToDTO projects an engine.AgentSnapshot into its wire shape.
 // The state enum is rendered via its String() form so JSON consumers see
-// "running" rather than the integer ordinal.
+// "running" rather than the integer ordinal. ExitCode is omitted for
+// non-terminal states: the engine's zero value would otherwise read as a
+// successful exit while the agent is still running.
 func AgentSnapshotToDTO(s AgentSnapshot) AgentSnapshotDTO {
-	return AgentSnapshotDTO{
+	dto := AgentSnapshotDTO{
 		ID:           s.ID,
 		WorkDir:      s.WorkDir,
 		Task:         s.Task,
@@ -49,11 +53,15 @@ func AgentSnapshotToDTO(s AgentSnapshot) AgentSnapshotDTO {
 		CreatedAt:    s.CreatedAt,
 		StartedAt:    s.StartedAt,
 		EndedAt:      s.EndedAt,
-		ExitCode:     s.ExitCode,
 		Error:        s.Error,
 		TotalCostUSD: s.TotalCostUSD,
 		MergeResult:  s.MergeResult,
 	}
+	if s.State.Terminal() {
+		code := s.ExitCode
+		dto.ExitCode = &code
+	}
+	return dto
 }
 
 // AgentStartRequest is the body for POST /api/agent/start.

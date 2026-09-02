@@ -125,6 +125,49 @@ func (s *Server) handleCommitAmend(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true})
 }
 
+// handleCommitStage handles POST /api/commit/stage.
+func (s *Server) handleCommitStage(w http.ResponseWriter, r *http.Request) {
+	if !s.requireMethod(w, r, http.MethodPost) || !s.requireServices(w) {
+		return
+	}
+	var req api.CommitStageRequest
+	if err := s.parseJSON(r, &req); err != nil {
+		s.writeCoded(w, api.ErrCodeBadRequest, "invalid request")
+		return
+	}
+	if len(req.Files) == 0 && !req.All {
+		s.writeCoded(w, api.ErrCodeBadRequest, "files or all required")
+		return
+	}
+	if err := s.Services.Commit.Stage(r.Context(), s.resolveRepoPath(req.RepoPath), req.Files, req.All); err != nil {
+		s.writeServiceErr(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true})
+}
+
+// handleCommitCreate handles POST /api/commit/create.
+func (s *Server) handleCommitCreate(w http.ResponseWriter, r *http.Request) {
+	if !s.requireMethod(w, r, http.MethodPost) || !s.requireServices(w) {
+		return
+	}
+	var req api.CommitCreateRequest
+	if err := s.parseJSON(r, &req); err != nil {
+		s.writeCoded(w, api.ErrCodeBadRequest, "invalid request")
+		return
+	}
+	if req.Message == "" {
+		s.writeCoded(w, api.ErrCodeBadRequest, "message required")
+		return
+	}
+	hash, err := s.Services.Commit.Create(r.Context(), s.resolveRepoPath(req.RepoPath), req.Message)
+	if err != nil {
+		s.writeServiceErr(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true, Data: api.CommitCreateResponse{Hash: hash}})
+}
+
 // handleCommitMessage handles POST /api/commit/message (legacy path).
 func (s *Server) handleCommitMessage(w http.ResponseWriter, r *http.Request) {
 	if !s.requireMethod(w, r, http.MethodPost) || !s.requireServices(w) {
