@@ -104,7 +104,7 @@ Commands:
   status
   workflows  list | create | remove | discover   (whole project: one worktree per repo)
   agents     list | get | spawn | resume | kill | remove | output | input | wait | wait-all | watch | watch-all | chat | stats
-  branches   list | checkout | create | delete | head | compare
+  branches   list | checkout | create | delete | head | compare | merge
   repos      info | open | find
   diff       workdir | branch | file | staged | unstaged | merge-base | all-repos
   commit     suggest | generate | files | diff | file-diff | cherry-pick | reset | amend

@@ -111,3 +111,15 @@ func (s *localBranchService) CompareByTree(ctx context.Context, repoPath, a, b s
 	}
 	return cmp, nil
 }
+
+// Merge merges the given branch into the current HEAD.
+func (s *localBranchService) Merge(ctx context.Context, repoPath, branch string, opts service.MergeOptions) (*service.MergeResult, error) {
+	if err := checkCtx(ctx); err != nil {
+		return nil, err
+	}
+	result, err := git.Merge(repoPath, branch, opts)
+	if err != nil {
+		return result, wrapErr(err)
+	}
+	return result, nil
+}

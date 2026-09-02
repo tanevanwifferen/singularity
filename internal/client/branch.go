@@ -77,3 +77,20 @@ func (c *Client) BranchCompareByTree(ctx context.Context, repoPath, a, b string)
 	}
 	return &cmp, nil
 }
+
+// BranchMerge calls Branch.Merge.
+func (c *Client) BranchMerge(ctx context.Context, repoPath, branch string, fastForwardOnly, noFastForward, squash bool, message string) (*api.BranchMergeResponse, error) {
+	req := api.BranchMergeRequest{
+		RepoPath:        repoPath,
+		Branch:          branch,
+		FastForwardOnly: fastForwardOnly,
+		NoFastForward:   noFastForward,
+		Squash:          squash,
+		Message:         message,
+	}
+	var resp api.BranchMergeResponse
+	if err := c.post(ctx, "/api/branch/merge", req, &resp); err != nil {
+		return &resp, err
+	}
+	return &resp, nil
+}

@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/api"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 )
 
 // handleBranchList handles GET /api/branch/list?repo_path=.
@@ -167,4 +168,50 @@ func (s *Server) handleBranchCompareTree(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true, Data: cmp})
+}
+
+// handleBranchMerge handles POST /api/branch/merge.
+func (s *Server) handleBranchMerge(w http.ResponseWriter, r *http.Request) {
+	if !s.requireMethod(w, r, http.MethodPost) || !s.requireServices(w) {
+		return
+	}
+	var req api.BranchMergeRequest
+	if err := s.parseJSON(r, &req); err != nil {
+		s.writeCoded(w, api.ErrCodeBadRequest, "invalid request")
+		return
+	}
+	opts := service.MergeOptions{
+		FastForwardOnly: req.FastForwardOnly,
+		NoFastForward:   req.NoFastForward,
+		Squash:          req.Squash,
+		Message:         req.Message,
+	}
+	result, err := s.Services.Branch.Merge(r.Context(), s.resolveRepoPath(req.RepoPath), req.Branch, opts)
+	if err != nil {
+		// For merge conflicts, we still want to return the result with conflict info
+		if result != nil && len(result.Conflicts) > 0 {
+			s.writeJSON(w, http.StatusConflict, api.APIResponse{
+				Success: false,
+				Error:   err.Error(),
+				Data: api.BranchMergeResponse{
+					Success:     result.Success,
+					FastForward: result.FastForward,
+					Conflicts:   result.Conflicts,
+					Message:     result.Message,
+				},
+			})
+			return
+		}
+		s.writeServiceErr(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, api.APIResponse{
+		Success: true,
+		Data: api.BranchMergeResponse{
+			Success:     result.Success,
+			FastForward: result.FastForward,
+			Conflicts:   result.Conflicts,
+			Message:     result.Message,
+		},
+	})
 }
