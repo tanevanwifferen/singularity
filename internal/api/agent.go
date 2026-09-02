@@ -67,6 +67,7 @@ type AgentStartRequest struct {
 	TimeoutSecs  int      `json:"timeout_secs,omitempty"`
 	ContextFiles []string `json:"context_files,omitempty"`
 	SmartRoute   bool     `json:"smart_route,omitempty"`
+	UseWorktree  bool     `json:"use_worktree,omitempty"`
 	Summary      string   `json:"summary,omitempty"`
 	// Backend selects the agent runtime: "claude" or "pi".
 	// Empty means use the daemon's current default.
@@ -84,6 +85,7 @@ type AgentResumeRequest struct {
 	TimeoutSecs  int      `json:"timeout_secs,omitempty"`
 	ContextFiles []string `json:"context_files,omitempty"`
 	SmartRoute   bool     `json:"smart_route,omitempty"`
+	UseWorktree  bool     `json:"use_worktree,omitempty"`
 	Summary      string   `json:"summary,omitempty"`
 	// Backend selects the agent runtime: "claude" or "pi".
 	// Empty means use the daemon's current default.
