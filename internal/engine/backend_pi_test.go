@@ -31,10 +31,10 @@ func TestPiResolveModel(t *testing.T) {
 		model string
 		want  string
 	}{
-		{"sonnet alias", "sonnet", "anthropic/claude-sonnet-4-5"},
-		{"opus alias", "opus", "anthropic/claude-opus-4-5"},
+		{"sonnet alias", "sonnet", "anthropic/claude-sonnet-5"},
+		{"opus alias", "opus", "anthropic/claude-opus-5"},
 		{"haiku alias", "haiku", "anthropic/claude-haiku-4-5"},
-		{"alias is case-insensitive", "Sonnet", "anthropic/claude-sonnet-4-5"},
+		{"alias is case-insensitive", "Sonnet", "anthropic/claude-sonnet-5"},
 		{"qualified id passes through", "anthropic/claude-opus-4-8", "anthropic/claude-opus-4-8"},
 		{"other provider passes through", "openai/gpt-5", "openai/gpt-5"},
 		{"unknown short name passes through", "gpt-nonsense", "gpt-nonsense"},
@@ -64,7 +64,7 @@ func TestPiResolveModelUsesConfiguredTable(t *testing.T) {
 		t.Errorf("resolveModel(sonnet) = %q, want the configured override", got)
 	}
 	// Aliases the file omits still fall back to the compiled-in table.
-	if got := b.resolveModel("opus"); got != "anthropic/claude-opus-4-5" {
+	if got := b.resolveModel("opus"); got != "anthropic/claude-opus-5" {
 		t.Errorf("resolveModel(opus) = %q, want the default fallback", got)
 	}
 }
@@ -121,7 +121,7 @@ func TestPiArgs(t *testing.T) {
 		{
 			name:     "model alias is resolved",
 			model:    "opus",
-			wantArgs: []string{"--mode", "rpc", "--no-session", "--model", "anthropic/claude-opus-4-5"},
+			wantArgs: []string{"--mode", "rpc", "--no-session", "--model", "anthropic/claude-opus-5"},
 		},
 		{
 			name:     "effort never becomes a launch flag",
@@ -157,7 +157,7 @@ func TestPiArgs(t *testing.T) {
 			maxTurns:     20,
 			allowedTools: []string{"Read", "Task"},
 			wantArgs: []string{"--mode", "rpc", "--no-session",
-				"--model", "anthropic/claude-sonnet-4-5", "--tools", "read"},
+				"--model", "anthropic/claude-sonnet-5", "--tools", "read"},
 			wantWarnings: []string{"max_turns=20", "Task"},
 		},
 	}
@@ -336,7 +336,7 @@ func TestPiOneShotCommandUsesModelTable(t *testing.T) {
 		oneShotModel string
 		want         string
 	}{
-		{"table default", "", "anthropic/claude-haiku-4-5"},
+		{"table default", "", "anthropic/claude-haiku-4-5-20251001"},
 		{"explicit override", "openai/gpt-5-mini", "openai/gpt-5-mini"},
 	}
 
