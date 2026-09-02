@@ -228,6 +228,7 @@ func runAgentsSpawn(ctx context.Context, args []string) int {
 	smartRoute := smartRouteFlags(fs)
 	maxTurns := fs.Int("max-turns", 0, "max agent turns (0 = unlimited)")
 	timeout := fs.Int("timeout", 0, "timeout in seconds (0 = no timeout)")
+	useWorktree := fs.Bool("use-worktree", false, "run agent in isolated git worktree")
 	backend := fs.String("backend", "", "agent backend: claude or pi (default: daemon default)")
 	if code, done := parseArgs(fs, args); done {
 		return code
@@ -241,6 +242,7 @@ func runAgentsSpawn(ctx context.Context, args []string) int {
 		Effort:      *effort,
 		SmartRoute:  smartRoute(*model, *effort),
 		MaxTurns:    *maxTurns,
+		UseWorktree: *useWorktree,
 		BackendName: *backend,
 	}
 	if *timeout > 0 {
@@ -374,6 +376,7 @@ func runAgentsResume(ctx context.Context, args []string) int {
 	smartRoute := smartRouteFlags(fs)
 	maxTurns := fs.Int("max-turns", 0, "max agent turns")
 	timeout := fs.Int("timeout", 0, "timeout in seconds")
+	useWorktree := fs.Bool("use-worktree", false, "run agent in isolated git worktree")
 	backend := fs.String("backend", "", "agent backend: claude or pi (default: daemon default)")
 	if code, done := parseArgs(fs, args); done {
 		return code
@@ -387,6 +390,7 @@ func runAgentsResume(ctx context.Context, args []string) int {
 		Effort:      *effort,
 		SmartRoute:  smartRoute(*model, *effort),
 		MaxTurns:    *maxTurns,
+		UseWorktree: *useWorktree,
 		BackendName: *backend,
 	}
 	if *timeout > 0 {

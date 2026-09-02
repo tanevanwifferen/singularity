@@ -295,6 +295,7 @@ func agentOptionsFromStart(req api.AgentStartRequest) service.AgentOptions {
 		MaxTurns:     req.MaxTurns,
 		ContextFiles: req.ContextFiles,
 		SmartRoute:   req.SmartRoute,
+		UseWorktree:  req.UseWorktree,
 		Summary:      req.Summary,
 		BackendName:  req.Backend,
 	}
@@ -312,6 +313,7 @@ func agentOptionsFromResume(req api.AgentResumeRequest) service.AgentOptions {
 		MaxTurns:     req.MaxTurns,
 		ContextFiles: req.ContextFiles,
 		SmartRoute:   req.SmartRoute,
+		UseWorktree:  req.UseWorktree,
 		Summary:      req.Summary,
 		BackendName:  req.Backend,
 	}
