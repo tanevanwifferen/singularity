@@ -275,13 +275,17 @@ var lightTheme = Theme{
 // CurrentTheme holds the currently active theme
 var CurrentTheme = darkTheme
 
+// adaptiveMode tracks whether we're using adaptive terminal colors
+var adaptiveMode = false
+
 // GetTheme returns the current theme
 func GetTheme() Theme {
 	return CurrentTheme
 }
 
-// SetTheme sets the current theme
+// SetTheme sets the current theme to a static dark or light theme
 func SetTheme(t ThemeType) {
+	adaptiveMode = false
 	switch t {
 	case DarkThemeType:
 		CurrentTheme = darkTheme
@@ -290,11 +294,34 @@ func SetTheme(t ThemeType) {
 	}
 }
 
-// ToggleTheme toggles between dark and light themes
+// ToggleTheme toggles between dark and light themes.
+// In adaptive mode, it rebuilds the adaptive theme for the opposite type.
+// In static mode, it switches between the hardcoded themes.
 func ToggleTheme() {
-	if CurrentTheme.Type == DarkThemeType {
-		CurrentTheme = lightTheme
+	if adaptiveMode {
+		if CurrentTheme.Type == DarkThemeType {
+			CurrentTheme = BuildAdaptiveTheme(LightThemeType)
+		} else {
+			CurrentTheme = BuildAdaptiveTheme(DarkThemeType)
+		}
 	} else {
-		CurrentTheme = darkTheme
+		if CurrentTheme.Type == DarkThemeType {
+			CurrentTheme = lightTheme
+		} else {
+			CurrentTheme = darkTheme
+		}
+	}
+}
+
+// IsAdaptiveMode returns true if using adaptive terminal colors
+func IsAdaptiveMode() bool {
+	return adaptiveMode
+}
+
+// SetAdaptiveMode enables or disables adaptive terminal color mode
+func SetAdaptiveMode(enabled bool) {
+	adaptiveMode = enabled
+	if enabled {
+		UseAdaptiveTheme()
 	}
 }

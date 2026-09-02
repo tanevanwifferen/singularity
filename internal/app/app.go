@@ -668,7 +668,16 @@ func (m Model) handleAppKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Toggle theme
 			theme.ToggleTheme()
 			m.layout.rebuildStyles()
-			m.statusMsg = "Theme toggled"
+			th := theme.GetTheme()
+			mode := "dark"
+			if th.Type == theme.LightThemeType {
+				mode = "light"
+			}
+			if theme.IsAdaptiveMode() {
+				m.statusMsg = fmt.Sprintf("Theme: %s (adaptive)", mode)
+			} else {
+				m.statusMsg = fmt.Sprintf("Theme: %s", mode)
+			}
 			return m, nil
 		}
 	}
