@@ -378,6 +378,11 @@ func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cm
 	case "D":
 		wf := v.currentWorkflow()
 		if wf != nil {
+			// Ahead/behind counts are cached and only updated on explicit
+			// refresh events; re-check live state before trusting them,
+			// otherwise a branch merged since the last refresh is wrongly
+			// reported as unmerged.
+			wf.RefreshBranchStatuses()
 			var reasons []string
 			if wf.HasOpenMRs() {
 				reasons = append(reasons, "open MRs")
