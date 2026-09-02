@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -766,4 +767,161 @@ func LoadWorkflows(projectKey string, proj *Project) ([]*FeatureWorkflow, error)
 	}
 
 	return workflows, nil
+}
+
+// RepoMergeStatus describes whether a single repo of the workflow can have its
+// feature branch merged into its local default branch, and why not if it can't.
+type RepoMergeStatus struct {
+	RepoName      string `json:"repo_name"`
+	DefaultBranch string `json:"default_branch"`
+	Ahead         int    `json:"ahead"`
+	Eligible      bool   `json:"eligible"`
+	Reason        string `json:"reason,omitempty"`
+}
+
+// RepoMergeResult is the outcome of merging one repo's feature branch into its
+// local default branch.
+type RepoMergeResult struct {
+	RepoName    string   `json:"repo_name"`
+	Merged      bool     `json:"merged"`
+	FastForward bool     `json:"fast_forward"`
+	Skipped     bool     `json:"skipped"`
+	Reason      string   `json:"reason,omitempty"`
+	Conflicts   []string `json:"conflicts,omitempty"`
+}
+
+// repoSnapshot returns a stable, name-sorted copy of the repo pointers so the
+// merge helpers can work without holding fw.mu across git calls.
+func (fw *FeatureWorkflow) repoSnapshot() []*WorkflowRepo {
+	fw.mu.RLock()
+	defer fw.mu.RUnlock()
+	names := make([]string, 0, len(fw.Repos))
+	for name := range fw.Repos {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	repos := make([]*WorkflowRepo, 0, len(names))
+	for _, name := range names {
+		repos = append(repos, fw.Repos[name])
+	}
+	return repos
+}
+
+// mergeStatusFor computes merge eligibility for one repo. The merge happens in
+// the repo's original checkout (OriginalPath), which must already be on the
+// default branch and clean — we never move someone's HEAD or stash for them.
+func (fw *FeatureWorkflow) mergeStatusFor(wr *WorkflowRepo, branch string) RepoMergeStatus {
+	base := wr.DefaultBranch
+	if base == "" {
+		base = "main"
+	}
+	st := RepoMergeStatus{RepoName: wr.RepoName, DefaultBranch: base}
+
+	if !wr.WorktreeCreated {
+		st.Reason = "no worktree"
+		return st
+	}
+	if !git.BranchExists(wr.OriginalPath, branch) {
+		st.Reason = fmt.Sprintf("branch %s not found", branch)
+		return st
+	}
+	current, err := git.CurrentBranch(wr.OriginalPath)
+	if err != nil {
+		st.Reason = "detached HEAD in main checkout"
+		return st
+	}
+	if current != base {
+		st.Reason = fmt.Sprintf("main checkout is on %s, not %s", current, base)
+		return st
+	}
+	if dirty, err := git.IsDirty(wr.OriginalPath); err != nil {
+		st.Reason = fmt.Sprintf("status check: %v", err)
+		return st
+	} else if dirty {
+		st.Reason = "main checkout has uncommitted changes"
+		return st
+	}
+	ahead, _, err := git.CompareBranchesSimple(wr.OriginalPath, base, branch)
+	if err != nil {
+		st.Reason = fmt.Sprintf("compare: %v", err)
+		return st
+	}
+	st.Ahead = ahead
+	if ahead == 0 {
+		st.Reason = "already merged"
+		return st
+	}
+	st.Eligible = true
+	return st
+}
+
+// MergeStatuses returns per-repo merge eligibility for the workflow branch,
+// sorted by repo name. Used to build the confirmation prompt before merging.
+func (fw *FeatureWorkflow) MergeStatuses() []RepoMergeStatus {
+	branch := fw.BranchName
+	repos := fw.repoSnapshot()
+	statuses := make([]RepoMergeStatus, 0, len(repos))
+	for _, wr := range repos {
+		statuses = append(statuses, fw.mergeStatusFor(wr, branch))
+	}
+	return statuses
+}
+
+// MergeAllToDefault merges the workflow branch into each repo's local default
+// branch, in the repo's original checkout. Repos that aren't eligible (see
+// mergeStatusFor) are skipped with a reason instead of being forced.
+//
+// Runs sequentially so a conflict in one repo surfaces before the next repo is
+// touched, and stops at the first conflict — leaving the conflicted repo in its
+// merging state for the user to resolve (or `git merge --abort`).
+func (fw *FeatureWorkflow) MergeAllToDefault(noFastForward bool) []RepoMergeResult {
+	branch := fw.BranchName
+	repos := fw.repoSnapshot()
+
+	results := make([]RepoMergeResult, 0, len(repos))
+	conflicted := false
+	for _, wr := range repos {
+		if conflicted {
+			results = append(results, RepoMergeResult{
+				RepoName: wr.RepoName, Skipped: true,
+				Reason: "not attempted (earlier repo conflicted)",
+			})
+			continue
+		}
+
+		st := fw.mergeStatusFor(wr, branch)
+		if !st.Eligible {
+			results = append(results, RepoMergeResult{
+				RepoName: wr.RepoName, Skipped: true, Reason: st.Reason,
+			})
+			continue
+		}
+
+		res, err := git.Merge(wr.OriginalPath, branch, git.MergeOptions{
+			NoFastForward: noFastForward,
+		})
+		if err != nil {
+			r := RepoMergeResult{RepoName: wr.RepoName, Reason: err.Error()}
+			if res != nil && len(res.Conflicts) > 0 {
+				r.Conflicts = res.Conflicts
+				r.Reason = "merge conflict"
+				conflicted = true
+			}
+			fw.mu.Lock()
+			wr.Error = fmt.Sprintf("merge: %s", r.Reason)
+			fw.mu.Unlock()
+			results = append(results, r)
+			continue
+		}
+
+		fw.mu.Lock()
+		wr.Error = ""
+		fw.mu.Unlock()
+		results = append(results, RepoMergeResult{
+			RepoName:    wr.RepoName,
+			Merged:      true,
+			FastForward: res != nil && res.FastForward,
+		})
+	}
+	return results
 }

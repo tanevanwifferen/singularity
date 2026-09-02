@@ -240,3 +240,16 @@ func FindRepo(path string) (string, error) {
 	}
 	return "", fmt.Errorf("no git repository found")
 }
+
+// IsDirty reports whether repoPath has uncommitted changes. Exported wrapper
+// around isDirty so callers outside this package (workflow merge preflight)
+// don't have to shell out themselves.
+func IsDirty(path string) (bool, error) {
+	return isDirty(path)
+}
+
+// CurrentBranch returns the checked-out branch name in repoPath. Returns an
+// error for a detached HEAD.
+func CurrentBranch(path string) (string, error) {
+	return getCurrentBranch(path)
+}

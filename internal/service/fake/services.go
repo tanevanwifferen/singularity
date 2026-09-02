@@ -68,6 +68,9 @@ func (branchStub) Compare(context.Context, string, string, string) (*service.Bra
 func (branchStub) CompareByTree(context.Context, string, string, string) (*service.TreeComparison, error) {
 	return nil, unavail()
 }
+func (branchStub) Merge(context.Context, string, string, service.MergeOptions) (*service.MergeResult, error) {
+	return nil, unavail()
+}
 
 // diffStub ---------------------------------------------------------------------
 

@@ -152,6 +152,13 @@ type (
 	// WorkflowRepo is the per-repo slice of a FeatureWorkflow.
 	WorkflowRepo = project.WorkflowRepo
 
+	// RepoMergeStatus reports whether one repo of a workflow can be merged
+	// into its local default branch.
+	RepoMergeStatus = project.RepoMergeStatus
+
+	// RepoMergeResult is the outcome of a local merge for one repo.
+	RepoMergeResult = project.RepoMergeResult
+
 	// WorkflowState enum value (Initializing/Active/PushingAll/CreatingMRs/CleaningUp/Done).
 	WorkflowState = project.WorkflowState
 
