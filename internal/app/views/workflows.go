@@ -98,8 +98,9 @@ type WorkflowsView struct {
 	agentPromptInput components.TextInput
 
 	// Auto-refresh tick for live agent status
-	workflowTicking   bool
-	workflowAgentSnap *service.AgentSnapshot
+	workflowTicking    bool
+	workflowAgentSnap  *service.AgentSnapshot
+	workflowAgentSnaps map[string]*service.AgentSnapshot
 
 	// Jira ticket picker
 	jiraPicker       *JiraPickerState
@@ -1115,7 +1116,7 @@ func (v *WorkflowsView) runningAgentCount() int {
 		if agentID == "" {
 			continue
 		}
-		agent := v.agentGet(agentID)
+		agent := v.workflowAgentSnaps[agentID]
 		if agent == nil {
 			continue
 		}
@@ -1140,8 +1141,28 @@ func (v *WorkflowsView) refreshBranchStatusCmd() tea.Cmd {
 }
 
 func (v *WorkflowsView) refreshWorkflowAgentSnap() {
+	// Refresh the cache for every workflow with an assigned agent so that
+	// runningAgentCount() and renderWorkflowItem() can read from it during
+	// View() instead of making a live (potentially network-bound) service
+	// call on every render — View() runs after every keystroke, so a live
+	// call here would reintroduce the input-lag bug fixed in AgentView.
+	snaps := make(map[string]*service.AgentSnapshot, len(v.workflows))
+	if v.services != nil {
+		for _, wf := range v.workflows {
+			agentID := wf.GetWorkflowAgentID()
+			if agentID == "" {
+				continue
+			}
+			if agent := v.agentGet(agentID); agent != nil {
+				s := (*agent)
+				snaps[agentID] = &s
+			}
+		}
+	}
+	v.workflowAgentSnaps = snaps
+
 	wf := v.currentWorkflow()
-	if wf == nil || v.services == nil {
+	if wf == nil {
 		v.workflowAgentSnap = nil
 		return
 	}
@@ -1150,13 +1171,7 @@ func (v *WorkflowsView) refreshWorkflowAgentSnap() {
 		v.workflowAgentSnap = nil
 		return
 	}
-	agent := v.agentGet(agentID)
-	if agent == nil {
-		v.workflowAgentSnap = nil
-		return
-	}
-	s := (*agent)
-	v.workflowAgentSnap = &s
+	v.workflowAgentSnap = snaps[agentID]
 }
 
 func (v *WorkflowsView) ensureWorkflowTick() tea.Cmd {
@@ -1208,7 +1223,7 @@ func (v *WorkflowsView) renderWorkflowItem(wf *service.FeatureWorkflow, index in
 	// Agent status
 	agentID := wf.GetWorkflowAgentID()
 	if agentID != "" && v.services != nil {
-		agent := v.agentGet(agentID)
+		agent := v.workflowAgentSnaps[agentID]
 		if agent != nil {
 			snap := (*agent)
 			switch snap.State {
