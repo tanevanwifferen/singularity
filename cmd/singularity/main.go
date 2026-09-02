@@ -14,6 +14,7 @@ import (
 	"gitlab.com/tanevanwifferen1/singularity/internal/daemon"
 	"gitlab.com/tanevanwifferen1/singularity/internal/project"
 	"gitlab.com/tanevanwifferen1/singularity/internal/service"
+	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 )
 
 // version is set via ldflags at build time by goreleaser.
@@ -268,6 +269,9 @@ func runTUI(args []string) int {
 	}
 	defer c.Disconnect()
 	fmt.Println("Connected.")
+
+	// Initialize theme from terminal colors (adaptive mode)
+	theme.SetAdaptiveMode(true)
 
 	a := app.New(svc)
 	switch {
