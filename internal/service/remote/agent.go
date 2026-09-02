@@ -136,3 +136,9 @@ func parseAgentState(s string) service.AgentState {
 		return engine.AgentIdle
 	}
 }
+
+// ReloadModelsConfig is a no-op for remote agent service.
+// The daemon owns the models config; clients cannot reload it remotely.
+func (s *remoteAgentService) ReloadModelsConfig() {
+	// no-op: remote clients do not own the models config
+}

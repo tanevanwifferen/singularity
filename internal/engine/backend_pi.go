@@ -61,7 +61,7 @@ func (b *piBackend) Binary() string { return "pi" }
 func (b *piBackend) Args(model, effort string, maxTurns int, allowedTools []string) []string {
 	b.clearWarnings()
 
-	args := []string{"--mode", "rpc", "--no-session"}
+	args := []string{"--mode", "rpc"}
 
 	if model != "" {
 		args = append(args, "--model", b.resolveModel(model))

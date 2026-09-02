@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"gitlab.com/tanevanwifferen1/singularity/internal/config"
 	"gitlab.com/tanevanwifferen1/singularity/internal/engine"
 	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 )
@@ -288,4 +289,9 @@ func mapAgentStartErr(err error) error {
 		return service.ErrAgentLimit
 	}
 	return wrapErr(err)
+}
+
+// ReloadModelsConfig reloads the global models configuration from disk.
+func (s *localAgentService) ReloadModelsConfig() {
+	engine.SetModels(config.LoadDefaultModelsConfig())
 }

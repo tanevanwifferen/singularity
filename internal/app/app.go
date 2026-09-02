@@ -580,6 +580,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case views.ConfigSavedMsg:
+		// Config was saved — reload main config and models config
+		if cfg, err := config.LoadDefaultConfig(); err == nil {
+			m.cfg = cfg
+			// Update Jira config in AgentView if present
+			if av := m.getAgentView(); av != nil {
+				av.SetJiraConfig(cfg.Jira)
+			}
+		}
+		// Reload models config for the engine
+		if m.services != nil && m.services.Agent != nil {
+			// The agent service's engine uses the global models config.
+			// Reload it so new agents pick up the updated model aliases.
+			m.services.Agent.ReloadModelsConfig()
+		}
+		m.statusMsg = "Config reloaded"
+		return m, nil
 	case views.ViewChangeMsg:
 		// Handle view changes, possibly with a specific repo path
 		if msg.RepoPath != "" {
