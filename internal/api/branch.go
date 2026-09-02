@@ -63,3 +63,21 @@ type BranchComparisonRequest struct {
 	BranchA  string `json:"branch_a"`
 	BranchB  string `json:"branch_b"`
 }
+
+// BranchMergeRequest is the body for POST /api/branch/merge.
+type BranchMergeRequest struct {
+	RepoPath        string `json:"repo_path"`
+	Branch          string `json:"branch"`
+	FastForwardOnly bool   `json:"fast_forward_only,omitempty"`
+	NoFastForward   bool   `json:"no_fast_forward,omitempty"`
+	Squash          bool   `json:"squash,omitempty"`
+	Message         string `json:"message,omitempty"`
+}
+
+// BranchMergeResponse is the body for POST /api/branch/merge response.
+type BranchMergeResponse struct {
+	Success     bool     `json:"success"`
+	FastForward bool     `json:"fast_forward"`
+	Conflicts   []string `json:"conflicts,omitempty"`
+	Message     string   `json:"message,omitempty"`
+}

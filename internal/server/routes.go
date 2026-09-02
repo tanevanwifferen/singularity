@@ -60,6 +60,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/branch/resolve", wrap(s.handleBranchResolveRef))
 	mux.HandleFunc("/api/branch/compare", wrap(s.handleBranchCompare))
 	mux.HandleFunc("/api/branch/compare_tree", wrap(s.handleBranchCompareTree))
+	mux.HandleFunc("/api/branch/merge", wrap(s.handleBranchMerge))
 	mux.HandleFunc("/api/branch/diff", wrap(s.handleDiffBranch)) // legacy alias of /api/diff/branch
 
 	// Diff.

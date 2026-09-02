@@ -158,3 +158,103 @@ func CreateBranch(repoPath, branch, fromBranch string) error {
 	}
 	return nil
 }
+
+// MergeOptions holds options for git merge operations.
+type MergeOptions struct {
+	// FastForwardOnly restricts merge to fast-forward only (--ff-only)
+	FastForwardOnly bool
+	// NoFastForward always creates a merge commit (--no-ff)
+	NoFastForward bool
+	// Squash combines all commits into a single commit (--squash)
+	Squash bool
+	// Message is an optional custom merge commit message
+	Message string
+}
+
+// MergeResult holds the result of a merge operation.
+type MergeResult struct {
+	// Success indicates if the merge completed without conflicts
+	Success bool
+	// FastForward indicates if the merge was a fast-forward
+	FastForward bool
+	// Conflicts lists files with merge conflicts
+	Conflicts []string
+	// Message is the merge commit message (if created)
+	Message string
+}
+
+// Merge merges the given branch into the current HEAD in repoPath.
+// Returns MergeResult with success status and conflict details.
+func Merge(repoPath, branch string, opts MergeOptions) (*MergeResult, error) {
+	args := []string{"-C", repoPath, "merge"}
+
+	if opts.FastForwardOnly {
+		args = append(args, "--ff-only")
+	} else if opts.NoFastForward {
+		args = append(args, "--no-ff")
+	}
+
+	if opts.Squash {
+		args = append(args, "--squash")
+	}
+
+	if opts.Message != "" {
+		args = append(args, "-m", opts.Message)
+	}
+
+	args = append(args, branch)
+
+	cmd := exec.Command("git", args...)
+	output, err := cmd.CombinedOutput()
+	outputStr := strings.TrimSpace(string(output))
+
+	result := &MergeResult{
+		Success: err == nil,
+	}
+
+	if err != nil {
+		// Check if it's a conflict error
+		if strings.Contains(outputStr, "CONFLICT") || strings.Contains(outputStr, "conflict") {
+			// Extract conflicting files
+			conflicts, conflictErr := getConflictingFiles(repoPath)
+			if conflictErr == nil {
+				result.Conflicts = conflicts
+			}
+			return result, fmt.Errorf("merge conflict: %s", outputStr)
+		}
+		return result, fmt.Errorf("merge failed: %s", outputStr)
+	}
+
+	// Check if it was a fast-forward merge
+	if strings.Contains(outputStr, "Fast-forward") {
+		result.FastForward = true
+	}
+
+	// Extract merge commit message if available
+	if !opts.Squash && !result.FastForward {
+		// Get the last commit message (the merge commit)
+		msgCmd := exec.Command("git", "-C", repoPath, "log", "-1", "--pretty=%s")
+		if msgOut, msgErr := msgCmd.Output(); msgErr == nil {
+			result.Message = strings.TrimSpace(string(msgOut))
+		}
+	}
+
+	return result, nil
+}
+
+// getConflictingFiles returns a list of files with merge conflicts.
+func getConflictingFiles(repoPath string) ([]string, error) {
+	cmd := exec.Command("git", "-C", repoPath, "diff", "--name-only", "--diff-filter=U")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	var conflicts []string
+	for _, line := range lines {
+		if line != "" {
+			conflicts = append(conflicts, line)
+		}
+	}
+	return conflicts, nil
+}
