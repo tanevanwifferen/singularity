@@ -28,6 +28,16 @@ type pushDoneMsg struct{}
 // mrDoneMsg signals that batch MR creation has completed.
 type mrDoneMsg struct{}
 
+// mergeCheckDoneMsg carries per-repo local-merge eligibility for a workflow.
+type mergeCheckDoneMsg struct {
+	statuses []service.RepoMergeStatus
+}
+
+// mergeDoneMsg carries the per-repo outcome of a local merge into main.
+type mergeDoneMsg struct {
+	results []service.RepoMergeResult
+}
+
 // branchStatusDoneMsg signals that branch status refresh has completed.
 type branchStatusDoneMsg struct{}
 
@@ -70,6 +80,13 @@ type WorkflowsView struct {
 	// Batch push state
 	pushConfirm   components.ConfirmPrompt
 	pushableRepos []string // repos with commits to push (computed async)
+
+	// Local merge-into-default state
+	mergeConfirm      components.ConfirmPrompt
+	mergeStatuses     []service.RepoMergeStatus
+	mergeResults      string
+	showMergeSummary  bool
+	mergeSummaryLines []string
 
 	// Batch MR creation state
 	batchMRConfirm components.ConfirmPrompt
@@ -279,6 +296,7 @@ func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cm
 	v.workflowStatusMsg = ""
 	v.pushResults = ""
 	v.mrResults = ""
+	v.mergeResults = ""
 	v.detachWorkflowResult = ""
 
 	// Handle Jira picker
@@ -313,6 +331,16 @@ func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cm
 	// Handle batch push confirmation
 	if handled, cmd := v.pushConfirm.HandleKey(msg); handled {
 		return v, cmd
+	}
+
+	// Handle local merge confirmation
+	if handled, cmd := v.mergeConfirm.HandleKey(msg); handled {
+		return v, cmd
+	}
+
+	// Handle local merge summary panel
+	if v.showMergeSummary {
+		return v, v.handleMergeSummary(msg)
 	}
 
 	// Handle MR summary panel
@@ -405,6 +433,8 @@ func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cm
 		return v, v.handleStartPush(true)
 	case "M":
 		v.handleStartBatchMR()
+	case "m":
+		return v, v.handleStartLocalMerge()
 	case "d":
 		wf := v.currentWorkflow()
 		if wf != nil && v.workflowDiffView != nil {
@@ -510,6 +540,13 @@ func (v *WorkflowsView) handleWorkflowsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.pushResults = fmt.Sprintf(" Pushed %d/%d repos\n   Next: press 'M' to create merge requests", pushed, total)
 			v.saveWorkflows()
 		}
+
+	case mergeCheckDoneMsg:
+		v.handleMergeCheckDone(msg)
+
+	case mergeDoneMsg:
+		v.handleMergeDone(msg)
+		return v, v.refreshBranchStatusCmd()
 
 	case mrDoneMsg:
 		wf := v.currentWorkflow()
@@ -908,6 +945,123 @@ func (v *WorkflowsView) handleStartBatchMR() {
 	}
 }
 
+// handleStartLocalMerge kicks off the eligibility check for merging the
+// workflow branch into each repo's local default branch. The git work runs in a
+// command so the UI stays responsive.
+func (v *WorkflowsView) handleStartLocalMerge() tea.Cmd {
+	wf := v.currentWorkflow()
+	if wf == nil {
+		v.mergeResults = "No active workflow"
+		return nil
+	}
+	return func() tea.Msg {
+		return mergeCheckDoneMsg{statuses: wf.MergeStatuses()}
+	}
+}
+
+// handleMergeCheckDone turns the eligibility check into a confirm prompt that
+// spells out exactly which repos will be merged and which are skipped.
+func (v *WorkflowsView) handleMergeCheckDone(msg mergeCheckDoneMsg) {
+	wf := v.currentWorkflow()
+	if wf == nil {
+		return
+	}
+	var eligible []service.RepoMergeStatus
+	var blocked []service.RepoMergeStatus
+	for _, st := range msg.statuses {
+		if st.Eligible {
+			eligible = append(eligible, st)
+		} else {
+			blocked = append(blocked, st)
+		}
+	}
+	if len(eligible) == 0 {
+		v.mergeResults = "Nothing to merge locally"
+		if len(blocked) > 0 {
+			v.mergeResults += fmt.Sprintf(" - %s", mergeStatusSummary(blocked))
+		}
+		return
+	}
+
+	v.mergeStatuses = msg.statuses
+	prompt := fmt.Sprintf("Merge '%s' into the local default branch of %d repo(s)?", wf.BranchName, len(eligible))
+	for _, st := range eligible {
+		prompt += fmt.Sprintf("\n  %s -> %s (%d commit(s))", st.RepoName, st.DefaultBranch, st.Ahead)
+	}
+	if len(blocked) > 0 {
+		prompt += fmt.Sprintf("\nSkipped: %s", mergeStatusSummary(blocked))
+	}
+	prompt += "\nNothing is pushed - this only merges locally."
+
+	v.mergeConfirm.ShowWithCancel("Merge Into Default Branch", prompt,
+		func() tea.Cmd {
+			wf := v.currentWorkflow()
+			v.mergeStatuses = nil
+			if wf == nil {
+				return nil
+			}
+			return func() tea.Msg {
+				return mergeDoneMsg{results: wf.MergeAllToDefault(false)}
+			}
+		},
+		func() { v.mergeStatuses = nil })
+}
+
+// handleMergeDone renders the per-repo merge outcome and, on conflicts, keeps
+// the details on screen so the user knows where to resolve them.
+func (v *WorkflowsView) handleMergeDone(msg mergeDoneMsg) {
+	merged, failed := 0, 0
+	var lines []string
+	for _, r := range msg.results {
+		switch {
+		case r.Merged:
+			merged++
+			suffix := ""
+			if r.FastForward {
+				suffix = " (fast-forward)"
+			}
+			lines = append(lines, fmt.Sprintf("  %s: merged%s", r.RepoName, suffix))
+		case r.Skipped:
+			lines = append(lines, fmt.Sprintf("  %s: skipped - %s", r.RepoName, r.Reason))
+		default:
+			failed++
+			line := fmt.Sprintf("  %s: failed - %s", r.RepoName, r.Reason)
+			if len(r.Conflicts) > 0 {
+				line += fmt.Sprintf(" [%s]", strings.Join(r.Conflicts, ", "))
+			}
+			lines = append(lines, line)
+		}
+	}
+
+	if failed > 0 {
+		v.mergeResults = fmt.Sprintf(" Merged %d repo(s), %d failed", merged, failed)
+		v.showMergeSummary = true
+		v.mergeSummaryLines = lines
+	} else {
+		v.mergeResults = fmt.Sprintf(" Merged %d repo(s) into their default branch\n   Next: push the default branch yourself, or press 'D' to cleanup worktrees", merged)
+	}
+	v.saveWorkflows()
+}
+
+// handleMergeSummary handles keys while the merge result panel is open.
+func (v *WorkflowsView) handleMergeSummary(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "esc", "q", "enter":
+		v.showMergeSummary = false
+		v.mergeSummaryLines = nil
+	}
+	return nil
+}
+
+// mergeStatusSummary renders skipped repos as "name (reason)" pairs.
+func mergeStatusSummary(statuses []service.RepoMergeStatus) string {
+	parts := make([]string, 0, len(statuses))
+	for _, st := range statuses {
+		parts = append(parts, fmt.Sprintf("%s (%s)", st.RepoName, st.Reason))
+	}
+	return strings.Join(parts, ", ")
+}
+
 func (v *WorkflowsView) handleImport() {
 	if v.proj == nil {
 		return
@@ -1223,6 +1377,19 @@ func (v *WorkflowsView) renderModals() string {
 		s.WriteString("\n")
 	}
 
+	if v.mergeConfirm.Visible {
+		s.WriteString(v.mergeConfirm.Render(modalWidth(v.width)))
+		s.WriteString("\n")
+	}
+
+	if v.showMergeSummary && len(v.mergeSummaryLines) > 0 {
+		lines := []string{""}
+		lines = append(lines, v.mergeSummaryLines...)
+		lines = append(lines, "", "  Esc: Dismiss")
+		s.WriteString(renderModal("Local Merge Results", lines, modalWidth(v.width)))
+		s.WriteString("\n")
+	}
+
 	if v.batchMRConfirm.Visible {
 		s.WriteString(v.batchMRConfirm.Render(modalWidth(v.width)))
 		s.WriteString("\n")
@@ -1248,6 +1415,9 @@ func (v *WorkflowsView) renderFlashMessages() string {
 	}
 	if flashMsg == "" {
 		flashMsg = v.mrResults
+	}
+	if flashMsg == "" {
+		flashMsg = v.mergeResults
 	}
 	if flashMsg == "" {
 		return ""
@@ -1411,7 +1581,7 @@ func (v *WorkflowsView) renderFooterHelp() string {
 		jiraHint = "  J Jira"
 	}
 	if len(v.workflows) > 0 {
-		return th.Help.Render(" w New" + jiraHint + "  a Agent  d Diff  p Push  P Force Push  M MRs  D Delete  X Force Delete  H Detach  I Import  ↑↓ Select  r Refresh")
+		return th.Help.Render(" w New" + jiraHint + "  a Agent  d Diff  p Push  P Force Push  M MRs  m Merge  D Delete  X Force Delete  H Detach  I Import  ↑↓ Select  r Refresh")
 	}
 	return th.Help.Render(" w New Workflow  I Import  r Refresh" + jiraHint)
 }
@@ -1431,7 +1601,7 @@ func (v *WorkflowsView) ShortHelp() string {
 		if v.jiraPicker.IsAvailable() {
 			jiraHint = "  J Jira ticket"
 		}
-		return fmt.Sprintf("Workflow: %s  w New%s  a Agent  d Diff  p Push  P Force Push  M MRs  D Delete  X Force Delete  H Detach  I Import", wfLabel, jiraHint)
+		return fmt.Sprintf("Workflow: %s  w New%s  a Agent  d Diff  p Push  P Force Push  M MRs  m Merge  D Delete  X Force Delete  H Detach  I Import", wfLabel, jiraHint)
 	}
 	jiraHint := ""
 	if v.jiraPicker.IsAvailable() {
@@ -1444,6 +1614,7 @@ func (v *WorkflowsView) ShortHelp() string {
 func (v *WorkflowsView) CapturesInput() bool {
 	return v.showWorkflowStart || v.cleanupConfirm.Visible || v.showAgentPrompt ||
 		v.pushConfirm.Visible || v.batchMRConfirm.Visible || v.showMRSummary ||
+		v.mergeConfirm.Visible || v.showMergeSummary ||
 		v.showDetachWorkflowConfirm ||
 		v.jiraPicker.IsOpen() || v.jiraConfirmIssue != nil
 }
@@ -1451,7 +1622,7 @@ func (v *WorkflowsView) CapturesInput() bool {
 // CapturesKey returns true for keys this view handles directly.
 func (v *WorkflowsView) CapturesKey(key string) bool {
 	switch key {
-	case "r", "w", "a", "p", "P", "d", "D", "X", "H", "I", "M", "J", "j", "k", "up", "down", "/":
+	case "r", "w", "a", "p", "P", "d", "D", "X", "H", "I", "M", "m", "J", "j", "k", "up", "down", "/":
 		return true
 	}
 	return false
@@ -1480,6 +1651,7 @@ func (v *WorkflowsView) KeyBindings() []components.KeyBinding {
 		{Key: "p", Description: "Push all repos in selected workflow"},
 		{Key: "P", Description: "Force push (--force-with-lease) all repos in selected workflow"},
 		{Key: "M", Description: "Create MRs/PRs for all pushed repos"},
+		{Key: "m", Description: "Merge workflow branch into the local default branch of every repo"},
 		{Key: "D", Description: "Delete selected workflow (blocked if open MRs or unmerged branches)"},
 		{Key: "X", Description: "Force delete selected workflow (removes everything regardless of MR/merge status)"},
 		{Key: "H", Description: "Sync main dir repos to worktree HEADs (detached)"},
