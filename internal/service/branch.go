@@ -40,4 +40,7 @@ type BranchService interface {
 
 	// CompareByTree returns a per-path tree-level comparison between two branches.
 	CompareByTree(ctx context.Context, repoPath, a, b string) (*TreeComparison, error)
+
+	// Merge merges the given branch into the current HEAD with the specified options.
+	Merge(ctx context.Context, repoPath, branch string, opts MergeOptions) (*MergeResult, error)
 }

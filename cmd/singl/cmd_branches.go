@@ -21,8 +21,10 @@ func cmdBranches(ctx context.Context, verb string, args []string) int {
 		return runBranchesHead(ctx, args)
 	case "compare":
 		return runBranchesCompare(ctx, args)
+	case "merge":
+		return runBranchesMerge(ctx, args)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown branches verb: %q\nverbs: list checkout create delete head compare\n", verb)
+		fmt.Fprintf(os.Stderr, "unknown branches verb: %q\nverbs: list checkout create delete head compare merge\n", verb)
 		return 2
 	}
 }
@@ -211,5 +213,67 @@ func runBranchesCompare(ctx context.Context, args []string) int {
 	}
 	md := fmt.Sprintf("## Branch comparison: `%s` vs `%s`%s\n\n", cmp.BranchA, cmp.BranchB, diverged)
 	md += fmt.Sprintf("`%s` is **%d ahead**, **%d behind** `%s`  \n", cmp.BranchA, cmp.Ahead, cmp.Behind, cmp.BranchB)
+	return renderMarkdown(md)
+}
+
+func runBranchesMerge(ctx context.Context, args []string) int {
+	fs := flag.NewFlagSet("branches-merge", flag.ContinueOnError)
+	repo := fs.String("repo", "", "repo path (required)")
+	branch := fs.String("branch", "", "branch to merge into current branch (required)")
+	ffOnly := fs.Bool("ff-only", false, "fast-forward only (abort if merge commit is needed)")
+	noFf := fs.Bool("no-ff", false, "always create a merge commit")
+	squash := fs.Bool("squash", false, "squash commits into a single commit")
+	message := fs.String("message", "", "custom merge commit message")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	repoPath := repoArg(*repo)
+	if repoPath == "" || *branch == "" {
+		fmt.Fprintln(os.Stderr, "error: --repo and --branch are required")
+		return 2
+	}
+	if *ffOnly && *noFf {
+		fmt.Fprintln(os.Stderr, "error: --ff-only and --no-ff are mutually exclusive")
+		return 2
+	}
+	c, err := newClient()
+	if err != nil {
+		return die(err)
+	}
+	tctx, cancel := withTimeout(ctx)
+	defer cancel()
+	result, err := c.BranchMerge(tctx, repoPath, *branch, *ffOnly, *noFf, *squash, *message)
+	if err != nil {
+		// If there are conflicts, show them even though there's an error
+		if result != nil && len(result.Conflicts) > 0 {
+			if globals.json {
+				return printJSON(result)
+			}
+			md := fmt.Sprintf("## Merge failed: conflicts\n\n")
+			md += fmt.Sprintf("Branch: `%s`\n\n", *branch)
+			md += "**Conflicting files:**\n\n"
+			for _, f := range result.Conflicts {
+				md += fmt.Sprintf("- `%s`\n", f)
+			}
+			md += "\nResolve conflicts and commit, or run `git merge --abort` to cancel.\n"
+			_ = renderMarkdown(md)
+			return 1
+		}
+		return die(err)
+	}
+	if globals.json {
+		return printJSON(result)
+	}
+	md := ""
+	if result.FastForward {
+		md = fmt.Sprintf("## Fast-forward merge\n\nMerged `%s` via fast-forward.\n", *branch)
+	} else if *squash {
+		md = fmt.Sprintf("## Squash merge\n\nSquashed `%s` into working directory. Commit to complete the merge.\n", *branch)
+	} else {
+		md = fmt.Sprintf("## Merge successful\n\nMerged `%s` into current branch.\n", *branch)
+		if result.Message != "" {
+			md += fmt.Sprintf("\nCommit message: %s\n", result.Message)
+		}
+	}
 	return renderMarkdown(md)
 }

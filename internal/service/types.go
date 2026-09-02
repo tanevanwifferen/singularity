@@ -94,6 +94,12 @@ type (
 
 	// CommitMessage is a structured commit message (type/scope/subject/body).
 	CommitMessage = git.CommitMessage
+
+	// MergeOptions holds options for git merge operations.
+	MergeOptions = git.MergeOptions
+
+	// MergeResult holds the result of a merge operation.
+	MergeResult = git.MergeResult
 )
 
 // --- from internal/engine ---

@@ -61,3 +61,26 @@ func (s *remoteBranchService) Compare(ctx context.Context, repoPath, a, b string
 func (s *remoteBranchService) CompareByTree(ctx context.Context, repoPath, a, b string) (*service.TreeComparison, error) {
 	return s.c.BranchCompareByTree(ctx, repoPath, a, b)
 }
+
+// Merge merges the given branch into the current HEAD.
+func (s *remoteBranchService) Merge(ctx context.Context, repoPath, branch string, opts service.MergeOptions) (*service.MergeResult, error) {
+	resp, err := s.c.BranchMerge(ctx, repoPath, branch, opts.FastForwardOnly, opts.NoFastForward, opts.Squash, opts.Message)
+	if err != nil {
+		// Return partial result on conflict
+		if resp != nil {
+			return &service.MergeResult{
+				Success:     resp.Success,
+				FastForward: resp.FastForward,
+				Conflicts:   resp.Conflicts,
+				Message:     resp.Message,
+			}, err
+		}
+		return nil, err
+	}
+	return &service.MergeResult{
+		Success:     resp.Success,
+		FastForward: resp.FastForward,
+		Conflicts:   resp.Conflicts,
+		Message:     resp.Message,
+	}, nil
+}
