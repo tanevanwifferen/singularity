@@ -33,7 +33,7 @@ type ModelsConfig struct {
 // DefaultModelsConfig returns the compiled-in fallback model table.
 //
 // The pi ids were verified against `pi --list-models` (pi model registry, the
-// anthropic provider): claude-haiku-4-5, claude-sonnet-4-5 and claude-opus-4-5
+// anthropic provider): claude-haiku-4-5, claude-sonnet-5 and claude-opus-5
 // all resolve to catalogued models. The claude backend takes the bare short
 // names directly.
 func DefaultModelsConfig() *ModelsConfig {
@@ -44,8 +44,8 @@ func DefaultModelsConfig() *ModelsConfig {
 				ClassifierModel: "anthropic/claude-haiku-4-5",
 				Aliases: map[string]string{
 					"haiku":  "anthropic/claude-haiku-4-5",
-					"sonnet": "anthropic/claude-sonnet-4-5",
-					"opus":   "anthropic/claude-opus-4-5",
+					"sonnet": "anthropic/claude-sonnet-5",
+					"opus":   "anthropic/claude-opus-5",
 				},
 			},
 			"claude": {

@@ -53,4 +53,8 @@ type AgentService interface {
 	// SubscribeAll streams AgentEvents for every agent. Used by views that
 	// render multi-agent status (workflows.go, overview.go).
 	SubscribeAll(ctx context.Context) (<-chan AgentEvent, func(), error)
+
+	// ReloadModelsConfig reloads the global models configuration from disk.
+	// New agents will use the updated model aliases and classifier model.
+	ReloadModelsConfig()
 }

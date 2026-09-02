@@ -349,6 +349,7 @@ func (agentStub) SubscribeAll(context.Context) (<-chan service.AgentEvent, func(
 	close(ch)
 	return ch, func() {}, nil
 }
+func (agentStub) ReloadModelsConfig() {}
 
 // jiraStub ---------------------------------------------------------------------
 
