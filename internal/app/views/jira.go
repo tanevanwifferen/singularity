@@ -327,51 +327,7 @@ func (v *JiraView) handleJiraKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// AI agent running - allow Esc to cancel and up/down to scroll
 	if v.aiMode != "" && v.approvalView == nil {
-		switch msg.String() {
-		case "esc":
-			if v.aiAgentID != "" && v.services != nil {
-				v.services.Agent.Kill(v.ctx(), v.aiAgentID)
-			}
-			v.aiMode = ""
-			v.aiAgentID = ""
-			v.aiOutputEntries = nil
-			v.aiViewOffset = 0
-			return v, nil
-		case "up", "k":
-			if v.aiViewOffset > 0 {
-				v.aiViewOffset--
-			}
-			return v, nil
-		case "down", "j":
-			visible := v.height - 4
-			max := len(v.aiOutputEntries) - visible
-			if max < 0 {
-				max = 0
-			}
-			if v.aiViewOffset < max {
-				v.aiViewOffset++
-			}
-			return v, nil
-		case "pgup", "ctrl+u":
-			visible := v.height - 4
-			v.aiViewOffset -= visible
-			if v.aiViewOffset < 0 {
-				v.aiViewOffset = 0
-			}
-			return v, nil
-		case "pgdown", "ctrl+d":
-			visible := v.height - 4
-			max := len(v.aiOutputEntries) - visible
-			if max < 0 {
-				max = 0
-			}
-			v.aiViewOffset += visible
-			if v.aiViewOffset > max {
-				v.aiViewOffset = max
-			}
-			return v, nil
-		}
-		return v, nil // swallow other keys while agent runs
+		return v, v.handleAIModeKeys(msg)
 	}
 
 	// Workflow confirmation modal
@@ -381,16 +337,7 @@ func (v *JiraView) handleJiraKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Detail pane active
 	if v.showDetail {
-		switch msg.String() {
-		case "w":
-			if v.detailIssue != nil {
-				return v, v.triggerWorkflow(v.detailIssue)
-			}
-		case "esc":
-			v.showDetail = false
-			v.detailIssue = nil
-		}
-		return v, nil
+		return v, v.handleDetailInput(msg)
 	}
 
 	// Focus input for refine mode
@@ -502,6 +449,66 @@ func (v *JiraView) triggerWorkflow(issue *service.Issue) tea.Cmd {
 	v.selectedWTIdx = 0
 	v.workflowExtraMsg.Clear()
 	v.workflowFromExisting = false
+	return nil
+}
+
+// handleAIModeKeys handles keyboard input while an AI agent is running:
+// Esc cancels the agent, up/down/pgup/pgdown scroll the output. All other
+// keys are swallowed.
+func (v *JiraView) handleAIModeKeys(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "esc":
+		if v.aiAgentID != "" && v.services != nil {
+			v.services.Agent.Kill(v.ctx(), v.aiAgentID)
+		}
+		v.aiMode = ""
+		v.aiAgentID = ""
+		v.aiOutputEntries = nil
+		v.aiViewOffset = 0
+	case "up", "k":
+		if v.aiViewOffset > 0 {
+			v.aiViewOffset--
+		}
+	case "down", "j":
+		visible := v.height - 4
+		max := len(v.aiOutputEntries) - visible
+		if max < 0 {
+			max = 0
+		}
+		if v.aiViewOffset < max {
+			v.aiViewOffset++
+		}
+	case "pgup", "ctrl+u":
+		visible := v.height - 4
+		v.aiViewOffset -= visible
+		if v.aiViewOffset < 0 {
+			v.aiViewOffset = 0
+		}
+	case "pgdown", "ctrl+d":
+		visible := v.height - 4
+		max := len(v.aiOutputEntries) - visible
+		if max < 0 {
+			max = 0
+		}
+		v.aiViewOffset += visible
+		if v.aiViewOffset > max {
+			v.aiViewOffset = max
+		}
+	}
+	return nil
+}
+
+// handleDetailInput handles keyboard input while the detail pane is shown.
+func (v *JiraView) handleDetailInput(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "w":
+		if v.detailIssue != nil {
+			return v.triggerWorkflow(v.detailIssue)
+		}
+	case "esc":
+		v.showDetail = false
+		v.detailIssue = nil
+	}
 	return nil
 }
 
@@ -997,58 +1004,7 @@ func (v *JiraView) View() string {
 
 	// AI agent running
 	if v.aiMode != "" {
-		modeLabel := "Refining"
-		if v.aiMode == "create" {
-			modeLabel = "Creating stories"
-		} else if v.aiMode == "review" {
-			modeLabel = "Reviewing tickets"
-		} else if v.aiMode == "iterate" {
-			modeLabel = "Iterating on proposal"
-		}
-		s.WriteString(th.InfoStyle.Render(fmt.Sprintf(" %s... (Esc to cancel)", modeLabel)))
-		s.WriteString("\n\n")
-		// Show output entries with scroll support
-		visible := v.height - 4
-		if visible < 1 {
-			visible = 1
-		}
-		start := v.aiViewOffset
-		if start < 0 {
-			start = 0
-		}
-		end := start + visible
-		if end > len(v.aiOutputEntries) {
-			end = len(v.aiOutputEntries)
-		}
-		for _, entry := range v.aiOutputEntries[start:end] {
-			prefix := ""
-			switch entry.Source {
-			case "tool_use":
-				prefix = th.BranchStyle.Render("→ ")
-			case "tool_result":
-				prefix = th.MutedTextStyle.Render("  ")
-			case "text":
-				prefix = "  "
-			case "system":
-				prefix = th.MutedTextStyle.Render("⚙ ")
-			case "error":
-				prefix = th.DashboardErrorStyle.Render("✗ ")
-			}
-			line := entry.Content
-			if len(line) > v.width-4 {
-				line = line[:v.width-7] + "..."
-			}
-			s.WriteString(prefix + line + "\n")
-		}
-		// Scroll indicator
-		if len(v.aiOutputEntries) > visible {
-			scrollPct := 0
-			if max := len(v.aiOutputEntries) - visible; max > 0 {
-				scrollPct = v.aiViewOffset * 100 / max
-			}
-			s.WriteString(th.Help.Render(fmt.Sprintf(" ↑↓/jk: scroll · pgup/pgdn: page · %d%%", scrollPct)))
-		}
-		return s.String()
+		return v.renderAIMode()
 	}
 
 	// Header
@@ -1142,6 +1098,66 @@ func (v *JiraView) View() string {
 	s.WriteString(renderSeparator())
 	s.WriteString(th.Help.Render(" R: Refresh   s: Search   /: Filter   ↑↓: Navigate   Enter: Detail   w: Workflow   r: Refine   c: Create   Space: Select   b: Review"))
 
+	return s.String()
+}
+
+// renderAIMode renders the full-screen view shown while a refine/create/review
+// agent is running, including scrollable output and a scroll indicator.
+func (v *JiraView) renderAIMode() string {
+	th := theme.GetTheme()
+	var s strings.Builder
+
+	modeLabel := "Refining"
+	if v.aiMode == "create" {
+		modeLabel = "Creating stories"
+	} else if v.aiMode == "review" {
+		modeLabel = "Reviewing tickets"
+	} else if v.aiMode == "iterate" {
+		modeLabel = "Iterating on proposal"
+	}
+	s.WriteString(th.InfoStyle.Render(fmt.Sprintf(" %s... (Esc to cancel)", modeLabel)))
+	s.WriteString("\n\n")
+	// Show output entries with scroll support
+	visible := v.height - 4
+	if visible < 1 {
+		visible = 1
+	}
+	start := v.aiViewOffset
+	if start < 0 {
+		start = 0
+	}
+	end := start + visible
+	if end > len(v.aiOutputEntries) {
+		end = len(v.aiOutputEntries)
+	}
+	for _, entry := range v.aiOutputEntries[start:end] {
+		prefix := ""
+		switch entry.Source {
+		case "tool_use":
+			prefix = th.BranchStyle.Render("→ ")
+		case "tool_result":
+			prefix = th.MutedTextStyle.Render("  ")
+		case "text":
+			prefix = "  "
+		case "system":
+			prefix = th.MutedTextStyle.Render("⚙ ")
+		case "error":
+			prefix = th.DashboardErrorStyle.Render("✗ ")
+		}
+		line := entry.Content
+		if len(line) > v.width-4 {
+			line = line[:v.width-7] + "..."
+		}
+		s.WriteString(prefix + line + "\n")
+	}
+	// Scroll indicator
+	if len(v.aiOutputEntries) > visible {
+		scrollPct := 0
+		if max := len(v.aiOutputEntries) - visible; max > 0 {
+			scrollPct = v.aiViewOffset * 100 / max
+		}
+		s.WriteString(th.Help.Render(fmt.Sprintf(" ↑↓/jk: scroll · pgup/pgdn: page · %d%%", scrollPct)))
+	}
 	return s.String()
 }
 
