@@ -81,7 +81,7 @@ type JiraView struct {
 
 	// Search / JQL input mode
 	searchMode  bool
-	searchInput string
+	searchInput components.TextInput
 
 	// Detail pane
 	showDetail  bool
@@ -99,7 +99,7 @@ type JiraView struct {
 	selectedWTIdx int
 
 	// Extra message input (workflowStepExtraMsg)
-	workflowExtraMsg     string
+	workflowExtraMsg     components.TextInput
 	workflowFromExisting bool // true if coming from existing-worktree path
 
 	// Refine / Create agent mode
@@ -113,17 +113,17 @@ type JiraView struct {
 
 	// Text-input for create mode without a ticket
 	showTextInput bool
-	textInput     string
+	textInput     components.TextInput
 
 	// Focus input for refine mode
 	showFocusInput bool
-	focusInput     string
+	focusInput     components.TextInput
 	focusIssue     *service.Issue
 
 	// Multi-select for batch review
 	selectedIssues  map[string]bool // issue keys that are toggled
 	showReviewInput bool
-	reviewInput     string
+	reviewInput     components.TextInput
 }
 
 // NewJiraView creates a new Jira issues view.
@@ -327,51 +327,7 @@ func (v *JiraView) handleJiraKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// AI agent running - allow Esc to cancel and up/down to scroll
 	if v.aiMode != "" && v.approvalView == nil {
-		switch msg.String() {
-		case "esc":
-			if v.aiAgentID != "" && v.services != nil {
-				v.services.Agent.Kill(v.ctx(), v.aiAgentID)
-			}
-			v.aiMode = ""
-			v.aiAgentID = ""
-			v.aiOutputEntries = nil
-			v.aiViewOffset = 0
-			return v, nil
-		case "up", "k":
-			if v.aiViewOffset > 0 {
-				v.aiViewOffset--
-			}
-			return v, nil
-		case "down", "j":
-			visible := v.height - 4
-			max := len(v.aiOutputEntries) - visible
-			if max < 0 {
-				max = 0
-			}
-			if v.aiViewOffset < max {
-				v.aiViewOffset++
-			}
-			return v, nil
-		case "pgup", "ctrl+u":
-			visible := v.height - 4
-			v.aiViewOffset -= visible
-			if v.aiViewOffset < 0 {
-				v.aiViewOffset = 0
-			}
-			return v, nil
-		case "pgdown", "ctrl+d":
-			visible := v.height - 4
-			max := len(v.aiOutputEntries) - visible
-			if max < 0 {
-				max = 0
-			}
-			v.aiViewOffset += visible
-			if v.aiViewOffset > max {
-				v.aiViewOffset = max
-			}
-			return v, nil
-		}
-		return v, nil // swallow other keys while agent runs
+		return v, v.handleAIModeKeys(msg)
 	}
 
 	// Workflow confirmation modal
@@ -381,16 +337,7 @@ func (v *JiraView) handleJiraKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Detail pane active
 	if v.showDetail {
-		switch msg.String() {
-		case "w":
-			if v.detailIssue != nil {
-				return v, v.triggerWorkflow(v.detailIssue)
-			}
-		case "esc":
-			v.showDetail = false
-			v.detailIssue = nil
-		}
-		return v, nil
+		return v, v.handleDetailInput(msg)
 	}
 
 	// Focus input for refine mode
@@ -423,7 +370,7 @@ func (v *JiraView) handleJiraKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Refine: show focus input, then launch agent
 		if item, idx := v.filter.SelectedItem(); idx >= 0 {
 			v.showFocusInput = true
-			v.focusInput = ""
+			v.focusInput.Clear()
 			v.focusIssue = &item
 			return v, nil
 		}
@@ -434,12 +381,12 @@ func (v *JiraView) handleJiraKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return v, v.startAIMode("create", &item, "")
 		}
 		v.showTextInput = true
-		v.textInput = ""
+		v.textInput.Clear()
 		return v, nil
 
 	case "s":
 		v.searchMode = true
-		v.searchInput = ""
+		v.searchInput.Clear()
 		return v, nil
 
 	case "w":
@@ -477,7 +424,7 @@ func (v *JiraView) handleJiraKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return v, nil
 		}
 		v.showReviewInput = true
-		v.reviewInput = ""
+		v.reviewInput.Clear()
 		return v, nil
 
 	case "/":
@@ -500,8 +447,68 @@ func (v *JiraView) triggerWorkflow(issue *service.Issue) tea.Cmd {
 	v.wfStep = workflowStepChoose
 	v.existingWTs = nil
 	v.selectedWTIdx = 0
-	v.workflowExtraMsg = ""
+	v.workflowExtraMsg.Clear()
 	v.workflowFromExisting = false
+	return nil
+}
+
+// handleAIModeKeys handles keyboard input while an AI agent is running:
+// Esc cancels the agent, up/down/pgup/pgdown scroll the output. All other
+// keys are swallowed.
+func (v *JiraView) handleAIModeKeys(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "esc":
+		if v.aiAgentID != "" && v.services != nil {
+			v.services.Agent.Kill(v.ctx(), v.aiAgentID)
+		}
+		v.aiMode = ""
+		v.aiAgentID = ""
+		v.aiOutputEntries = nil
+		v.aiViewOffset = 0
+	case "up", "k":
+		if v.aiViewOffset > 0 {
+			v.aiViewOffset--
+		}
+	case "down", "j":
+		visible := v.height - 4
+		max := len(v.aiOutputEntries) - visible
+		if max < 0 {
+			max = 0
+		}
+		if v.aiViewOffset < max {
+			v.aiViewOffset++
+		}
+	case "pgup", "ctrl+u":
+		visible := v.height - 4
+		v.aiViewOffset -= visible
+		if v.aiViewOffset < 0 {
+			v.aiViewOffset = 0
+		}
+	case "pgdown", "ctrl+d":
+		visible := v.height - 4
+		max := len(v.aiOutputEntries) - visible
+		if max < 0 {
+			max = 0
+		}
+		v.aiViewOffset += visible
+		if v.aiViewOffset > max {
+			v.aiViewOffset = max
+		}
+	}
+	return nil
+}
+
+// handleDetailInput handles keyboard input while the detail pane is shown.
+func (v *JiraView) handleDetailInput(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "w":
+		if v.detailIssue != nil {
+			return v.triggerWorkflow(v.detailIssue)
+		}
+	case "esc":
+		v.showDetail = false
+		v.detailIssue = nil
+	}
 	return nil
 }
 
@@ -509,10 +516,10 @@ func (v *JiraView) triggerWorkflow(issue *service.Issue) tea.Cmd {
 func (v *JiraView) handleFocusInput(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
-		focus := strings.TrimSpace(v.focusInput)
+		focus := strings.TrimSpace(v.focusInput.Value)
 		issue := v.focusIssue
 		v.showFocusInput = false
-		v.focusInput = ""
+		v.focusInput.Clear()
 		v.focusIssue = nil
 		if issue == nil {
 			return nil
@@ -521,26 +528,11 @@ func (v *JiraView) handleFocusInput(msg tea.KeyMsg) tea.Cmd {
 
 	case "esc":
 		v.showFocusInput = false
-		v.focusInput = ""
+		v.focusInput.Clear()
 		v.focusIssue = nil
 
-	case "ctrl+w":
-		v.focusInput = components.DeleteWordEnd(v.focusInput)
-
-	case "backspace":
-		if len(v.focusInput) > 0 {
-			v.focusInput = v.focusInput[:len(v.focusInput)-1]
-		}
-
 	default:
-		if msg.Paste && len(msg.Runes) > 0 {
-			v.focusInput += string(msg.Runes)
-		} else if len(msg.Runes) == 1 {
-			r := msg.Runes[0]
-			if r >= 32 {
-				v.focusInput += string(r)
-			}
-		}
+		v.focusInput.HandleKey(msg)
 	}
 	return nil
 }
@@ -549,32 +541,17 @@ func (v *JiraView) handleFocusInput(msg tea.KeyMsg) tea.Cmd {
 func (v *JiraView) handleReviewInput(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
-		instruction := strings.TrimSpace(v.reviewInput)
+		instruction := strings.TrimSpace(v.reviewInput.Value)
 		v.showReviewInput = false
-		v.reviewInput = ""
+		v.reviewInput.Clear()
 		return v.startMultiReview(instruction)
 
 	case "esc":
 		v.showReviewInput = false
-		v.reviewInput = ""
-
-	case "ctrl+w":
-		v.reviewInput = components.DeleteWordEnd(v.reviewInput)
-
-	case "backspace":
-		if len(v.reviewInput) > 0 {
-			v.reviewInput = v.reviewInput[:len(v.reviewInput)-1]
-		}
+		v.reviewInput.Clear()
 
 	default:
-		if msg.Paste && len(msg.Runes) > 0 {
-			v.reviewInput += string(msg.Runes)
-		} else if len(msg.Runes) == 1 {
-			r := msg.Runes[0]
-			if r >= 32 {
-				v.reviewInput += string(r)
-			}
-		}
+		v.reviewInput.HandleKey(msg)
 	}
 	return nil
 }
@@ -698,7 +675,7 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 	case workflowStepChoose:
 		switch msg.String() {
 		case "n":
-			v.workflowExtraMsg = ""
+			v.workflowExtraMsg.Clear()
 			v.wfStep = workflowStepNewConfirm
 		case "e":
 			repoPath := v.repoPath
@@ -730,7 +707,7 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 			proj := v.proj
 			repoPath := v.repoPath
 			jiraURL := v.cfg.BaseURL + "/browse/" + issue.Key
-			extraMsg := v.workflowExtraMsg
+			extraMsg := v.workflowExtraMsg.Value
 			v.workflowFromExisting = false
 			defBranch := "main"
 			if proj != nil && len(proj.Repos) > 0 {
@@ -742,22 +719,9 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 			}
 		case "esc":
 			v.wfStep = workflowStepChoose
-			v.workflowExtraMsg = ""
-		case "ctrl+w":
-			v.workflowExtraMsg = components.DeleteWordEnd(v.workflowExtraMsg)
-		case "backspace":
-			if len(v.workflowExtraMsg) > 0 {
-				v.workflowExtraMsg = v.workflowExtraMsg[:len(v.workflowExtraMsg)-1]
-			}
+			v.workflowExtraMsg.Clear()
 		default:
-			if msg.Paste && len(msg.Runes) > 0 {
-				v.workflowExtraMsg += string(msg.Runes)
-			} else if len(msg.Runes) == 1 {
-				r := msg.Runes[0]
-				if r >= 32 {
-					v.workflowExtraMsg += string(r)
-				}
-			}
+			v.workflowExtraMsg.HandleKey(msg)
 		}
 
 	case workflowStepSelectWT:
@@ -773,7 +737,7 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 		case "enter":
 			if len(v.existingWTs) > 0 {
 				v.workflowBranch = v.existingWTs[v.selectedWTIdx].Branch
-				v.workflowExtraMsg = ""
+				v.workflowExtraMsg.Clear()
 				v.wfStep = workflowStepExistConfirm
 			}
 		case "esc":
@@ -787,7 +751,7 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 				wt := v.existingWTs[v.selectedWTIdx]
 				issue := v.workflowIssue
 				svc := v.services
-				extraMsg := v.workflowExtraMsg
+				extraMsg := v.workflowExtraMsg.Value
 				v.workflowFromExisting = true
 				ctx := v.ctx()
 				return func() tea.Msg {
@@ -796,22 +760,9 @@ func (v *JiraView) handleWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 			}
 		case "esc":
 			v.wfStep = workflowStepSelectWT
-			v.workflowExtraMsg = ""
-		case "ctrl+w":
-			v.workflowExtraMsg = components.DeleteWordEnd(v.workflowExtraMsg)
-		case "backspace":
-			if len(v.workflowExtraMsg) > 0 {
-				v.workflowExtraMsg = v.workflowExtraMsg[:len(v.workflowExtraMsg)-1]
-			}
+			v.workflowExtraMsg.Clear()
 		default:
-			if msg.Paste && len(msg.Runes) > 0 {
-				v.workflowExtraMsg += string(msg.Runes)
-			} else if len(msg.Runes) == 1 {
-				r := msg.Runes[0]
-				if r >= 32 {
-					v.workflowExtraMsg += string(r)
-				}
-			}
+			v.workflowExtraMsg.HandleKey(msg)
 		}
 
 	}
@@ -937,9 +888,9 @@ func issueToBranchName(issue *service.Issue) string {
 func (v *JiraView) handleSearchInput(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
-		jql := v.searchInput
+		jql := v.searchInput.Value
 		v.searchMode = false
-		v.searchInput = ""
+		v.searchInput.Clear()
 		if jql == "" {
 			jql = v.defaultJQL()
 		}
@@ -949,25 +900,10 @@ func (v *JiraView) handleSearchInput(msg tea.KeyMsg) tea.Cmd {
 
 	case "esc":
 		v.searchMode = false
-		v.searchInput = ""
-
-	case "ctrl+w":
-		v.searchInput = components.DeleteWordEnd(v.searchInput)
-
-	case "backspace":
-		if len(v.searchInput) > 0 {
-			v.searchInput = v.searchInput[:len(v.searchInput)-1]
-		}
+		v.searchInput.Clear()
 
 	default:
-		if msg.Paste && len(msg.Runes) > 0 {
-			v.searchInput += string(msg.Runes)
-		} else if len(msg.Runes) == 1 {
-			r := msg.Runes[0]
-			if r >= 32 {
-				v.searchInput += string(r)
-			}
-		}
+		v.searchInput.HandleKey(msg)
 	}
 	return nil
 }
@@ -975,9 +911,9 @@ func (v *JiraView) handleSearchInput(msg tea.KeyMsg) tea.Cmd {
 func (v *JiraView) handleTextInput(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
-		text := strings.TrimSpace(v.textInput)
+		text := strings.TrimSpace(v.textInput.Value)
 		v.showTextInput = false
-		v.textInput = ""
+		v.textInput.Clear()
 		if text == "" {
 			return nil
 		}
@@ -985,25 +921,10 @@ func (v *JiraView) handleTextInput(msg tea.KeyMsg) tea.Cmd {
 
 	case "esc":
 		v.showTextInput = false
-		v.textInput = ""
-
-	case "ctrl+w":
-		v.textInput = components.DeleteWordEnd(v.textInput)
-
-	case "backspace":
-		if len(v.textInput) > 0 {
-			v.textInput = v.textInput[:len(v.textInput)-1]
-		}
+		v.textInput.Clear()
 
 	default:
-		if msg.Paste && len(msg.Runes) > 0 {
-			v.textInput += string(msg.Runes)
-		} else if len(msg.Runes) == 1 {
-			r := msg.Runes[0]
-			if r >= 32 {
-				v.textInput += string(r)
-			}
-		}
+		v.textInput.HandleKey(msg)
 	}
 	return nil
 }
@@ -1083,58 +1004,7 @@ func (v *JiraView) View() string {
 
 	// AI agent running
 	if v.aiMode != "" {
-		modeLabel := "Refining"
-		if v.aiMode == "create" {
-			modeLabel = "Creating stories"
-		} else if v.aiMode == "review" {
-			modeLabel = "Reviewing tickets"
-		} else if v.aiMode == "iterate" {
-			modeLabel = "Iterating on proposal"
-		}
-		s.WriteString(th.InfoStyle.Render(fmt.Sprintf(" %s... (Esc to cancel)", modeLabel)))
-		s.WriteString("\n\n")
-		// Show output entries with scroll support
-		visible := v.height - 4
-		if visible < 1 {
-			visible = 1
-		}
-		start := v.aiViewOffset
-		if start < 0 {
-			start = 0
-		}
-		end := start + visible
-		if end > len(v.aiOutputEntries) {
-			end = len(v.aiOutputEntries)
-		}
-		for _, entry := range v.aiOutputEntries[start:end] {
-			prefix := ""
-			switch entry.Source {
-			case "tool_use":
-				prefix = th.BranchStyle.Render("→ ")
-			case "tool_result":
-				prefix = th.MutedTextStyle.Render("  ")
-			case "text":
-				prefix = "  "
-			case "system":
-				prefix = th.MutedTextStyle.Render("⚙ ")
-			case "error":
-				prefix = th.DashboardErrorStyle.Render("✗ ")
-			}
-			line := entry.Content
-			if len(line) > v.width-4 {
-				line = line[:v.width-7] + "..."
-			}
-			s.WriteString(prefix + line + "\n")
-		}
-		// Scroll indicator
-		if len(v.aiOutputEntries) > visible {
-			scrollPct := 0
-			if max := len(v.aiOutputEntries) - visible; max > 0 {
-				scrollPct = v.aiViewOffset * 100 / max
-			}
-			s.WriteString(th.Help.Render(fmt.Sprintf(" ↑↓/jk: scroll · pgup/pgdn: page · %d%%", scrollPct)))
-		}
-		return s.String()
+		return v.renderAIMode()
 	}
 
 	// Header
@@ -1161,7 +1031,7 @@ func (v *JiraView) View() string {
 	if v.showFocusInput {
 		s.WriteString(th.DashboardTitle.Render(" Refine: Focus "))
 		s.WriteString("\n")
-		s.WriteString(fmt.Sprintf(" > %s█", v.focusInput))
+		s.WriteString(fmt.Sprintf(" > %s", v.focusInput.RenderPlain()))
 		s.WriteString("\n")
 		s.WriteString(th.Help.Render(" What should the AI focus on? Enter: start (empty = general refine) · Esc: cancel "))
 		s.WriteString("\n\n")
@@ -1171,7 +1041,7 @@ func (v *JiraView) View() string {
 	if v.showReviewInput {
 		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" Review %d Tickets ", len(v.selectedIssues))))
 		s.WriteString("\n")
-		s.WriteString(fmt.Sprintf(" > %s█", v.reviewInput))
+		s.WriteString(fmt.Sprintf(" > %s", v.reviewInput.RenderPlain()))
 		s.WriteString("\n")
 		s.WriteString(th.Help.Render(" Custom instructions (optional) · Enter: start review · Esc: cancel "))
 		s.WriteString("\n\n")
@@ -1181,7 +1051,7 @@ func (v *JiraView) View() string {
 	if v.showTextInput {
 		s.WriteString(th.DashboardTitle.Render(" Create Stories from Text "))
 		s.WriteString("\n")
-		s.WriteString(fmt.Sprintf(" > %s█", v.textInput))
+		s.WriteString(fmt.Sprintf(" > %s", v.textInput.RenderPlain()))
 		s.WriteString("\n")
 		s.WriteString(th.Help.Render(" Paste or type a requirement, then Enter to start · Esc: cancel "))
 		s.WriteString("\n\n")
@@ -1191,7 +1061,7 @@ func (v *JiraView) View() string {
 	if v.searchMode {
 		s.WriteString(th.DashboardTitle.Render(" Search "))
 		s.WriteString("\n")
-		s.WriteString(fmt.Sprintf(" > %s_", v.searchInput))
+		s.WriteString(fmt.Sprintf(" > %s_", v.searchInput.Value))
 		s.WriteString("\n")
 		s.WriteString(th.Help.Render(" Enter: run query   Esc: cancel   (issue key e.g. PROJ-123 or JQL) "))
 		s.WriteString("\n\n")
@@ -1231,6 +1101,66 @@ func (v *JiraView) View() string {
 	return s.String()
 }
 
+// renderAIMode renders the full-screen view shown while a refine/create/review
+// agent is running, including scrollable output and a scroll indicator.
+func (v *JiraView) renderAIMode() string {
+	th := theme.GetTheme()
+	var s strings.Builder
+
+	modeLabel := "Refining"
+	if v.aiMode == "create" {
+		modeLabel = "Creating stories"
+	} else if v.aiMode == "review" {
+		modeLabel = "Reviewing tickets"
+	} else if v.aiMode == "iterate" {
+		modeLabel = "Iterating on proposal"
+	}
+	s.WriteString(th.InfoStyle.Render(fmt.Sprintf(" %s... (Esc to cancel)", modeLabel)))
+	s.WriteString("\n\n")
+	// Show output entries with scroll support
+	visible := v.height - 4
+	if visible < 1 {
+		visible = 1
+	}
+	start := v.aiViewOffset
+	if start < 0 {
+		start = 0
+	}
+	end := start + visible
+	if end > len(v.aiOutputEntries) {
+		end = len(v.aiOutputEntries)
+	}
+	for _, entry := range v.aiOutputEntries[start:end] {
+		prefix := ""
+		switch entry.Source {
+		case "tool_use":
+			prefix = th.BranchStyle.Render("→ ")
+		case "tool_result":
+			prefix = th.MutedTextStyle.Render("  ")
+		case "text":
+			prefix = "  "
+		case "system":
+			prefix = th.MutedTextStyle.Render("⚙ ")
+		case "error":
+			prefix = th.DashboardErrorStyle.Render("✗ ")
+		}
+		line := entry.Content
+		if len(line) > v.width-4 {
+			line = line[:v.width-7] + "..."
+		}
+		s.WriteString(prefix + line + "\n")
+	}
+	// Scroll indicator
+	if len(v.aiOutputEntries) > visible {
+		scrollPct := 0
+		if max := len(v.aiOutputEntries) - visible; max > 0 {
+			scrollPct = v.aiViewOffset * 100 / max
+		}
+		s.WriteString(th.Help.Render(fmt.Sprintf(" ↑↓/jk: scroll · pgup/pgdn: page · %d%%", scrollPct)))
+	}
+	return s.String()
+}
+
 // renderWorkflowModal renders the appropriate modal for the current workflow step.
 func (v *JiraView) renderWorkflowModal() string {
 	mw := modalWidth(v.width)
@@ -1248,7 +1178,7 @@ func (v *JiraView) renderWorkflowModal() string {
 		}, mw)
 
 	case workflowStepNewConfirm:
-		input := v.workflowExtraMsg + "█"
+		input := v.workflowExtraMsg.RenderPlain()
 		return renderModal("New Worktree", []string{
 			fmt.Sprintf("Ticket: %s", issue.Key),
 			fmt.Sprintf("Branch: %s", v.workflowBranch),
@@ -1288,7 +1218,7 @@ func (v *JiraView) renderWorkflowModal() string {
 		if label == "" {
 			label = filepath.Base(wt.Path)
 		}
-		input := v.workflowExtraMsg + "█"
+		input := v.workflowExtraMsg.RenderPlain()
 		return renderModal("Run on Worktree", []string{
 			fmt.Sprintf("Ticket: %s", issue.Key),
 			fmt.Sprintf("Worktree: %s", truncate(label, mw-12)),
