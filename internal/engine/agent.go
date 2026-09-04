@@ -518,10 +518,7 @@ func (a *Agent) sendInput(message string) error {
 
 	data, err := a.backend.FollowUpInput(message, sid, isStreaming)
 	if err != nil {
-		a.mu.Lock()
-		a.State = prevState
-		a.EndedAt = prevEndedAt
-		a.mu.Unlock()
+		a.rollbackInputState(prevState, prevEndedAt)
 		return fmt.Errorf("backend FollowUpInput: %w", err)
 	}
 
@@ -529,24 +526,28 @@ func (a *Agent) sendInput(message string) error {
 	defer a.stdinMu.Unlock()
 
 	if a.stdin == nil {
-		a.mu.Lock()
-		a.State = prevState
-		a.EndedAt = prevEndedAt
-		a.mu.Unlock()
+		a.rollbackInputState(prevState, prevEndedAt)
 		return fmt.Errorf("agent %s stdin not available (process exited)", a.ID)
 	}
 
 	_, err = a.stdin.Write(data)
 	if err != nil {
-		a.mu.Lock()
-		a.State = prevState
-		a.EndedAt = prevEndedAt
-		a.mu.Unlock()
+		a.rollbackInputState(prevState, prevEndedAt)
 		return fmt.Errorf("write to stdin: %w (process may have exited)", err)
 	}
 
 	a.appendOutput("user_input", truncateForLog(message, promptLogLimit))
 	return nil
+}
+
+// rollbackInputState restores State/EndedAt after a failed sendInput attempt.
+// Callers must not hold a.mu (it acquires and releases mu itself, matching the
+// lock timing of the original inline restore blocks it replaces).
+func (a *Agent) rollbackInputState(prevState AgentState, prevEndedAt *time.Time) {
+	a.mu.Lock()
+	a.State = prevState
+	a.EndedAt = prevEndedAt
+	a.mu.Unlock()
 }
 
 // softClose marks the agent as killed without terminating the subprocess.
