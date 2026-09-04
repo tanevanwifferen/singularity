@@ -54,15 +54,10 @@ type ProjectView struct {
 	newBranchResult string // flash message for results
 
 	// MR creation state
-	showMRConfirm   bool
-	mrConfirmRepo   string // repo name for confirmation
-	mrConfirmPath   string // repo path
-	mrConfirmBranch string // branch name
-	mrResult        string // flash message for MR result
+	mrResult string // flash message for MR result
 
 	// Reset-to-main confirmation state
-	showResetAllConfirm bool
-	resetAllResult      string
+	resetAllResult string
 
 	// Checkout by name state
 	showCheckoutByName   bool
@@ -71,16 +66,17 @@ type ProjectView struct {
 	checkoutByNameResult string
 
 	// Detach all worktrees state
-	showDetachAllConfirm bool
-	detachAllResult      string
+	detachAllResult string
 
 	// Sync-to-worktrees state (W): checkout main dir as detached at each worktree HEAD
-	showSyncWorktreeConfirm bool
-	syncWorktreeResult      string
+	syncWorktreeResult string
 
 	// Checkout all main branches state (A): checkout default branch in every repo
-	showCheckoutAllMainConfirm bool
-	checkoutAllMainResult      string
+	checkoutAllMainResult string
+
+	// Shared confirmation dialog, reused for MR creation, reset-all, detach-all,
+	// sync-to-worktrees and checkout-all-main (only one can be open at a time).
+	confirm components.ConfirmPrompt
 
 	// Filter for tree list
 	filter *components.Filter[treeNode]
@@ -415,150 +411,10 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, nil
 		}
 
-		// Handle MR confirmation mode
-		if v.showMRConfirm {
-			switch msg.String() {
-			case "y", "enter":
-				provider, _ := v.services.Forge.DetectProvider(v.ctx(), v.mrConfirmPath)
-				baseBranch := "main"
-				if v.proj != nil {
-					for _, r := range v.proj.Repos {
-						if r.Path == v.mrConfirmPath && r.DefaultBranch != "" {
-							baseBranch = r.DefaultBranch
-							break
-						}
-					}
-				}
-				result, err := v.services.MR.CreateCLI(v.ctx(), v.mrConfirmPath, provider, baseBranch)
-				if err != nil {
-					v.mrResult = fmt.Sprintf("MR creation failed: %v", err)
-				} else {
-					v.mrResult = fmt.Sprintf("MR created: %s", result.URL)
-				}
-				v.showMRConfirm = false
-			case "n", "esc":
-				v.showMRConfirm = false
-			}
-			return v, nil
-		}
-
-		// Handle reset-all confirmation mode
-		if v.showResetAllConfirm {
-			switch msg.String() {
-			case "y", "enter":
-				var results []string
-				if v.proj != nil {
-					for _, repo := range v.proj.Repos {
-						err := service.ResetRepoToMain(repo.Path, repo.DefaultBranch)
-						if err != nil {
-							results = append(results, fmt.Sprintf("✗ %s: %v", repo.Name, err))
-						} else {
-							results = append(results, fmt.Sprintf("✓ %s: reset to origin/%s", repo.Name, repo.DefaultBranch))
-						}
-					}
-				}
-				v.resetAllResult = strings.Join(results, "\n")
-				v.showResetAllConfirm = false
-				v.loadData()
-			case "n", "esc":
-				v.showResetAllConfirm = false
-			}
-			return v, nil
-		}
-
-		// Handle detach-all confirmation mode
-		if v.showDetachAllConfirm {
-			switch msg.String() {
-			case "y", "enter":
-				var results []string
-				if v.proj != nil {
-					for _, repo := range v.proj.Repos {
-						worktrees, err := v.services.Worktree.List(v.ctx(), repo.Path)
-						if err != nil {
-							results = append(results, fmt.Sprintf("✗ %s: %v", repo.Name, err))
-							continue
-						}
-						for _, wt := range worktrees {
-							if err := v.services.Branch.CheckoutDetached(v.ctx(), wt.Path); err != nil {
-								results = append(results, fmt.Sprintf("✗ %s/%s: %v", repo.Name, filepath.Base(wt.Path), err))
-							} else {
-								results = append(results, fmt.Sprintf("✓ %s/%s: detached", repo.Name, filepath.Base(wt.Path)))
-							}
-						}
-					}
-				}
-				v.detachAllResult = strings.Join(results, "\n")
-				v.showDetachAllConfirm = false
-				v.loadData()
-			case "n", "esc":
-				v.showDetachAllConfirm = false
-			}
-			return v, nil
-		}
-
-		// Handle sync-to-worktrees confirmation (W)
-		if v.showSyncWorktreeConfirm {
-			switch msg.String() {
-			case "y", "enter":
-				var results []string
-				if v.proj != nil {
-					for _, repo := range v.proj.Repos {
-						worktrees, err := v.services.Worktree.List(v.ctx(), repo.Path)
-						if err != nil {
-							results = append(results, fmt.Sprintf("✗ %s: %v", repo.Name, err))
-							continue
-						}
-						if len(worktrees) < 2 {
-							results = append(results, fmt.Sprintf("⊘ %s: no worktrees", repo.Name))
-							continue
-						}
-						mainPath := worktrees[0].Path
-						for _, wt := range worktrees[1:] {
-							if wt.HEAD == "" {
-								continue
-							}
-							if err := v.services.Branch.CheckoutDetachedAt(v.ctx(), mainPath, wt.HEAD); err != nil {
-								results = append(results, fmt.Sprintf("✗ %s/%s: %v", repo.Name, filepath.Base(wt.Path), err))
-							} else {
-								results = append(results, fmt.Sprintf("✓ %s: main→%s (%s)", repo.Name, filepath.Base(wt.Path), wt.HEAD[:7]))
-							}
-						}
-					}
-				}
-				v.syncWorktreeResult = strings.Join(results, "\n")
-				v.showSyncWorktreeConfirm = false
-				v.loadData()
-			case "n", "esc":
-				v.showSyncWorktreeConfirm = false
-			}
-			return v, nil
-		}
-
-		// Handle checkout-all-main confirmation (A)
-		if v.showCheckoutAllMainConfirm {
-			switch msg.String() {
-			case "y", "enter":
-				var results []string
-				if v.proj != nil {
-					for _, repo := range v.proj.Repos {
-						branch := repo.DefaultBranch
-						if branch == "" {
-							branch = "main"
-						}
-						if err := v.services.Branch.Checkout(v.ctx(), repo.Path, branch); err != nil {
-							results = append(results, fmt.Sprintf("✗ %s: %v", repo.Name, err))
-						} else {
-							results = append(results, fmt.Sprintf("✓ %s: checked out '%s'", repo.Name, branch))
-						}
-					}
-				}
-				v.checkoutAllMainResult = strings.Join(results, "\n")
-				v.showCheckoutAllMainConfirm = false
-				v.loadData()
-			case "n", "esc":
-				v.showCheckoutAllMainConfirm = false
-			}
-			return v, nil
+		// Handle any active confirmation dialog (MR creation, reset-all,
+		// detach-all, sync-to-worktrees, checkout-all-main).
+		if handled, cmd := v.confirm.HandleKey(msg); handled {
+			return v, cmd
 		}
 
 		// Handle checkout-by-name mode
@@ -651,24 +507,151 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if node.Branch.Name == defaultBranch {
 					v.mrResult = fmt.Sprintf("Cannot create MR from default branch '%s'", defaultBranch)
 				} else {
-					v.showMRConfirm = true
-					v.mrConfirmRepo = node.Repo.Name
-					v.mrConfirmPath = node.Repo.Path
-					v.mrConfirmBranch = node.Branch.Name
+					repoName := node.Repo.Name
+					repoPath := node.Repo.Path
+					branchName := node.Branch.Name
+					v.confirm.Show("Create MR/PR",
+						fmt.Sprintf("Repo:   %s\nBranch: %s", repoName, branchName),
+						func() tea.Cmd {
+							provider, _ := v.services.Forge.DetectProvider(v.ctx(), repoPath)
+							baseBranch := "main"
+							if v.proj != nil {
+								for _, r := range v.proj.Repos {
+									if r.Path == repoPath && r.DefaultBranch != "" {
+										baseBranch = r.DefaultBranch
+										break
+									}
+								}
+							}
+							result, err := v.services.MR.CreateCLI(v.ctx(), repoPath, provider, baseBranch)
+							if err != nil {
+								v.mrResult = fmt.Sprintf("MR creation failed: %v", err)
+							} else {
+								v.mrResult = fmt.Sprintf("MR created: %s", result.URL)
+							}
+							return nil
+						})
 				}
 			}
 		case "X":
 			// Prompt to reset all repos to their default branch
-			v.showResetAllConfirm = true
+			repoCount := 0
+			if v.proj != nil {
+				repoCount = len(v.proj.Repos)
+			}
+			v.confirm.Show("Reset ALL Repos to Main",
+				fmt.Sprintf("WARNING: This will discard ALL local changes,\ncommits, and untracked files in every repo.\n\nRepos affected: %d\n\nEach repo will be:  fetch + reset --hard + clean -fd", repoCount),
+				func() tea.Cmd {
+					var results []string
+					if v.proj != nil {
+						for _, repo := range v.proj.Repos {
+							err := service.ResetRepoToMain(repo.Path, repo.DefaultBranch)
+							if err != nil {
+								results = append(results, fmt.Sprintf("✗ %s: %v", repo.Name, err))
+							} else {
+								results = append(results, fmt.Sprintf("✓ %s: reset to origin/%s", repo.Name, repo.DefaultBranch))
+							}
+						}
+					}
+					v.resetAllResult = strings.Join(results, "\n")
+					v.loadData()
+					return nil
+				})
 		case "D":
 			// Prompt to checkout all worktrees of all repos as detached HEAD
-			v.showDetachAllConfirm = true
+			repoCount := 0
+			if v.proj != nil {
+				repoCount = len(v.proj.Repos)
+			}
+			v.confirm.Show("Detach All Worktrees",
+				fmt.Sprintf("Checkout all worktrees of all %d repo(s) as detached HEAD?", repoCount),
+				func() tea.Cmd {
+					var results []string
+					if v.proj != nil {
+						for _, repo := range v.proj.Repos {
+							worktrees, err := v.services.Worktree.List(v.ctx(), repo.Path)
+							if err != nil {
+								results = append(results, fmt.Sprintf("✗ %s: %v", repo.Name, err))
+								continue
+							}
+							for _, wt := range worktrees {
+								if err := v.services.Branch.CheckoutDetached(v.ctx(), wt.Path); err != nil {
+									results = append(results, fmt.Sprintf("✗ %s/%s: %v", repo.Name, filepath.Base(wt.Path), err))
+								} else {
+									results = append(results, fmt.Sprintf("✓ %s/%s: detached", repo.Name, filepath.Base(wt.Path)))
+								}
+							}
+						}
+					}
+					v.detachAllResult = strings.Join(results, "\n")
+					v.loadData()
+					return nil
+				})
 		case "W":
 			// Sync: checkout main dir of each repo as detached at each worktree's HEAD
-			v.showSyncWorktreeConfirm = true
+			repoCount := 0
+			if v.proj != nil {
+				repoCount = len(v.proj.Repos)
+			}
+			v.confirm.Show("Sync Main Dir to Worktrees",
+				fmt.Sprintf("Sync main checkout of %d repo(s) to worktree HEAD?\nMain dir → detached HEAD at each worktree's last commit.", repoCount),
+				func() tea.Cmd {
+					var results []string
+					if v.proj != nil {
+						for _, repo := range v.proj.Repos {
+							worktrees, err := v.services.Worktree.List(v.ctx(), repo.Path)
+							if err != nil {
+								results = append(results, fmt.Sprintf("✗ %s: %v", repo.Name, err))
+								continue
+							}
+							if len(worktrees) < 2 {
+								results = append(results, fmt.Sprintf("⊘ %s: no worktrees", repo.Name))
+								continue
+							}
+							mainPath := worktrees[0].Path
+							for _, wt := range worktrees[1:] {
+								if wt.HEAD == "" {
+									continue
+								}
+								if err := v.services.Branch.CheckoutDetachedAt(v.ctx(), mainPath, wt.HEAD); err != nil {
+									results = append(results, fmt.Sprintf("✗ %s/%s: %v", repo.Name, filepath.Base(wt.Path), err))
+								} else {
+									results = append(results, fmt.Sprintf("✓ %s: main→%s (%s)", repo.Name, filepath.Base(wt.Path), wt.HEAD[:7]))
+								}
+							}
+						}
+					}
+					v.syncWorktreeResult = strings.Join(results, "\n")
+					v.loadData()
+					return nil
+				})
 		case "M":
 			// Checkout default branch in all repos
-			v.showCheckoutAllMainConfirm = true
+			repoCount := 0
+			if v.proj != nil {
+				repoCount = len(v.proj.Repos)
+			}
+			v.confirm.Show("Checkout Main Branch: All Repos",
+				fmt.Sprintf("Checkout default branch in all %d repo(s)?", repoCount),
+				func() tea.Cmd {
+					var results []string
+					if v.proj != nil {
+						for _, repo := range v.proj.Repos {
+							branch := repo.DefaultBranch
+							if branch == "" {
+								branch = "main"
+							}
+							if err := v.services.Branch.Checkout(v.ctx(), repo.Path, branch); err != nil {
+								results = append(results, fmt.Sprintf("✗ %s: %v", repo.Name, err))
+							} else {
+								results = append(results, fmt.Sprintf("✓ %s: checked out '%s'", repo.Name, branch))
+							}
+						}
+					}
+					v.checkoutAllMainResult = strings.Join(results, "\n")
+					v.loadData()
+					return nil
+				})
 		case "C":
 			// Checkout a branch by name in the selected repo
 			node := v.selectedNode()
@@ -799,86 +782,10 @@ func (v *ProjectView) View() string {
 		s.WriteString("\n")
 	}
 
-	// MR confirmation modal (single repo)
-	if v.showMRConfirm {
-		lines := []string{
-			"",
-			fmt.Sprintf("  Repo:   %s", th.InfoStyle.Render(v.mrConfirmRepo)),
-			fmt.Sprintf("  Branch: %s", th.InfoStyle.Render(v.mrConfirmBranch)),
-			"",
-			"  y: Yes  n: No",
-		}
-		s.WriteString(renderModal("Create MR/PR", lines, modalWidth(v.width)))
-		s.WriteString("\n")
-	}
-
-	// Reset-all confirmation modal
-	if v.showResetAllConfirm {
-		repoCount := 0
-		if v.proj != nil {
-			repoCount = len(v.proj.Repos)
-		}
-		lines := []string{
-			"",
-			th.DashboardErrorStyle.Render("  WARNING: This will discard ALL local changes,"),
-			th.DashboardErrorStyle.Render("  commits, and untracked files in every repo."),
-			"",
-			fmt.Sprintf("  Repos affected: %d", repoCount),
-			"",
-			"  Each repo will be:  fetch + reset --hard + clean -fd",
-			"",
-			"  y: Yes, reset everything  n/Esc: Cancel",
-		}
-		s.WriteString(renderModal("Reset ALL Repos to Main", lines, modalWidth(v.width)))
-		s.WriteString("\n")
-	}
-
-	// Detach-all confirmation modal
-	if v.showDetachAllConfirm {
-		repoCount := 0
-		if v.proj != nil {
-			repoCount = len(v.proj.Repos)
-		}
-		lines := []string{
-			"",
-			fmt.Sprintf("  Checkout all worktrees of all %d repo(s) as detached HEAD?", repoCount),
-			"",
-			"  y: Yes  n/Esc: Cancel",
-		}
-		s.WriteString(renderModal("Detach All Worktrees", lines, modalWidth(v.width)))
-		s.WriteString("\n")
-	}
-
-	// Sync-to-worktrees confirmation modal (W)
-	if v.showSyncWorktreeConfirm {
-		repoCount := 0
-		if v.proj != nil {
-			repoCount = len(v.proj.Repos)
-		}
-		lines := []string{
-			"",
-			fmt.Sprintf("  Sync main checkout of %d repo(s) to worktree HEAD?", repoCount),
-			"  Main dir → detached HEAD at each worktree's last commit.",
-			"",
-			"  y: Yes  n/Esc: Cancel",
-		}
-		s.WriteString(renderModal("Sync Main Dir to Worktrees", lines, modalWidth(v.width)))
-		s.WriteString("\n")
-	}
-
-	// Checkout-all-main confirmation modal (A)
-	if v.showCheckoutAllMainConfirm {
-		repoCount := 0
-		if v.proj != nil {
-			repoCount = len(v.proj.Repos)
-		}
-		lines := []string{
-			"",
-			fmt.Sprintf("  Checkout default branch in all %d repo(s)?", repoCount),
-			"",
-			"  y: Yes  n/Esc: Cancel",
-		}
-		s.WriteString(renderModal("Checkout Main Branch: All Repos", lines, modalWidth(v.width)))
+	// Shared confirmation modal (MR creation, reset-all, detach-all,
+	// sync-to-worktrees, checkout-all-main)
+	if v.confirm.Visible {
+		s.WriteString(v.confirm.Render(modalWidth(v.width)))
 		s.WriteString("\n")
 	}
 
@@ -896,24 +803,13 @@ func (v *ProjectView) View() string {
 
 	// Flash messages for checkout-by-name result
 	if v.checkoutByNameResult != "" {
-		if strings.HasPrefix(v.checkoutByNameResult, "✓") {
-			s.WriteString(th.DashboardAccentStyle.Render(" " + v.checkoutByNameResult))
-		} else {
-			s.WriteString(th.DashboardErrorStyle.Render(" " + v.checkoutByNameResult))
-		}
-		s.WriteString("\n\n")
+		s.WriteString(renderResultLines(v.checkoutByNameResult))
+		s.WriteString("\n")
 	}
 
 	// Flash messages for branch/MR results
 	if v.newBranchResult != "" {
-		for _, line := range strings.Split(v.newBranchResult, "\n") {
-			if strings.HasPrefix(line, "✓") {
-				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
-			} else {
-				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
-			}
-			s.WriteString("\n")
-		}
+		s.WriteString(renderResultLines(v.newBranchResult))
 		s.WriteString("\n")
 	}
 	if v.mrResult != "" {
@@ -925,47 +821,19 @@ func (v *ProjectView) View() string {
 		s.WriteString("\n\n")
 	}
 	if v.resetAllResult != "" {
-		for _, line := range strings.Split(v.resetAllResult, "\n") {
-			if strings.HasPrefix(line, "✓") {
-				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
-			} else {
-				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
-			}
-			s.WriteString("\n")
-		}
+		s.WriteString(renderResultLines(v.resetAllResult))
 		s.WriteString("\n")
 	}
 	if v.detachAllResult != "" {
-		for _, line := range strings.Split(v.detachAllResult, "\n") {
-			if strings.HasPrefix(line, "✓") {
-				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
-			} else {
-				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
-			}
-			s.WriteString("\n")
-		}
+		s.WriteString(renderResultLines(v.detachAllResult))
 		s.WriteString("\n")
 	}
 	if v.syncWorktreeResult != "" {
-		for _, line := range strings.Split(v.syncWorktreeResult, "\n") {
-			if strings.HasPrefix(line, "✓") {
-				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
-			} else {
-				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
-			}
-			s.WriteString("\n")
-		}
+		s.WriteString(renderResultLines(v.syncWorktreeResult))
 		s.WriteString("\n")
 	}
 	if v.checkoutAllMainResult != "" {
-		for _, line := range strings.Split(v.checkoutAllMainResult, "\n") {
-			if strings.HasPrefix(line, "✓") {
-				s.WriteString(th.DashboardAccentStyle.Render(" " + line))
-			} else {
-				s.WriteString(th.DashboardErrorStyle.Render(" " + line))
-			}
-			s.WriteString("\n")
-		}
+		s.WriteString(renderResultLines(v.checkoutAllMainResult))
 		s.WriteString("\n")
 	}
 
@@ -992,6 +860,22 @@ func (v *ProjectView) View() string {
 	return s.String()
 }
 
+// renderResultLines styles a (possibly multi-line) result message, rendering
+// lines starting with "✓" in the accent style and all others in the error style.
+func renderResultLines(msg string) string {
+	th := theme.GetTheme()
+	var s strings.Builder
+	for _, line := range strings.Split(msg, "\n") {
+		if strings.HasPrefix(line, "✓") {
+			s.WriteString(th.DashboardAccentStyle.Render(" " + line))
+		} else {
+			s.WriteString(th.DashboardErrorStyle.Render(" " + line))
+		}
+		s.WriteString("\n")
+	}
+	return s.String()
+}
+
 // renderFooterHelp returns contextual help text based on current state.
 func (v *ProjectView) renderFooterHelp() string {
 	th := theme.GetTheme()
@@ -1013,7 +897,7 @@ func (v *ProjectView) ShortHelp() string {
 
 // CapturesInput returns true when the view is in an input mode.
 func (v *ProjectView) CapturesInput() bool {
-	return v.showBranchCheck || v.showNewBranch || v.showMRConfirm || v.showResetAllConfirm || v.showCheckoutByName || v.showDetachAllConfirm || v.showSyncWorktreeConfirm || v.showCheckoutAllMainConfirm
+	return v.showBranchCheck || v.showNewBranch || v.confirm.Visible || v.showCheckoutByName
 }
 
 // CapturesKey returns true for keys this view handles directly.
