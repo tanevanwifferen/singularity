@@ -111,6 +111,38 @@ func sanitizeBranchForPath(branch string) string {
 	return strings.ReplaceAll(branch, "/", "-")
 }
 
+// defaultBranchOrMain returns branch, falling back to "main" when it is empty
+// (e.g. a repo whose default branch was never recorded).
+func defaultBranchOrMain(branch string) string {
+	if branch == "" {
+		return "main"
+	}
+	return branch
+}
+
+// resolveDefaultBranch returns wr's configured default branch, falling back to
+// "main" when it hasn't been set.
+func resolveDefaultBranch(wr *WorkflowRepo) string {
+	return defaultBranchOrMain(wr.DefaultBranch)
+}
+
+// forEachRepo runs fn concurrently for every repo in repos, waiting for all
+// goroutines to finish before returning. fn is responsible for any
+// synchronization it needs when mutating shared state (e.g. locking fw.mu, or
+// a dedicated result-collection mutex) — this only extracts the common
+// spawn/wait skeleton, not the per-repo business logic.
+func forEachRepo(repos []*WorkflowRepo, fn func(wr *WorkflowRepo)) {
+	var wg sync.WaitGroup
+	for _, wr := range repos {
+		wg.Add(1)
+		go func(wr *WorkflowRepo) {
+			defer wg.Done()
+			fn(wr)
+		}(wr)
+	}
+	wg.Wait()
+}
+
 // SlugifyForPath converts a project name/key into a shell-friendly directory
 // name: lowercase, every run of non-alphanumeric characters collapsed to a
 // single '-', leading/trailing dashes trimmed. "PBD Development" → "pbd-development".
@@ -199,9 +231,7 @@ func ensureWorktree(repoPath, worktreePath, branch, defaultBranch string) (strin
 		}
 	}
 
-	if defaultBranch == "" {
-		defaultBranch = "main"
-	}
+	defaultBranch = defaultBranchOrMain(defaultBranch)
 
 	// The branch exists but is not checked out anywhere: attach a worktree to it
 	// rather than trying to create it again.
@@ -238,26 +268,23 @@ func (fw *FeatureWorkflow) CreateAllWorktrees() error {
 	fw.State = WorkflowInitializing
 	fw.mu.Unlock()
 
-	var wg sync.WaitGroup
+	repos := make([]*WorkflowRepo, 0, len(fw.Repos))
 	for _, wr := range fw.Repos {
-		wg.Add(1)
-		go func(wr *WorkflowRepo) {
-			defer wg.Done()
-
-			path, err := ensureWorktree(wr.OriginalPath, wr.WorktreePath, fw.BranchName, wr.DefaultBranch)
-
-			fw.mu.Lock()
-			defer fw.mu.Unlock()
-			if err != nil {
-				wr.Error = fmt.Sprintf("create worktree: %v", err)
-			} else {
-				wr.WorktreePath = path
-				wr.WorktreeCreated = true
-				wr.Error = ""
-			}
-		}(wr)
+		repos = append(repos, wr)
 	}
-	wg.Wait()
+	forEachRepo(repos, func(wr *WorkflowRepo) {
+		path, err := ensureWorktree(wr.OriginalPath, wr.WorktreePath, fw.BranchName, wr.DefaultBranch)
+
+		fw.mu.Lock()
+		defer fw.mu.Unlock()
+		if err != nil {
+			wr.Error = fmt.Sprintf("create worktree: %v", err)
+		} else {
+			wr.WorktreePath = path
+			wr.WorktreeCreated = true
+			wr.Error = ""
+		}
+	})
 
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
@@ -284,45 +311,41 @@ func (fw *FeatureWorkflow) RemoveAllWorktrees() error {
 	fw.State = WorkflowCleaningUp
 	fw.mu.Unlock()
 
-	var wg sync.WaitGroup
+	repos := make([]*WorkflowRepo, 0, len(fw.Repos))
 	for _, wr := range fw.Repos {
-		if !wr.WorktreeCreated {
-			continue
+		if wr.WorktreeCreated {
+			repos = append(repos, wr)
 		}
-		wg.Add(1)
-		go func(wr *WorkflowRepo) {
-			defer wg.Done()
-
-			err := git.RemoveWorktree(wr.OriginalPath, wr.WorktreePath, true)
-
-			fw.mu.Lock()
-			defer fw.mu.Unlock()
-			if err != nil {
-				// Not fatal -- worktree may already be gone
-				wr.Error = fmt.Sprintf("remove worktree: %v", err)
-			} else {
-				wr.WorktreeCreated = false
-				wr.Error = ""
-			}
-
-			// Delete the remote branch before the local one (tracking info needed to find remote)
-			if delErr := git.DeleteRemoteBranch(wr.OriginalPath, "origin", fw.BranchName); delErr != nil {
-				// Not fatal
-				if wr.Error == "" {
-					wr.Error = fmt.Sprintf("delete remote branch: %v", delErr)
-				}
-			}
-
-			// Delete the local branch (force in case it's unmerged)
-			if delErr := git.DeleteBranch(wr.OriginalPath, fw.BranchName, true); delErr != nil {
-				// Not fatal -- branch may not exist or may be checked out
-				if wr.Error == "" {
-					wr.Error = fmt.Sprintf("delete branch: %v", delErr)
-				}
-			}
-		}(wr)
 	}
-	wg.Wait()
+	forEachRepo(repos, func(wr *WorkflowRepo) {
+		err := git.RemoveWorktree(wr.OriginalPath, wr.WorktreePath, true)
+
+		fw.mu.Lock()
+		defer fw.mu.Unlock()
+		if err != nil {
+			// Not fatal -- worktree may already be gone
+			wr.Error = fmt.Sprintf("remove worktree: %v", err)
+		} else {
+			wr.WorktreeCreated = false
+			wr.Error = ""
+		}
+
+		// Delete the remote branch before the local one (tracking info needed to find remote)
+		if delErr := git.DeleteRemoteBranch(wr.OriginalPath, "origin", fw.BranchName); delErr != nil {
+			// Not fatal
+			if wr.Error == "" {
+				wr.Error = fmt.Sprintf("delete remote branch: %v", delErr)
+			}
+		}
+
+		// Delete the local branch (force in case it's unmerged)
+		if delErr := git.DeleteBranch(wr.OriginalPath, fw.BranchName, true); delErr != nil {
+			// Not fatal -- branch may not exist or may be checked out
+			if wr.Error == "" {
+				wr.Error = fmt.Sprintf("delete branch: %v", delErr)
+			}
+		}
+	})
 
 	// Remove the workflow directory (baseDir/sanitized-branch/) now that
 	// all repo worktrees inside it have been removed.  os.Remove only
@@ -379,40 +402,32 @@ func (fw *FeatureWorkflow) ReposNeedingPush() []string {
 
 	var mu sync.Mutex
 	var result []string
-	var wg sync.WaitGroup
-	for _, wr := range repos {
-		wg.Add(1)
-		go func(wr *WorkflowRepo, name string) {
-			defer wg.Done()
-			status, err := git.GetUpstreamStatus(wr.WorktreePath)
-			if err != nil {
-				// Include on error so PushAll can surface the error
+	forEachRepo(repos, func(wr *WorkflowRepo) {
+		name := names[wr]
+		status, err := git.GetUpstreamStatus(wr.WorktreePath)
+		if err != nil {
+			// Include on error so PushAll can surface the error
+			mu.Lock()
+			result = append(result, name)
+			mu.Unlock()
+			return
+		}
+		if status.Upstream != "" {
+			if status.Ahead > 0 {
 				mu.Lock()
 				result = append(result, name)
 				mu.Unlock()
-				return
 			}
-			if status.Upstream != "" {
-				if status.Ahead > 0 {
-					mu.Lock()
-					result = append(result, name)
-					mu.Unlock()
-				}
-			} else {
-				base := wr.DefaultBranch
-				if base == "" {
-					base = "main"
-				}
-				ahead, _, cmpErr := git.CompareBranchesSimple(wr.WorktreePath, base, "HEAD")
-				if cmpErr == nil && ahead > 0 {
-					mu.Lock()
-					result = append(result, name)
-					mu.Unlock()
-				}
+		} else {
+			base := resolveDefaultBranch(wr)
+			ahead, _, cmpErr := git.CompareBranchesSimple(wr.WorktreePath, base, "HEAD")
+			if cmpErr == nil && ahead > 0 {
+				mu.Lock()
+				result = append(result, name)
+				mu.Unlock()
 			}
-		}(wr, names[wr])
-	}
-	wg.Wait()
+		}
+	})
 	return result
 }
 
@@ -424,60 +439,53 @@ func (fw *FeatureWorkflow) PushAll(force bool) error {
 	fw.State = WorkflowPushingAll
 	fw.mu.Unlock()
 
-	var wg sync.WaitGroup
+	repos := make([]*WorkflowRepo, 0, len(fw.Repos))
 	for _, wr := range fw.Repos {
-		if !wr.WorktreeCreated {
-			continue
+		if wr.WorktreeCreated {
+			repos = append(repos, wr)
 		}
-		wg.Add(1)
-		go func(wr *WorkflowRepo) {
-			defer wg.Done()
-
-			// Check upstream status to decide push strategy
-			status, err := git.GetUpstreamStatus(wr.WorktreePath)
-			if err != nil {
-				fw.mu.Lock()
-				wr.Error = fmt.Sprintf("push: upstream check: %v", err)
-				fw.mu.Unlock()
-				return
-			}
-
-			base := wr.DefaultBranch
-			if base == "" {
-				base = "main"
-			}
-
-			// Treat upstream as absent if it points to the default branch — this
-			// happens when a worktree was created from origin/<default> and git
-			// auto-set the tracking branch.  In that case we must push the feature
-			// branch to its own remote ref, not to the default branch.
-			upstreamIsDefault := status.Upstream == "origin/"+base
-			if status.Upstream != "" && !upstreamIsDefault {
-				// Has a proper feature-branch upstream: only push if ahead (or force)
-				if status.Ahead == 0 && !force {
-					return // nothing to push
-				}
-				_, err = git.Push(wr.WorktreePath, force)
-			} else {
-				// No upstream (or upstream is just the default branch): check
-				// commits vs default and push to a new remote feature branch.
-				ahead, _, cmpErr := git.CompareBranchesSimple(wr.WorktreePath, base, "HEAD")
-				if cmpErr != nil || ahead == 0 {
-					return // nothing to push
-				}
-				_, err = git.SetUpstreamAndPush(wr.WorktreePath, "origin")
-			}
-
-			fw.mu.Lock()
-			defer fw.mu.Unlock()
-			if err != nil {
-				wr.Error = fmt.Sprintf("push: %v", err)
-			} else {
-				wr.Pushed = true
-			}
-		}(wr)
 	}
-	wg.Wait()
+	forEachRepo(repos, func(wr *WorkflowRepo) {
+		// Check upstream status to decide push strategy
+		status, err := git.GetUpstreamStatus(wr.WorktreePath)
+		if err != nil {
+			fw.mu.Lock()
+			wr.Error = fmt.Sprintf("push: upstream check: %v", err)
+			fw.mu.Unlock()
+			return
+		}
+
+		base := resolveDefaultBranch(wr)
+
+		// Treat upstream as absent if it points to the default branch — this
+		// happens when a worktree was created from origin/<default> and git
+		// auto-set the tracking branch.  In that case we must push the feature
+		// branch to its own remote ref, not to the default branch.
+		upstreamIsDefault := status.Upstream == "origin/"+base
+		if status.Upstream != "" && !upstreamIsDefault {
+			// Has a proper feature-branch upstream: only push if ahead (or force)
+			if status.Ahead == 0 && !force {
+				return // nothing to push
+			}
+			_, err = git.Push(wr.WorktreePath, force)
+		} else {
+			// No upstream (or upstream is just the default branch): check
+			// commits vs default and push to a new remote feature branch.
+			ahead, _, cmpErr := git.CompareBranchesSimple(wr.WorktreePath, base, "HEAD")
+			if cmpErr != nil || ahead == 0 {
+				return // nothing to push
+			}
+			_, err = git.SetUpstreamAndPush(wr.WorktreePath, "origin")
+		}
+
+		fw.mu.Lock()
+		defer fw.mu.Unlock()
+		if err != nil {
+			wr.Error = fmt.Sprintf("push: %v", err)
+		} else {
+			wr.Pushed = true
+		}
+	})
 
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
@@ -508,10 +516,7 @@ func (fw *FeatureWorkflow) CreateAllMRs() error {
 			provider = git.DetectRemoteProvider(wr.OriginalPath)
 		}
 
-		base := wr.DefaultBranch
-		if base == "" {
-			base = "main"
-		}
+		base := resolveDefaultBranch(wr)
 		result, err := git.CreateMergeRequestCLI(wr.WorktreePath, provider, base)
 
 		fw.mu.Lock()
@@ -588,10 +593,7 @@ func (fw *FeatureWorkflow) RefreshBranchStatuses() {
 
 			repoPath := wr.OriginalPath
 
-			defaultBranch := wr.DefaultBranch
-			if defaultBranch == "" {
-				defaultBranch = "main"
-			}
+			defaultBranch := resolveDefaultBranch(wr)
 
 			// Ahead/behind vs default branch
 			aheadDef, behindDef, err := git.CompareBranchesSimple(repoPath, defaultBranch, branchName)
@@ -837,10 +839,7 @@ func (fw *FeatureWorkflow) repoSnapshot() []*WorkflowRepo {
 // the repo's original checkout (OriginalPath), which must already be on the
 // default branch and clean — we never move someone's HEAD or stash for them.
 func (fw *FeatureWorkflow) mergeStatusFor(wr *WorkflowRepo, branch string) RepoMergeStatus {
-	base := wr.DefaultBranch
-	if base == "" {
-		base = "main"
-	}
+	base := resolveDefaultBranch(wr)
 	st := RepoMergeStatus{RepoName: wr.RepoName, DefaultBranch: base}
 
 	if !wr.WorktreeCreated {

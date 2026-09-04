@@ -484,6 +484,58 @@ func (v *LogView) handleListKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return RefreshDoneMsg{}
 		}
 
+	case "/", "a", "s", "f":
+		v.handleFilterModeKey(msg)
+
+	case "d", "enter":
+		v.handleDiffDispatchKey(msg)
+
+	case "esc":
+		if model, cmd, handled := v.handleFilterEscKey(msg); handled {
+			return model, cmd
+		}
+
+	case "g":
+		// Go to bottom - load more
+		if v.hasMore && !v.loadingMore {
+			v.loadingMore = true
+			return v, func() tea.Msg {
+				v.loadCommits(false)
+				return RefreshDoneMsg{}
+			}
+		}
+
+	case "y":
+		v.handleCopyHashKey()
+
+	case "c":
+		v.handleCherryPickKey()
+
+	case "w":
+		v.handleRewordKey()
+
+	case "x":
+		v.handleResetKey()
+	}
+
+	// Handle filter mode activation via typing (author/message prompts)
+	if cmd := v.handleFilterTypingKey(msg); cmd != nil {
+		return v, cmd
+	}
+
+	// Pass to filter for navigation
+	if v.filter != nil {
+		v.filter.Update(msg)
+	}
+
+	return v, nil
+}
+
+// handleFilterModeKey handles keys that toggle or activate the author/message
+// quick-filter modes ("/" quick search, "a" author filter, "s" message
+// filter, "f" activate typing once a filter mode is selected).
+func (v *LogView) handleFilterModeKey(msg tea.KeyMsg) {
+	switch msg.String() {
 	case "/":
 		// Activate filter mode - show filter type prompt first
 		v.filterMode = ""
@@ -504,6 +556,18 @@ func (v *LogView) handleListKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			v.filterMode = "message"
 		}
 
+	case "f":
+		// Filter - if in filter mode, activate filter input
+		if v.filterMode != "" {
+			v.filter.Update(msg)
+		}
+	}
+}
+
+// handleDiffDispatchKey handles opening the full diff or split-panel detail
+// view for the currently selected commit.
+func (v *LogView) handleDiffDispatchKey(msg tea.KeyMsg) {
+	switch msg.String() {
 	case "d":
 		// Show full diff for selected commit
 		if item, idx := v.filter.SelectedItem(); idx >= 0 {
@@ -515,146 +579,154 @@ func (v *LogView) handleListKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if item, idx := v.filter.SelectedItem(); idx >= 0 {
 			v.openCommitDetail(&item)
 		}
+	}
+}
 
-	case "esc":
-		// Clear filter if active, or clear filter mode
-		if v.filterMode != "" {
-			v.filterMode = ""
-			return v, nil
-		}
-		if v.authorFilter != "" {
-			v.authorFilter = ""
-			v.loadCommits(true)
-			return v, func() tea.Msg { return RefreshDoneMsg{} }
-		}
-		if v.messageFilter != "" {
-			v.messageFilter = ""
-			v.loadCommits(true)
-			return v, func() tea.Msg { return RefreshDoneMsg{} }
-		}
-		if v.filter.IsActive() {
-			v.filter.Update(msg)
-		}
+// handleFilterEscKey handles Esc in the main list view: clearing filter mode
+// or active filters, or delegating to the quick-filter component. The bool
+// return indicates whether the caller should return immediately with the
+// given model/cmd instead of continuing to the shared trailing key handling.
+func (v *LogView) handleFilterEscKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+	if v.filterMode != "" {
+		v.filterMode = ""
+		return v, nil, true
+	}
+	if v.authorFilter != "" {
+		v.authorFilter = ""
+		v.loadCommits(true)
+		return v, func() tea.Msg { return RefreshDoneMsg{} }, true
+	}
+	if v.messageFilter != "" {
+		v.messageFilter = ""
+		v.loadCommits(true)
+		return v, func() tea.Msg { return RefreshDoneMsg{} }, true
+	}
+	if v.filter.IsActive() {
+		v.filter.Update(msg)
+	}
+	return v, nil, false
+}
 
-	case "g":
-		// Go to bottom - load more
-		if v.hasMore && !v.loadingMore {
-			v.loadingMore = true
-			return v, func() tea.Msg {
-				v.loadCommits(false)
+// handleCopyHashKey copies the selected commit's hash to the clipboard.
+func (v *LogView) handleCopyHashKey() {
+	if item, idx := v.filter.SelectedItem(); idx >= 0 {
+		v.operationErr = nil
+		v.operationSuccess = ""
+		if err := clipboard.Copy(item.Hash); err != nil {
+			v.operationErr = err
+		} else {
+			v.operationSuccess = fmt.Sprintf("Copied %s to clipboard", item.ShortHash)
+		}
+	}
+}
+
+// handleCherryPickKey shows the cherry-pick confirmation for the selected commit.
+func (v *LogView) handleCherryPickKey() {
+	if item, idx := v.filter.SelectedItem(); idx >= 0 {
+		v.operationErr = nil
+		v.operationSuccess = ""
+		hash := item.Hash
+		v.cherryPickConfirm.Show("Cherry-pick Commit",
+			fmt.Sprintf("Cherry-pick commit %s onto current branch?", hash[:min(8, len(hash))]),
+			func() tea.Cmd {
+				if err := v.services.Commit.CherryPick(v.ctx(), v.repoPath, hash); err != nil {
+					v.operationErr = err
+				} else {
+					v.operationSuccess = fmt.Sprintf("Cherry-picked %s", hash[:8])
+					v.loadCommits(true)
+				}
+				return nil
+			})
+	}
+}
+
+// handleRewordKey opens the reword editor for the HEAD commit, or reports an
+// error if a non-HEAD commit is selected.
+func (v *LogView) handleRewordKey() {
+	if item, idx := v.filter.SelectedItem(); idx >= 0 {
+		// Only allow reword on the first commit (HEAD)
+		if idx == 0 {
+			v.showRewordEditor = true
+			v.rewordInput.Set(item.Subject)
+			v.operationErr = nil
+			v.operationSuccess = ""
+		} else {
+			v.operationErr = fmt.Errorf("can only reword HEAD commit (first in list)")
+			v.operationSuccess = ""
+		}
+	}
+}
+
+// handleResetKey opens the reset mode submenu for the selected commit.
+func (v *LogView) handleResetKey() {
+	if item, idx := v.filter.SelectedItem(); idx >= 0 {
+		_ = idx // idx used only for bounds check
+		v.resetHash = item.Hash
+		v.showResetMenu = true
+		v.resetMode = "mixed" // default selection
+		v.operationErr = nil
+		v.operationSuccess = ""
+	}
+}
+
+// handleFilterTypingKey handles character typing while an author/message
+// filter prompt is active. Returns a non-nil cmd if the key was fully
+// consumed and the caller should return immediately (matching the original
+// early-return behavior for author-filter character input).
+func (v *LogView) handleFilterTypingKey(msg tea.KeyMsg) tea.Cmd {
+	if v.filterMode == "" {
+		return nil
+	}
+	if v.filterMode == "author" {
+		return v.handleAuthorFilterTypingKey(msg)
+	}
+	if v.filterMode == "message" {
+		// Message filter - use the filter component
+		v.filter.Update(msg)
+		// Sync filter text to message filter
+		v.messageFilter = v.filter.FilterText()
+	}
+	return nil
+}
+
+// handleAuthorFilterTypingKey handles character input for the author filter
+// prompt. It reuses components.TextInput's Insert/Backspace primitives
+// (the same helper used for rewordInput elsewhere in this file) instead of
+// duplicating rune/backspace/paste handling inline.
+func (v *LogView) handleAuthorFilterTypingKey(msg tea.KeyMsg) tea.Cmd {
+	input := components.TextInput{Value: v.authorFilter, Cursor: len(v.authorFilter)}
+	switch {
+	case msg.Paste && len(msg.Runes) > 0:
+		input.Insert(string(msg.Runes))
+		v.authorFilter = input.Value
+		return func() tea.Msg {
+			v.loadCommits(true)
+			return RefreshDoneMsg{}
+		}
+	case len(msg.Runes) == 1:
+		r := msg.Runes[0]
+		if r >= 32 && r <= 126 {
+			input.Insert(string(r))
+			v.authorFilter = input.Value
+			return func() tea.Msg {
+				v.loadCommits(true)
 				return RefreshDoneMsg{}
 			}
 		}
-
-	case "f":
-		// Filter - if in filter mode, activate filter input
-		if v.filterMode != "" {
-			v.filter.Update(msg)
+	case msg.String() == "backspace" && len(v.authorFilter) > 0:
+		input.Backspace()
+		v.authorFilter = input.Value
+		return func() tea.Msg {
+			v.loadCommits(true)
+			return RefreshDoneMsg{}
 		}
-
-	case "y":
-		// Copy commit hash to clipboard
-		if item, idx := v.filter.SelectedItem(); idx >= 0 {
-			v.operationErr = nil
-			v.operationSuccess = ""
-			if err := clipboard.Copy(item.Hash); err != nil {
-				v.operationErr = err
-			} else {
-				v.operationSuccess = fmt.Sprintf("Copied %s to clipboard", item.ShortHash)
-			}
-		}
-
-	case "c":
-		// Cherry-pick selected commit (show confirmation)
-		if item, idx := v.filter.SelectedItem(); idx >= 0 {
-			v.operationErr = nil
-			v.operationSuccess = ""
-			hash := item.Hash
-			v.cherryPickConfirm.Show("Cherry-pick Commit",
-				fmt.Sprintf("Cherry-pick commit %s onto current branch?", hash[:min(8, len(hash))]),
-				func() tea.Cmd {
-					if err := v.services.Commit.CherryPick(v.ctx(), v.repoPath, hash); err != nil {
-						v.operationErr = err
-					} else {
-						v.operationSuccess = fmt.Sprintf("Cherry-picked %s", hash[:8])
-						v.loadCommits(true)
-					}
-					return nil
-				})
-		}
-
-	case "w":
-		// Reword HEAD commit message
-		if item, idx := v.filter.SelectedItem(); idx >= 0 {
-			// Only allow reword on the first commit (HEAD)
-			if idx == 0 {
-				v.showRewordEditor = true
-				v.rewordInput.Set(item.Subject)
-				v.operationErr = nil
-				v.operationSuccess = ""
-			} else {
-				v.operationErr = fmt.Errorf("can only reword HEAD commit (first in list)")
-				v.operationSuccess = ""
-			}
-		}
-
-	case "x":
-		// Reset to commit (show submenu)
-		if item, idx := v.filter.SelectedItem(); idx >= 0 {
-			_ = idx // idx used only for bounds check
-			v.resetHash = item.Hash
-			v.showResetMenu = true
-			v.resetMode = "mixed" // default selection
-			v.operationErr = nil
-			v.operationSuccess = ""
-		}
+	case msg.String() == "enter":
+		v.filterMode = ""
+	case msg.String() == "esc":
+		v.authorFilter = ""
+		v.filterMode = ""
 	}
-
-	// Handle filter mode activation via typing
-	if v.filterMode != "" {
-		if v.filterMode == "author" {
-			// Author filter - handle character input
-			if msg.Paste && len(msg.Runes) > 0 {
-				v.authorFilter += string(msg.Runes)
-				return v, func() tea.Msg {
-					v.loadCommits(true)
-					return RefreshDoneMsg{}
-				}
-			} else if len(msg.Runes) == 1 {
-				r := msg.Runes[0]
-				if r >= 32 && r <= 126 {
-					v.authorFilter += string(r)
-					return v, func() tea.Msg {
-						v.loadCommits(true)
-						return RefreshDoneMsg{}
-					}
-				}
-			} else if msg.String() == "backspace" && len(v.authorFilter) > 0 {
-				v.authorFilter = v.authorFilter[:len(v.authorFilter)-1]
-				return v, func() tea.Msg {
-					v.loadCommits(true)
-					return RefreshDoneMsg{}
-				}
-			} else if msg.String() == "enter" {
-				v.filterMode = ""
-			} else if msg.String() == "esc" {
-				v.authorFilter = ""
-				v.filterMode = ""
-			}
-		} else if v.filterMode == "message" {
-			// Message filter - use the filter component
-			v.filter.Update(msg)
-			// Sync filter text to message filter
-			v.messageFilter = v.filter.FilterText()
-		}
-	}
-
-	// Pass to filter for navigation
-	if v.filter != nil {
-		v.filter.Update(msg)
-	}
-
-	return v, nil
+	return nil
 }
 
 // handleDetailKey handles key events in the detail split-panel view.
@@ -973,16 +1045,16 @@ func (v *LogView) View() string {
 		if len(shortHash) > 8 {
 			shortHash = shortHash[:8]
 		}
-		m := components.NewModal(
-			"Reset to "+shortHash,
-			"Choose reset mode:\n\n"+
-				"  [s] Soft  - keep changes staged\n"+
-				"  [m] Mixed - keep changes unstaged (default)\n"+
-				"  [h] Hard  - discard all changes\n\n"+
-				"  Esc to cancel",
-		)
-		m.SetSize(v.width, v.height)
-		return m.Render(base)
+		lines := []string{
+			"Choose reset mode:",
+			"",
+			"  [s] Soft  - keep changes staged",
+			"  [m] Mixed - keep changes unstaged (default)",
+			"  [h] Hard  - discard all changes",
+			"",
+			"  Esc to cancel",
+		}
+		return base + "\n\n" + renderModal("Reset to "+shortHash, lines, modalWidth(v.width))
 	}
 
 	if v.resetConfirm.Visible {
@@ -991,10 +1063,14 @@ func (v *LogView) View() string {
 
 	if v.showRewordEditor {
 		// Render inline text editor modal
-		content := fmt.Sprintf("Edit commit message for HEAD:\n\n> %s\n\nEnter: Confirm   Esc: Cancel", v.rewordInput.RenderPlain())
-		m := components.NewModal("Reword Commit", content)
-		m.SetSize(v.width, v.height)
-		return m.Render(base)
+		lines := []string{
+			"Edit commit message for HEAD:",
+			"",
+			"> " + v.rewordInput.RenderPlain(),
+			"",
+			"Enter: Confirm   Esc: Cancel",
+		}
+		return base + "\n\n" + renderModal("Reword Commit", lines, modalWidth(v.width))
 	}
 
 	return base
