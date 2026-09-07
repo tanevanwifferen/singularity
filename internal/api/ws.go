@@ -20,6 +20,7 @@ const (
 	WSEventAgentStarted      = "agent_started"
 	WSEventAgentOutput       = "agent_output"
 	WSEventAgentComplete     = "agent_complete"
+	WSEventAgentResumed      = "agent_resumed"
 	WSEventAgentError        = "agent_error"
 	WSEventWorkflowUpdated   = "workflow_updated"
 	WSEventSyncProgress      = "sync_progress"
@@ -77,6 +78,17 @@ type AgentCompletePayload struct {
 	AgentID  string `json:"agent_id"`
 	State    string `json:"state"`
 	ExitCode int    `json:"exit_code"`
+}
+
+// AgentResumedPayload is the payload of an "agent_resumed" WS frame. The
+// daemon emits it when an agent it has already reported as complete/error/
+// killed goes back to a non-terminal state — which is what a follow-up
+// message to a finished agent does. Without it a client that saw
+// agent_complete has no way to tell "still complete" from "resumed" short of
+// re-polling GET /api/agent/list.
+type AgentResumedPayload struct {
+	AgentID string `json:"agent_id"`
+	State   string `json:"state"`
 }
 
 // AgentErrorPayload is the payload of an "agent_error" WS frame.
