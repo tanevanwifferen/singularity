@@ -21,15 +21,16 @@ func TestParseBatchFile(t *testing.T) {
 	     "priority":2,"max_retries":1,"on_failure":"continue"},
 	    {"name":"review","workdir":"/w/api","prompt":"review it","after":["impl"],
 	     "opts":{"smart_route":false}},
-	    {"queue":"other","workdir":"/w/web","prompt":"unrelated"}
+	    {"queue":"other","workdir":"/w/web","prompt":"unrelated"},
+	    {"queue":"other","workdir":"/w/eff","prompt":"effort only","opts":{"effort":"medium"}}
 	  ]
 	}`
 	specs, err := parseBatchFile([]byte(doc))
 	if err != nil {
 		t.Fatalf("parseBatchFile: %v", err)
 	}
-	if len(specs) != 3 {
-		t.Fatalf("got %d specs, want 3", len(specs))
+	if len(specs) != 4 {
+		t.Fatalf("got %d specs, want 4", len(specs))
 	}
 
 	impl := specs[0]
@@ -47,20 +48,37 @@ func TestParseBatchFile(t *testing.T) {
 		t.Errorf("impl policy fields = %+v", impl)
 	}
 
-	// Routing is a tri-state on the wire: a task that says nothing is
-	// routed (RouteEnabled decides), and one that says false is not. A
-	// plain bool would collapse the two.
+	// Routing is a tri-state on the wire: a task that says nothing about
+	// routing but pins a model or effort must not be routed anyway (review
+	// cycle 7 finding 4) — RouteEnabled mirrors the CLI's own default
+	// (resolveSmartRoute: on unless --model or --effort was pinned), so
+	// `queue add --model sonnet --effort medium` and this document's impl
+	// task resolve to the same answer. A plain bool for SmartRoute would
+	// collapse "unset" and "explicit false", which is why it stays a
+	// pointer.
 	if impl.Opts.SmartRoute != nil {
 		t.Errorf("impl smart_route = %v, want unset when the document is silent", *impl.Opts.SmartRoute)
 	}
-	if !impl.Opts.RouteEnabled() {
-		t.Error("a task that did not mention routing must still be routed")
+	if impl.Opts.RouteEnabled() {
+		t.Error("a task that pins model and effort without mentioning routing must not be routed, matching `agents spawn --model --effort`")
 	}
 	if specs[1].Opts.SmartRoute == nil || *specs[1].Opts.SmartRoute {
 		t.Errorf("review smart_route = %v, want an explicit false", specs[1].Opts.SmartRoute)
 	}
 	if specs[1].Opts.RouteEnabled() {
 		t.Error("smart_route=false in the document was ignored")
+	}
+	// The specific shape finding 4 was about: only an effort pinned, no
+	// model, no explicit smart_route. Before the fix this returned true —
+	// the same task submitted via `queue add --effort medium` (no
+	// --smart-route) resolves to false — so the same declared intent ran on
+	// a different model depending on how it was submitted.
+	effortOnly := specs[3]
+	if effortOnly.Opts.SmartRoute != nil {
+		t.Errorf("effort-only smart_route = %v, want unset when the document is silent", *effortOnly.Opts.SmartRoute)
+	}
+	if effortOnly.Opts.RouteEnabled() {
+		t.Error("a task with only an effort pinned must not be routed, matching `queue add --effort` without --smart-route")
 	}
 
 	// Local names travel through untouched: the daemon resolves them to

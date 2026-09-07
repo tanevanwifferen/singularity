@@ -135,15 +135,25 @@ type TaskOptions struct {
 }
 
 // RouteEnabled reports whether this task should be smart-routed: route
-// unless told otherwise.
+// unless told otherwise, where "told otherwise" includes an unspoken one —
+// a task that pins a model or an effort without saying anything about
+// routing wants that pin honoured, not silently overridden by the
+// classifier.
 //
-// The default deliberately does not restate the CLI's precedence rules
-// (resolveSmartRoute: on unless --model or --effort was pinned). Those
-// belong in one place and are being changed on another branch; a task that
-// pins a model is already handled downstream, where engine.StartAgent skips
-// routing whenever a model is set. All this needs to express is intent.
+// This mirrors the CLI's own default (resolveSmartRoute: on unless --model
+// or --effort was pinned) deliberately: `queue add --effort medium` and the
+// same task submitted via `queue add --file` with `"opts":{"effort":
+// "medium"}` must resolve to the same routing decision, or the same
+// declared task runs on a different model depending on how it was
+// submitted (review cycle 7 finding 4). engine.StartAgent independently
+// refuses to route whenever Model is set, so restating the model half here
+// changes nothing observable for that case — the fix that matters is
+// Effort, which nothing downstream gates on.
 func (o TaskOptions) RouteEnabled() bool {
-	return o.SmartRoute == nil || *o.SmartRoute
+	if o.SmartRoute != nil {
+		return *o.SmartRoute
+	}
+	return o.Model == "" && o.Effort == ""
 }
 
 // Task is one unit of queued agent work.

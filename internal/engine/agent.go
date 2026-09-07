@@ -73,13 +73,14 @@ type Agent struct {
 	outputMu sync.Mutex
 
 	// Process management
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	stdinMu sync.Mutex
-	stdout  io.ReadCloser
-	stderr  io.ReadCloser
-	done    chan struct{}
-	mu      sync.Mutex
+	cmd      *exec.Cmd
+	stdin    io.WriteCloser
+	stdinMu  sync.Mutex
+	stdout   io.ReadCloser
+	stderr   io.ReadCloser
+	done     chan struct{}
+	doneOnce sync.Once
+	mu       sync.Mutex
 
 	// Configuration
 	backend       Backend
@@ -483,7 +484,15 @@ func (a *Agent) waitForExit() {
 		a.notify()
 	}
 
-	close(a.done)
+	a.closeDone()
+}
+
+// closeDone closes the done channel exactly once. kill() also calls this,
+// for the never-started case waitForExit will never run for — see kill's
+// nil-cmd branch — so the two must share one guard rather than each risk
+// closing an already-closed channel.
+func (a *Agent) closeDone() {
+	a.doneOnce.Do(func() { close(a.done) })
 }
 
 // sendInput sends a follow-up message to the agent's stdin.
@@ -642,6 +651,15 @@ func (a *Agent) processExited() bool {
 // for terminate's complete/error-but-still-alive case (see terminate); every
 // other caller (RemoveAgent, Shutdown, the per-agent timeout) wants the
 // unconditional behaviour and passes false.
+//
+// kill does not return until the process is actually gone: callers —
+// Engine.TerminateAgent above all, which the queue's scheduler relies on to
+// free a directory before the same tick's dispatch runs — need
+// processExited to already be true the instant this returns, since
+// Engine.WorkDirOccupied asks the process, not the state label. A signal
+// alone is not enough: cmd.Process.Kill only delivers SIGKILL, and the
+// process is not confirmed reaped until waitForExit's cmd.Wait returns and
+// closes done.
 func (a *Agent) kill(preserveWorktree bool) error {
 	a.mu.Lock()
 
@@ -650,7 +668,21 @@ func (a *Agent) kill(preserveWorktree bool) error {
 	wtBranch := a.worktreeBranch
 
 	if a.cmd == nil || a.cmd.Process == nil {
+		// No process was ever created — the agent was killed before start()
+		// ran (e.g. still routing). done is only ever closed here or by
+		// waitForExit, and waitForExit cannot run without a started cmd, so
+		// it is safe to close it ourselves — but only once nothing can
+		// start a process later: start() refuses once the state is
+		// terminal (see terminate's doc), which is exactly the condition
+		// checked below. If the state is not yet terminal (a bare kill on
+		// an otherwise-untouched agent, without terminate's state force),
+		// leave done alone: the routing goroutine may still call start()
+		// for real.
+		terminalNow := a.State.Terminal()
 		a.mu.Unlock()
+		if terminalNow {
+			a.closeDone()
+		}
 		if wtPath != "" && !preserveWorktree {
 			cleanupWorktreeFn(sourceRepoPath, wtPath, wtBranch)
 		}
@@ -671,6 +703,13 @@ func (a *Agent) kill(preserveWorktree bool) error {
 
 	err := a.cmd.Process.Kill()
 	a.mu.Unlock()
+
+	// Wait for waitForExit's cmd.Wait to actually reap the process. SIGKILL
+	// cannot be blocked, so this is bounded by how fast the kernel delivers
+	// it — except for a process stuck in uninterruptible I/O (D state),
+	// which SIGKILL cannot touch either; that is a pre-existing OS-level
+	// risk this does not introduce, not a new one.
+	<-a.done
 
 	if wtPath != "" && !preserveWorktree {
 		cleanupWorktreeFn(sourceRepoPath, wtPath, wtBranch)

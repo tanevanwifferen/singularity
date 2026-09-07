@@ -24,18 +24,19 @@ type fakeRunner struct {
 	// apart: engine.KillAgent soft-closes, moving the state to killed while
 	// the subprocess keeps running (and keeps editing its working
 	// directory). alive is what a test checks to assert a process was
-	// genuinely ended (killedIDs, TerminateAgent) — it is deliberately NOT
-	// what WorkDirBusy answers from, because production's WorkDirBusy does
-	// not know it either: it derives busy from ActiveAgents, i.e. from
-	// state, so it goes false the instant softClose runs even though the
-	// process above is still very much alive. A fake that answered
-	// WorkDirBusy from `alive` would be safer than production and could
-	// never reproduce that gap — which is exactly why it survived five
-	// review cycles at this level.
+	// genuinely ended (killedIDs, TerminateAgent), and it is also what
+	// WorkDirBusy answers from: production's WorkDirBusy asks
+	// Engine.WorkDirOccupied, which is a question about the process, not the
+	// state label (review cycle 7 finding 1 — the label-vs-process gap
+	// found six times over on the queue side turned out to have a seventh
+	// instance here, on the engine side). A fake that answered WorkDirBusy
+	// from state instead would paper over exactly the case reconcile exists
+	// to handle: a soft-closed or complete-but-alive agent whose directory
+	// production now correctly still reports busy.
 	alive map[string]bool
 	// agentDirs and agentWorktree record where each started agent works, so
-	// WorkDirBusy answers from the fake's own agents' state the way the
-	// engine answers from ActiveAgents.
+	// WorkDirBusy answers from the fake's own agents' recorded directory the
+	// way the engine answers from WorkDirOccupied.
 	agentDirs     map[string]string
 	agentWorktree map[string]bool
 	// busyDirs marks directories occupied by an agent the queue did not
@@ -149,16 +150,15 @@ func (f *fakeRunner) activeLocked() int {
 	return active
 }
 
-// WorkDirBusy answers the way EngineRunner's production implementation does:
-// from the agent's reported STATE (busy unless complete/error/killed), not
-// from whether its process is actually still alive. Those two really do come
-// apart — engine.KillAgent soft-closes, moving the state to killed while the
-// subprocess keeps running and keeps editing its directory — and a fake that
-// answers from `alive` instead reports the safe (wrong) answer, which is
-// exactly how this class of defect survived five review cycles at the queue
-// level: the fake never disagreed with what the scheduler assumed. Worktree-
-// isolated agents never match, because the engine rewrites their WorkDir to
-// the private worktree it created for them.
+// WorkDirBusy answers the way EngineRunner's production implementation does
+// since review cycle 7 finding 1: from whether the agent's process is still
+// alive (`alive`), not from its state label. The two really do come apart —
+// engine.KillAgent soft-closes, moving the state to killed while the
+// subprocess keeps running and keeps editing its directory — and busy has
+// to track the process, or an agent the queue does not own (soft-closed or
+// complete-but-resident) would report its directory free while still
+// editing it. Worktree-isolated agents never match, because the engine
+// rewrites their WorkDir to the private worktree it created for them.
 func (f *fakeRunner) WorkDirBusy(dir string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -170,11 +170,9 @@ func (f *fakeRunner) WorkDirBusy(dir string) bool {
 		if f.agentWorktree[id] || agentDir != want {
 			continue
 		}
-		switch f.states[id] {
-		case "complete", "error", "killed":
-			continue
+		if f.alive[id] {
+			return true
 		}
-		return true
 	}
 	return false
 }
@@ -697,19 +695,26 @@ func TestCancelledTaskReleasesItsWorkingDirectory(t *testing.T) {
 	}
 }
 
-// TestSoftClosedAgentDoesNotHoldItsDirectory pins the actual engine
-// behaviour (review cycle 5, finding 3): WorkDirBusy is derived from state,
-// not from whether the process is alive, so the moment engine.KillAgent
-// soft-closes an agent, WorkDirBusy reports its directory free — while the
-// subprocess above keeps editing it. An earlier version of this test
-// asserted the opposite, on the assumption that "still holds its directory"
-// was what the fake ought to model; it was not what production does, and a
-// fake asserting the safer, wrong answer is why this whole class of defect
-// went unfalsifiable at the queue level for five cycles. The trap this
-// leaves — the scheduler has no way to see the directory is still occupied —
-// is exactly why reconcile has to terminate a killed agent itself rather
-// than rely on the accounting to catch up (TestReconcileTerminatesAKilledAgentBeforeDispatch).
-func TestSoftClosedAgentDoesNotHoldItsDirectory(t *testing.T) {
+// TestSoftClosedAgentStillHoldsItsDirectoryButNotItsSlot pins the fixed
+// engine behaviour (review cycle 7, finding 1): production's WorkDirBusy now
+// asks Engine.WorkDirOccupied, a question about the process, so the moment
+// engine.KillAgent soft-closes an agent, WorkDirBusy must keep reporting its
+// directory busy — the subprocess above is still editing it. Capacity is a
+// different question (does this agent hold an engine slot?) and correctly
+// keeps excluding a soft-closed agent immediately; the two are allowed to
+// disagree; that disagreement is exactly why reconcile still has to
+// terminate a killed agent's process itself rather than assume the
+// directory is free once the label goes terminal
+// (TestReconcileTerminatesAKilledAgentBeforeDispatch) — terminating it is
+// what actually frees the directory, since nothing else will.
+//
+// Before review cycle 7's fix this test asserted the opposite: WorkDirBusy
+// went false the instant softClose ran, because production derived busy
+// from ActiveAgents (state) rather than from the process. That was the bug
+// (a foreign agent — one the queue never started — could soft-close or
+// complete while resident and its directory would silently read as free);
+// this test now pins the corrected contract instead of the defect.
+func TestSoftClosedAgentStillHoldsItsDirectoryButNotItsSlot(t *testing.T) {
 	runner := newFakeRunner(4)
 	m := newTestManager(runner)
 	tasks := mustAdd(t, m, []TaskSpec{{Name: "a", Prompt: "p", WorkDir: "/shared"}})
@@ -717,11 +722,11 @@ func TestSoftClosedAgentDoesNotHoldItsDirectory(t *testing.T) {
 
 	agentID := runner.agentFor(t, tasks[0].ID)
 	runner.softClose(agentID)
-	if runner.WorkDirBusy("/shared") {
-		t.Fatal("WorkDirBusy = true after softClose: production derives busy from ActiveAgents (state), which excludes AgentKilled immediately — the fake must reproduce that, not paper over it")
+	if !runner.WorkDirBusy("/shared") {
+		t.Fatal("WorkDirBusy = false after softClose while the process is still alive: a soft-closed agent's directory must stay occupied")
 	}
 	if active, _ := runner.Capacity(); active != 0 {
-		t.Errorf("active = %d, want 0 — a soft-closed agent stops counting toward the cap, which is exactly the trap", active)
+		t.Errorf("active = %d, want 0 — a soft-closed agent stops counting toward the cap even though its directory stays busy", active)
 	}
 	if !runner.alive[agentID] {
 		t.Fatal("test setup: softClose must not itself end the process — that is what TerminateAgent is for")

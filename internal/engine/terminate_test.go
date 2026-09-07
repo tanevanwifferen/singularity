@@ -136,6 +136,71 @@ func TestTerminateAgentReleasesARoutingAgent(t *testing.T) {
 	}
 }
 
+// TestWorkDirOccupiedFreesADirectoryTerminatedWhileRouting is a corollary of
+// review cycle 7 finding 1's fix: WorkDirOccupied has to ask about the
+// process, but an agent terminated before it ever started one (still
+// routing, cmd nil) has no waitForExit goroutine to close done for it —
+// kill()'s nil-cmd branch has to close it directly. Getting that wrong
+// either way is a real failure: closing it unconditionally would let a kill
+// on a not-yet-terminal agent lie about a process that has not launched
+// yet; never closing it would hold the directory busy forever once the
+// agent is genuinely terminated, since nothing else will ever end it.
+func TestWorkDirOccupiedFreesADirectoryTerminatedWhileRouting(t *testing.T) {
+	e := New(2)
+	dir := t.TempDir()
+	a := newAgent("a-routing", dir, "task", AgentOptions{}, stubBackend{})
+	a.setState(AgentRouting)
+	e.mu.Lock()
+	e.agents[a.ID] = a
+	e.mu.Unlock()
+
+	if !e.WorkDirOccupied(dir) {
+		t.Fatal("a routing agent's directory must be reported occupied — a real subprocess may be about to start there")
+	}
+	if err := a.terminate(); err != nil {
+		t.Fatalf("terminate: %v", err)
+	}
+	if e.WorkDirOccupied(dir) {
+		t.Error("WorkDirOccupied = true after a routing agent was terminated with no process ever started: this directory could never be dispatched into again")
+	}
+	// terminate's own guarantee, restated: a late start() must still refuse,
+	// or the directory this just reported free could get a real process
+	// after all.
+	if err := a.start(); err == nil {
+		t.Error("start() succeeded on a terminated agent — it could have resurrected a process into a directory already reported free")
+	}
+}
+
+// TestWorkDirOccupiedStaysBusyForARoutingAgentKilledDirectly is
+// TestWorkDirOccupiedFreesADirectoryTerminatedWhileRouting's other half: the
+// per-agent timeout goroutine (StartAgent) calls kill(false) directly, not
+// terminate — so a slow classifier that outlives its timeout can hit kill's
+// nil-cmd branch while the agent is still AgentRouting, not yet terminal.
+// closeDone must not run in that case: the classifier can still return and
+// call start() for real, and a directory this reported free the moment
+// before a real process starts in it is exactly review cycle 7 finding 1's
+// bug, self-inflicted this time by kill() itself rather than by a foreign
+// agent's label.
+func TestWorkDirOccupiedStaysBusyForARoutingAgentKilledDirectly(t *testing.T) {
+	e := New(2)
+	dir := t.TempDir()
+	a := newAgent("a-routing", dir, "task", AgentOptions{}, stubBackend{})
+	a.setState(AgentRouting)
+	e.mu.Lock()
+	e.agents[a.ID] = a
+	e.mu.Unlock()
+
+	if err := a.kill(false); err != nil {
+		t.Fatalf("kill: %v", err)
+	}
+	if got := a.Snapshot().State; got != AgentRouting {
+		t.Fatalf("state after a direct kill = %s, want unchanged routing (kill's nil-cmd branch does not force it)", got)
+	}
+	if !e.WorkDirOccupied(dir) {
+		t.Error("WorkDirOccupied = false after kill(false) on a still-routing agent: the classifier can still return and start a real process in this directory")
+	}
+}
+
 // TestTerminateIsANoOpOnAnAlreadyTerminalAgent covers the race a cancel can
 // win against reconcile: handleResult moves a worktree agent to complete (or
 // error) and deliberately leaves the merged worktree in place — cleanup is

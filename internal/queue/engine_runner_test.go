@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -168,11 +169,18 @@ func TestEngineRunnerTerminateEndsTheProcess(t *testing.T) {
 	}
 }
 
-// TestEngineRunnerSoftCloseIsNotEnough pins the trap the runner has to
-// avoid, so a future change back to engine.KillAgent is caught here rather
-// than in production: a soft-closed agent is invisible to WorkDirBusy while
-// its process is still alive.
-func TestEngineRunnerSoftCloseIsNotEnough(t *testing.T) {
+// TestEngineRunnerSoftCloseStillHoldsTheDirectory pins review cycle 7 finding
+// 1's fix: WorkDirBusy now asks Engine.WorkDirOccupied, a question about the
+// process, not the state label, so a soft-closed agent — including one the
+// queue never started, such as a bare `agents spawn` an operator killed from
+// the TUI — must still report its directory busy for as long as the process
+// lives. ActiveAgents/Capacity are a different question (does this agent
+// hold an engine slot?) and correctly keep excluding it immediately once its
+// label goes terminal; TestEngineRunnerCapacityCountsRoutingAgents pins that
+// side. Before the fix this test asserted the opposite — WorkDirBusy went
+// false the moment KillAgent ran — which was the defect: a directory freed
+// early while a foreign agent's process was still in it.
+func TestEngineRunnerSoftCloseStillHoldsTheDirectory(t *testing.T) {
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "pid")
 	eng := newStubEngine(t, pidFile)
@@ -191,29 +199,27 @@ func TestEngineRunnerSoftCloseIsNotEnough(t *testing.T) {
 	if got := eng.GetAgent(id).Snapshot().State; got != engine.AgentKilled {
 		t.Errorf("state after KillAgent = %s, want killed", got)
 	}
-	// The divergence itself, pinned: the agent record now says killed, so
-	// ActiveAgents drops it and WorkDirBusy reports the directory free,
-	// while the pid above is demonstrably still in it editing files.
-	// Nothing in the scheduler can tell the difference from WorkDirBusy
-	// alone, which is why the queue has to terminate a killed agent's
-	// process itself rather than infer the engine already ended it
-	// (reconcile, scheduler.go). A previous cycle left this unasserted on
-	// the grounds that it "follows from the engine's active-agent
-	// definition" — true, but that is precisely the fact review cycle 5
-	// found nothing was pinning, so a future change could silently make
-	// WorkDirBusy honest (or dishonest in a new way) with nothing to fail.
-	if r.WorkDirBusy(dir) {
-		t.Fatal("WorkDirBusy = true after KillAgent while the pid is still alive: the directory-freed-early divergence this test exists to pin has disappeared or been masked")
+	// The label goes terminal, but the process above is still editing dir:
+	// the directory must stay busy.
+	if !r.WorkDirBusy(dir) {
+		t.Fatal("WorkDirBusy = false after KillAgent while the pid is still alive: a soft-closed agent's directory must stay occupied, whoever started it")
+	}
+	// Capacity, by contrast, is bookkeeping on the label, not the process: a
+	// killed agent stops holding an engine slot immediately. That is correct
+	// — the next StartAgent call may use the slot — it just must not be able
+	// to use this directory until the process above is gone.
+	if active, _ := r.Capacity(); active != 0 {
+		t.Errorf("active = %d after KillAgent, want 0 — a soft-closed agent must free its slot even though its directory stays busy", active)
 	}
 }
 
-// TestEngineRunnerCompleteIsNotEnough is TestEngineRunnerSoftCloseIsNotEnough's
-// counterpart for review cycle 6 finding 1: `complete` is reached the same
-// way `killed` is — a state label with no guarantee the process behind it is
-// gone. resultThenCatBackend's agent finishes its turn (handleResult sets
+// TestEngineRunnerCompleteStillHoldsTheDirectory is
+// TestEngineRunnerSoftCloseStillHoldsTheDirectory's counterpart for
+// `complete`: a state label with no guarantee the process behind it is gone.
+// resultThenCatBackend's agent finishes its turn (handleResult sets
 // AgentComplete) while its subprocess keeps running on stdin, which is
 // exactly the shape a real backend has when it is left open for a follow-up.
-func TestEngineRunnerCompleteIsNotEnough(t *testing.T) {
+func TestEngineRunnerCompleteStillHoldsTheDirectory(t *testing.T) {
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "pid")
 	eng := newResultThenCatStubEngine(t, pidFile)
@@ -235,13 +241,13 @@ func TestEngineRunnerCompleteIsNotEnough(t *testing.T) {
 	if !processAlive(pid) {
 		t.Fatalf("pid %d died once the agent reported complete; sendInput's doc says a completed agent's process stays alive until explicitly removed", pid)
 	}
-	// The divergence itself, pinned: complete drops the agent from
-	// ActiveAgents just like killed does, so WorkDirBusy reports the
-	// directory free while the pid above is demonstrably still in it. This
-	// is exactly why reconcile has to terminate a completed agent's process
-	// itself rather than infer the engine already did (scheduler.go).
-	if r.WorkDirBusy(dir) {
-		t.Fatal("WorkDirBusy = true while the agent is complete but the pid is still alive: the divergence this test exists to pin has disappeared or been masked")
+	// Same fixed contract as soft-close: complete is a label, not a proof of
+	// exit, so the directory must stay busy while the pid above is alive.
+	if !r.WorkDirBusy(dir) {
+		t.Fatal("WorkDirBusy = false while the agent is complete but the pid is still alive: a completed agent's directory must stay occupied")
+	}
+	if active, _ := r.Capacity(); active != 0 {
+		t.Errorf("active = %d once complete, want 0 — a completed agent frees its slot even though its directory stays busy", active)
 	}
 }
 
@@ -301,6 +307,11 @@ func waitForOutput(t *testing.T, eng *engine.Engine, agentID, want string) bool 
 	}
 }
 
+// TestRouteEnabledDefaultsOn also covers review cycle 7 finding 4: the
+// unset-SmartRoute default must mirror resolveSmartRoute's CLI rule (on
+// unless --model or --effort was pinned), or a task submitted with only an
+// effort via `queue add --file` routes when the same task submitted via
+// `queue add --effort` would not — same declared intent, different model.
 func TestRouteEnabledDefaultsOn(t *testing.T) {
 	on, off := true, false
 	cases := []struct {
@@ -311,10 +322,113 @@ func TestRouteEnabledDefaultsOn(t *testing.T) {
 		{"unset routes", TaskOptions{}, true},
 		{"explicit on", TaskOptions{SmartRoute: &on}, true},
 		{"explicit off", TaskOptions{SmartRoute: &off}, false},
+		// Unset SmartRoute but a pin present: must match `queue add --model`
+		// / `--effort` (smartRouteFlags/resolveSmartRoute), which turns
+		// routing off by default the moment either is given.
+		{"effort pinned, no model, unset", TaskOptions{Effort: "medium"}, false},
+		{"model pinned, no effort, unset", TaskOptions{Model: "sonnet"}, false},
+		{"both pinned, unset", TaskOptions{Model: "sonnet", Effort: "medium"}, false},
+		// An explicit SmartRoute always wins over a pin, same as
+		// resolveSmartRoute's explicit --smart-route.
+		{"effort pinned, explicit on", TaskOptions{Effort: "medium", SmartRoute: &on}, true},
 	}
 	for _, c := range cases {
 		if got := c.opts.RouteEnabled(); got != c.want {
 			t.Errorf("%s: RouteEnabled = %v, want %v", c.name, got, c.want)
 		}
 	}
+}
+
+// TestEngineRunnerCapacityCountsRoutingAgents is review cycle 7 finding 3 as
+// a test: nothing previously pinned EngineRunner.Capacity to ActiveCount
+// rather than EngineStats.Active, so rewriting it to the latter (the exact
+// regression review cycle 1 finding 1 was about) left the whole suite green.
+// Parks two real agents in AgentRouting on a real engine — the queue-level
+// analogue of engine.TestActiveCountIncludesRoutingAgents, which cannot
+// inject state directly from outside the engine package — and asserts
+// Capacity reports them active, i.e. that its active count is exactly the
+// number StartAgent's own cap check gates on.
+func TestEngineRunnerCapacityCountsRoutingAgents(t *testing.T) {
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("sleep not available")
+	}
+	eng := engine.New(2)
+	eng.SetDefaultBackend(slowRouteBackend{})
+	r := NewEngineRunner(eng)
+	dir := t.TempDir()
+
+	id1, err := r.StartTask(context.Background(), Task{ID: "t1", Prompt: "p", WorkDir: dir})
+	if err != nil {
+		t.Fatalf("StartTask t1: %v", err)
+	}
+	t.Cleanup(func() { _ = r.TerminateAgent(id1) })
+	id2, err := r.StartTask(context.Background(), Task{ID: "t2", Prompt: "p", WorkDir: dir})
+	if err != nil {
+		t.Fatalf("StartTask t2: %v", err)
+	}
+	t.Cleanup(func() { _ = r.TerminateAgent(id2) })
+
+	for _, id := range []string{id1, id2} {
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			state, _, ok := r.AgentState(id)
+			if !ok {
+				t.Fatalf("agent %s vanished", id)
+			}
+			if state == "routing" {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("agent %s never reached routing (got %s)", id, state)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
+	// Both agents are confirmed routing, and the classifier stub sleeps for
+	// a second before either resolves, so this read cannot race the
+	// transition out of routing.
+	active, max := r.Capacity()
+	if active != 2 {
+		t.Errorf("Capacity active = %d, want 2 — routing agents must count toward the cap Capacity reports", active)
+	}
+	if max != 2 {
+		t.Errorf("Capacity max = %d, want 2", max)
+	}
+
+	// The cap check StartAgent itself performs must refuse a third spawn on
+	// the same number: if Capacity ever disagreed with it (e.g. rewritten to
+	// EngineStats.Active, which omits routing agents), the scheduler would
+	// claim a slot the engine then refuses.
+	if _, err := r.StartTask(context.Background(), Task{ID: "t3", Prompt: "p", WorkDir: dir}); !errors.Is(err, ErrNoCapacity) {
+		t.Fatalf("StartTask t3 error = %v, want ErrNoCapacity", err)
+	}
+}
+
+// slowRouteBackend is pidBackend plus a one-shot classifier command slow
+// enough that two agents can be observed sitting in AgentRouting before it
+// resolves. `sleep` is not a coding agent: no backend binary, no spend.
+type slowRouteBackend struct{}
+
+func (slowRouteBackend) Name() string                                { return "slow-route-stub" }
+func (slowRouteBackend) Binary() string                              { return "sleep" }
+func (slowRouteBackend) Args(string, string, int, []string) []string { return []string{"5"} }
+func (slowRouteBackend) Env() []string                               { return nil }
+func (slowRouteBackend) InitialInput(task, _ string) ([]byte, error) {
+	return []byte(task + "\n"), nil
+}
+func (slowRouteBackend) FollowUpInput(message, _ string, _ bool) ([]byte, error) {
+	return []byte(message + "\n"), nil
+}
+func (slowRouteBackend) PostStartCommands(string) [][]byte { return nil }
+func (slowRouteBackend) ParseEvent([]byte) ([]*engine.BackendEvent, error) {
+	return []*engine.BackendEvent{}, nil
+}
+
+// OneShotCommand is the classifier call StartAgent's routing goroutine
+// blocks on; sleeping keeps both agents in AgentRouting long enough for the
+// test to observe them there before either resolves.
+func (slowRouteBackend) OneShotCommand(string) (string, []string) { return "sleep", []string{"1"} }
+func (slowRouteBackend) UnattendedSessionCommand(string) (string, []string, error) {
+	return "true", nil, nil
 }
