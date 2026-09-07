@@ -22,13 +22,20 @@ const (
 
 	// stopDrainTimeout has to stay under the caller's own grace period, and
 	// under what is left of it by the time Stop is reached: `singularity
-	// daemon stop` SIGTERMs and SIGKILLs 10s later, and daemon.Run spends
-	// up to 5s draining HTTP before this and up to 2s waiting for the
-	// listener after it. Three seconds is what that budget leaves with room
-	// for eng.Shutdown, which is in-memory signalling and does not need
-	// much. Deliberately shorter than a slow `git worktree add` can take:
-	// the point is not to outwait the spawn, it is to make sure the engine
-	// teardown and socket cleanup still happen when we cannot.
+	// daemon stop` SIGTERMs and SIGKILLs 10s later, and daemon.Run spends up
+	// to 3s draining HTTP before this. Those two add up to 6s, leaving
+	// eng.Shutdown roughly 4s before the external SIGKILL lands — and
+	// eng.Shutdown is not free: it kills every agent under one lock and, for
+	// each worktree-isolated one, runs `git worktree remove`, `git worktree
+	// prune` and `git branch -D` synchronously (cleanupWorktree). Four
+	// seconds is enough for an ordinary number of agents, not a guarantee
+	// under an unbounded number of worktree-isolated ones — daemon.Run's 2s
+	// post-eng.Shutdown listener wait doesn't add to that risk, since by
+	// then eng.Shutdown has already run and the only thing left to lose is
+	// socket cleanup, which the next startup sweeps regardless. Three
+	// seconds here is deliberately shorter than a slow `git worktree add`
+	// can take: the point is not to outwait the spawn, it is to leave
+	// eng.Shutdown as much of the remaining budget as this bound can spare.
 	stopDrainTimeout = 3 * time.Second
 )
 

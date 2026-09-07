@@ -580,21 +580,30 @@ func (a *Agent) softClose() {
 // its working directory against an agent that will never run. Setting the
 // state also makes the pending start() refuse, so the routing goroutine
 // cannot resurrect it after the caller believed it gone.
+//
+// An agent already in a terminal state is left alone. A cancel can land
+// after handleResult has moved a worktree agent to complete but before
+// reconcile has seen it, and mergeWorktreeBack's whole point is that the
+// merged worktree survives past completion (worktree.go) for follow-up
+// messages — kill()'s unconditional cleanupWorktree would force-remove it
+// and overwrite a genuine complete/error outcome with killed. A terminal
+// agent already holds neither its slot nor its directory, which is the only
+// contract callers of terminate actually need.
 func (a *Agent) terminate() error {
 	a.mu.Lock()
-	changed := false
-	if a.State != AgentKilled && a.State != AgentError {
-		a.State = AgentKilled
-		if a.EndedAt == nil {
-			now := time.Now()
-			a.EndedAt = &now
-		}
-		changed = true
+	if a.State.Terminal() {
+		a.mu.Unlock()
+		return nil
+	}
+	a.State = AgentKilled
+	if a.EndedAt == nil {
+		now := time.Now()
+		a.EndedAt = &now
 	}
 	a.mu.Unlock()
 
 	err := a.kill()
-	if changed && a.notify != nil {
+	if a.notify != nil {
 		a.notify()
 	}
 	return err

@@ -54,9 +54,13 @@ func (m *Manager) CancelQueue(queueID string) error {
 		return ErrNotFound
 	}
 	var changed []Task
+	var agentIDs []string
 	for _, t := range q.tasks {
 		if t.State.Terminal() {
 			continue
+		}
+		if t.AgentID != "" {
+			agentIDs = append(agentIDs, t.AgentID)
 		}
 		m.markLocked(t, StateCancelled, "queue cancelled by operator")
 		changed = append(changed, t.Clone())
@@ -64,6 +68,17 @@ func (m *Manager) CancelQueue(queueID string) error {
 	m.flushLocked()
 	m.mu.Unlock()
 
+	// Terminate outside the lock, same shape as Cancel: a running agent's
+	// process must be gone before the queue can call itself cancelled, or
+	// nothing tracks the slot and directory it keeps holding.
+	for _, agentID := range agentIDs {
+		if m.runner == nil {
+			break
+		}
+		if err := m.runner.TerminateAgent(agentID); err != nil {
+			log.Printf("queue: terminate agent %s during queue cancel: %v", agentID, err)
+		}
+	}
 	m.emit(changed)
 	m.Wake()
 	return nil

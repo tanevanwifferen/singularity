@@ -135,3 +135,29 @@ func TestTerminateAgentReleasesARoutingAgent(t *testing.T) {
 		t.Error("softClose released a routing agent; if that is now intended, terminate's nil-cmd branch can be simplified")
 	}
 }
+
+// TestTerminateIsANoOpOnAnAlreadyTerminalAgent covers the race a cancel can
+// win against reconcile: handleResult moves a worktree agent to complete (or
+// error) and deliberately leaves the merged worktree in place — cleanup is
+// documented as deferred to kill() so follow-up messages can still reach it
+// (worktree.go) — before the queue's next tick ever reads the new state. A
+// cancel landing in that window used to force through kill() regardless,
+// overwriting a genuine complete/error outcome with killed and running the
+// unconditional worktree cleanup kill() performs. terminate must leave an
+// agent that already stopped exactly as it stopped.
+func TestTerminateIsANoOpOnAnAlreadyTerminalAgent(t *testing.T) {
+	for _, terminal := range []AgentState{AgentComplete, AgentError} {
+		a := newAgent("a-"+terminal.String(), t.TempDir(), "task", AgentOptions{}, stubBackend{})
+		a.setState(terminal)
+
+		if err := a.terminate(); err != nil {
+			t.Fatalf("terminate on a %s agent: %v", terminal, err)
+		}
+		if got := a.Snapshot().State; got != terminal {
+			t.Errorf("state after terminate = %s, want unchanged %s", got, terminal)
+		}
+		if a.IsActive() {
+			t.Errorf("a %s agent must not report as active", terminal)
+		}
+	}
+}
