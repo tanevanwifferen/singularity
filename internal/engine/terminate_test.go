@@ -3,6 +3,9 @@ package engine
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -271,6 +274,175 @@ func TestTerminateEndsAnAliveAgentEvenWhenAlreadyLabelledTerminal(t *testing.T) 
 				t.Errorf("state after terminate = %s, want unchanged %s — a terminal label's outcome must survive", got, terminal)
 			}
 		})
+	}
+}
+
+// failBinaryBackend names a binary that does not exist, so cmd.Start() fails
+// inside Agent.start() with cmd.Process left nil — a spawn failure after the
+// agent record already exists, with no subprocess ever created.
+type failBinaryBackend struct{}
+
+func (failBinaryBackend) Name() string   { return "fail-binary-stub" }
+func (failBinaryBackend) Binary() string { return "/nonexistent/singularity-test-binary-xyz" }
+func (failBinaryBackend) Args(string, string, int, []string) []string {
+	return nil
+}
+func (failBinaryBackend) Env() []string                               { return nil }
+func (failBinaryBackend) InitialInput(task, _ string) ([]byte, error) { return []byte(task), nil }
+func (failBinaryBackend) PostStartCommands(string) [][]byte           { return nil }
+func (failBinaryBackend) ParseEvent(line []byte) ([]*BackendEvent, error) {
+	return []*BackendEvent{}, nil
+}
+func (failBinaryBackend) OneShotCommand(prompt string) (string, []string) { return "true", nil }
+func (failBinaryBackend) UnattendedSessionCommand(prompt string) (string, []string, error) {
+	return "true", nil, nil
+}
+func (failBinaryBackend) FollowUpInput(message, _ string, _ bool) ([]byte, error) {
+	return []byte(message), nil
+}
+
+// TestWorkDirOccupiedIsFreeAfterAFailedSpawn is review cycle 8 finding 1: the
+// mirror image of cycles 3-7's bug. processExited() answers a two-state
+// question (has the process ended?) about a three-state world (never
+// started / running / exited); collapsing "never started" into "still
+// running" is safe for a live agent and catastrophic for one whose spawn
+// failed. Before this fix neither of these paths ever closed done — nothing
+// runs waitForExit for an agent with no subprocess — so WorkDirOccupied
+// reported the directory busy for the engine's lifetime.
+func TestWorkDirOccupiedIsFreeAfterAFailedSpawn(t *testing.T) {
+	t.Run("cmd.Start failure", func(t *testing.T) {
+		e := New(2)
+		dir := t.TempDir()
+		_, err := e.StartAgent(dir, "task", AgentOptions{Backend: failBinaryBackend{}})
+		if err == nil {
+			t.Fatal("StartAgent with a missing binary succeeded, want an error")
+		}
+		if e.WorkDirOccupied(dir) {
+			t.Error("WorkDirOccupied = true after a spawn that never created a subprocess")
+		}
+	})
+
+	t.Run("setupWorktree failure", func(t *testing.T) {
+		e := New(2)
+		dir := t.TempDir() // not a git repo: setupWorktree's gitCurrentBranch fails
+		id, err := e.StartAgent(dir, "task", AgentOptions{Backend: stubBackend{}, UseWorktree: true})
+		if err == nil {
+			t.Fatal("StartAgent with UseWorktree against a non-repo dir succeeded, want an error")
+		}
+		if id == "" {
+			t.Fatal("StartAgent returned no agent id alongside the worktree-setup error")
+		}
+		if e.WorkDirOccupied(dir) {
+			t.Error("WorkDirOccupied = true after a worktree-setup failure that never created a subprocess")
+		}
+	})
+}
+
+// TestRemoveAgentWhileRoutingStartsNoProcess is review cycle 8 finding 2:
+// RemoveAgent used to call a bare kill(false), whose nil-cmd branch neither
+// forces the state terminal nor closes done when the agent has not started
+// yet. Smart routing is the default for a queued task, so an operator (or
+// the queue) removing an agent in its first seconds used to leave the
+// pending classifier free to call start() for real after the record was
+// already gone — a live process WorkDirOccupied could no longer see.
+func TestRemoveAgentWhileRoutingStartsNoProcess(t *testing.T) {
+	e := New(2)
+	dir := t.TempDir()
+	a := newAgent("a-routing", dir, "task", AgentOptions{}, stubBackend{})
+	a.setState(AgentRouting)
+	e.mu.Lock()
+	e.agents[a.ID] = a
+	e.mu.Unlock()
+
+	if err := e.RemoveAgent(a.ID); err != nil {
+		t.Fatalf("RemoveAgent: %v", err)
+	}
+	// The classifier returning after removal must not be able to start a
+	// real process: terminate() forces the state terminal precisely so this
+	// refuses.
+	if err := a.start(); err == nil {
+		t.Error("start() succeeded on an agent removed while routing — a process could still appear in a directory nothing tracks any more")
+	}
+	if e.WorkDirOccupied(dir) {
+		t.Error("WorkDirOccupied = true for a directory whose only agent was removed while routing and can never start a process now")
+	}
+}
+
+// slowRouteBackend's classifier one-shot sleeps past the timeout under test,
+// so the agent is still AgentRouting when the timeout fires; if start() ever
+// runs anyway, Binary/Args writes its pid to pidFile and blocks on stdin
+// (like pidBackend in the queue package), making a wrongly-spawned process
+// detectable rather than merely "no error observed".
+type slowRouteBackend struct{ pidFile string }
+
+func (b slowRouteBackend) Name() string   { return "slow-route-stub" }
+func (b slowRouteBackend) Binary() string { return "sh" }
+func (b slowRouteBackend) Args(string, string, int, []string) []string {
+	return []string{"-c", "echo $$ > " + b.pidFile + "; exec cat"}
+}
+func (slowRouteBackend) Env() []string                               { return nil }
+func (slowRouteBackend) InitialInput(task, _ string) ([]byte, error) { return []byte(task), nil }
+func (slowRouteBackend) PostStartCommands(string) [][]byte           { return nil }
+func (slowRouteBackend) ParseEvent(line []byte) ([]*BackendEvent, error) {
+	return []*BackendEvent{}, nil
+}
+func (slowRouteBackend) OneShotCommand(prompt string) (string, []string) {
+	return "sh", []string{"-c", `sleep 0.5; printf '%s' '{"category":"implementation","effort":"low","reason":"r","summary":"s"}'`}
+}
+func (slowRouteBackend) UnattendedSessionCommand(prompt string) (string, []string, error) {
+	return "true", nil, nil
+}
+func (slowRouteBackend) FollowUpInput(message, _ string, _ bool) ([]byte, error) {
+	return []byte(message), nil
+}
+
+// TestTimeoutDuringRoutingStopsTheAgent is review cycle 8 finding 3: the
+// per-agent timeout goroutine called a bare kill(false), which does nothing
+// on a not-yet-terminal, not-yet-started agent (cmd is nil, state is
+// AgentRouting) — so a timeout firing while the classifier is still choosing
+// a model was silently voided, and the agent went on to run unbounded once
+// the classifier returned. This drives the real StartAgent timeout path
+// (opts.Timeout) with a classifier slow enough to still be running when the
+// timeout fires, exactly like the finding's failure scenario.
+func TestTimeoutDuringRoutingStopsTheAgent(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "pid")
+	e := New(2)
+
+	id, err := e.StartAgent(dir, "task", AgentOptions{
+		Backend:    slowRouteBackend{pidFile: pidFile},
+		SmartRoute: true,
+		Timeout:    150 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("StartAgent: %v", err)
+	}
+	a := e.GetAgent(id)
+
+	// The classifier (500ms) outlives the timeout (150ms): the agent must
+	// still be routing when the timeout fires.
+	time.Sleep(250 * time.Millisecond)
+	if got := a.Snapshot().State; got != AgentKilled {
+		t.Fatalf("state 250ms after a 150ms timeout fired mid-routing = %s, want killed", got)
+	}
+
+	// Give the classifier time to return and (if the bug is present) call
+	// start() for real.
+	time.Sleep(500 * time.Millisecond)
+	if got := a.Snapshot().State; got != AgentKilled {
+		t.Errorf("state after the classifier returned = %s, want unchanged killed — start() must have refused", got)
+	}
+	if data, err := os.ReadFile(pidFile); err == nil {
+		pid, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+		if pid > 0 && processAlive(pid) {
+			t.Fatalf("pid %d is alive: the timeout was voided and the classifier started a real, unbounded process", pid)
+		}
+	}
+	if e.WorkDirOccupied(dir) {
+		t.Error("WorkDirOccupied = true after a routing timeout with no process ever started")
 	}
 }
 

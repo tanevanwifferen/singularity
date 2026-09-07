@@ -190,6 +190,13 @@ spawn:
 			// forever.
 			t.StartedAt = nil
 			m.failLocked(t, "spawn failed: "+err.Error())
+			if agentID != "" {
+				// StartAgent can return a non-empty id alongside an error
+				// (e.g. worktree setup failing after the record is
+				// inserted). The task never got the ID, so nothing else in
+				// the queue can name this agent to clean it up.
+				orphans = append(orphans, agentID)
+			}
 		default:
 			t.AgentID = agentID
 		}

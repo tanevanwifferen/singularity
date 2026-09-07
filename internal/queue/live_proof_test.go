@@ -296,6 +296,59 @@ func TestLiveProofForeignAgentBlocksDispatch(t *testing.T) {
 	t.Logf("queued task dispatched once foreign pid=%d was confirmed dead: state=%s", foreignPid, task.State)
 }
 
+// TestLiveProofFailedSpawnDoesNotWedgeTheDirectory is review cycle 8 finding
+// 1's live proof: a real engine.Engine, a real EngineRunner, and a real
+// Manager. t1's backend binary does not exist, so engine.StartAgent inserts
+// the agent record, agent.start() fails at cmd.Start() with cmd.Process nil,
+// and dispatch fails the task — all before this fix, processExited() stayed
+// false forever for that agent (no waitForExit ever ran to close done), so
+// WorkDirOccupied reported the directory busy for the engine's lifetime and
+// t2 could never dispatch into it. Smart routing has to be off for t1: with
+// it on, StartAgent returns success immediately and the spawn failure
+// surfaces later, asynchronously, which is a different (already-covered)
+// path — this proof needs the synchronous one, so t1 pins an explicit model.
+func TestLiveProofFailedSpawnDoesNotWedgeTheDirectory(t *testing.T) {
+	dir := t.TempDir()
+	eng := newMissingBinaryStubEngine()
+	runner := NewEngineRunner(eng)
+	store, err := NewStore("")
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	m := NewManager(runner, store)
+
+	tasks, err := m.Add([]TaskSpec{
+		{Name: "t1", Prompt: "p", WorkDir: dir, Opts: TaskOptions{Model: "sonnet"}},
+		{Name: "t2", Prompt: "p", WorkDir: dir, Opts: TaskOptions{Model: "sonnet"}},
+	})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	t1, t2 := tasks[0].ID, tasks[1].ID
+
+	m.tick()
+	task1, _ := m.Get(t1)
+	t.Logf("t1 after dispatch attempt: state=%s error=%q", task1.State, task1.Error)
+	if task1.State != StateFailed {
+		t.Fatalf("t1 state = %s, want failed (missing binary must fail the spawn)", task1.State)
+	}
+	if got := eng.WorkDirOccupied(dir); got {
+		t.Fatalf("WorkDirOccupied(%s) = true right after a failed spawn with no subprocess ever created", dir)
+	}
+	t.Logf("WorkDirOccupied(%s) = false after t1's spawn failed — directory correctly reported free", dir)
+
+	m.tick()
+	task2, _ := m.Get(t2)
+	t.Logf("t2 after a second tick: state=%s", task2.State)
+	if task2.State != StateRunning && task2.State != StateFailed {
+		t.Fatalf("t2 state = %s, want it to have been dispatched (running or itself failed on the same missing binary) rather than wedged in ready", task2.State)
+	}
+	if task2.State == StateReady {
+		t.Fatalf("t2 is still ready %d ticks after t1's failed spawn — the directory is wedged", 2)
+	}
+	t.Logf("t2 was dispatched rather than wedged: state=%s", task2.State)
+}
+
 func readPid(t *testing.T, pidFile string) int {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)

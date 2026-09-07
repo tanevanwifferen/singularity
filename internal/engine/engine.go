@@ -167,6 +167,10 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 			agent.setState(AgentError)
 			agent.Error = fmt.Sprintf("worktree setup: %v", err)
 			agent.appendOutput("error", fmt.Sprintf("Failed to create worktree: %v", err))
+			// No subprocess was ever created, and start() will never run for
+			// this agent — without this, processExited() (and so
+			// WorkDirOccupied) would report it occupying projectPath forever.
+			agent.closeDone()
 			return id, fmt.Errorf("worktree setup: %w", err)
 		}
 		agent.appendOutput("system", fmt.Sprintf("Worktree created at %s (branch: %s)", agent.worktreePath, agent.worktreeBranch))
@@ -208,7 +212,12 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 		go func() {
 			select {
 			case <-time.After(opts.Timeout):
-				agent.kill(false)
+				// terminate(), not a bare kill(false): a timeout firing while
+				// the agent is still being smart-routed has no subprocess yet,
+				// so kill's nil-cmd branch would leave the state untouched and
+				// the classifier would go on to start the agent unbounded —
+				// silently voiding the timeout it was just declared to enforce.
+				agent.terminate()
 				agent.appendOutput("system", fmt.Sprintf("Agent killed: timeout after %s", opts.Timeout))
 			case <-agent.Done():
 				// Agent finished before timeout
@@ -345,7 +354,13 @@ func (e *Engine) RemoveAgent(sessionID string) error {
 		return fmt.Errorf("agent not found: %s", sessionID)
 	}
 
-	agent.kill(false)
+	// terminate(), not a bare kill(false): an agent still being smart-routed
+	// has no subprocess yet, so kill's nil-cmd branch would neither force the
+	// state terminal nor close done, and the pending classifier would go on
+	// to start a real process in a directory this deletion just stopped
+	// tracking. terminate() forces the state first so the late start() call
+	// refuses.
+	agent.terminate()
 
 	delete(e.agents, sessionID)
 	return nil
@@ -472,8 +487,11 @@ func (e *Engine) Shutdown() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	// terminate(), not a bare kill(false) — see RemoveAgent's comment: a
+	// routing agent has no subprocess yet, and a bare kill leaves it able to
+	// spawn one after the daemon believes everything is torn down.
 	for _, agent := range e.agents {
-		agent.kill(false)
+		agent.terminate()
 	}
 	e.agents = make(map[string]*Agent)
 }
