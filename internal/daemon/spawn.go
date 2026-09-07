@@ -93,5 +93,5 @@ func Spawn(socketPath string) error {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	return ErrDaemonStartupTimeout
+	return startupTimeoutError(p.Log)
 }
