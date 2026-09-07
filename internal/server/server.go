@@ -458,6 +458,8 @@ func codeForServiceErr(err error) string {
 		return api.ErrCodePermissionDenied
 	case errors.Is(err, service.ErrUnavailable):
 		return api.ErrCodeUnavailable
+	case errors.Is(err, service.ErrInvalidRequest):
+		return api.ErrCodeBadRequest
 	case errors.Is(err, service.ErrCanceled):
 		return api.ErrCodeCanceled
 	}

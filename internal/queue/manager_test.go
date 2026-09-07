@@ -790,3 +790,30 @@ func waitFor(t *testing.T, cond func() bool, what string) {
 	}
 	t.Fatalf("timed out waiting for %s", what)
 }
+
+func TestRequeueNoteSurvivesTheBlockedToReadyPass(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	runner := newFakeRunner(4)
+	m := NewManager(runner, store)
+	tasks := mustAdd(t, m, []TaskSpec{{QueueID: "k", Name: "a", Prompt: "p", WorkDir: "/w"}})
+	m.tick()
+
+	m2 := NewManager(newFakeRunner(4), store)
+	m2.Restore()
+	restored, err := m2.Get(tasks[0].ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if restored.State != StateReady {
+		t.Fatalf("state = %s, want ready", restored.State)
+	}
+	// The task has no dependencies, so it goes blocked->ready inside
+	// Restore itself. The note explaining the restart must outlive that.
+	if restored.Error == "" {
+		t.Error("requeue note was cleared by the blocked->ready transition")
+	}
+}

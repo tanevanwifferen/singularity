@@ -27,5 +27,6 @@ type Services struct {
 	Forge    ForgeService
 	Project  ProjectService
 	Agent    AgentService
+	Queue    QueueService
 	Jira     JiraService
 }

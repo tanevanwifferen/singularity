@@ -725,11 +725,17 @@ func (m *Manager) refreshBlockedLocked() []Task {
 			if next == StateSkipped {
 				m.markLocked(t, StateSkipped, "skipped: a dependency did not complete")
 			} else {
-				// Coming back from skipped: clear the derived failure text
-				// and the end timestamp so the task looks pending again.
+				// Clear the derived text only when leaving skipped, whose
+				// Error this pass wrote itself. Other pending tasks may
+				// carry an informational note that has to survive — Restore
+				// records why a task was requeued after a daemon restart,
+				// and blanket-clearing here erased it before an operator
+				// could ever see it.
+				if t.State == StateSkipped {
+					t.Error = ""
+					t.EndedAt = nil
+				}
 				t.State = next
-				t.Error = ""
-				t.EndedAt = nil
 				if q := m.queues[t.QueueID]; q != nil {
 					q.dirty = true
 				}

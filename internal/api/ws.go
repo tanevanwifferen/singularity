@@ -21,6 +21,7 @@ const (
 	WSEventAgentOutput       = "agent_output"
 	WSEventAgentComplete     = "agent_complete"
 	WSEventAgentError        = "agent_error"
+	WSEventQueueTaskChanged  = "queue_task_changed"
 	WSEventWorkflowUpdated   = "workflow_updated"
 	WSEventSyncProgress      = "sync_progress"
 	WSEventDiscoveryProgress = "discovery_progress"
@@ -83,6 +84,15 @@ type AgentCompletePayload struct {
 type AgentErrorPayload struct {
 	AgentID string `json:"agent_id"`
 	Error   string `json:"error"`
+}
+
+// QueueTaskChangedPayload is the payload of a "queue_task_changed" WS frame.
+// The daemon emits one per task the scheduler advanced, carrying the whole
+// task rather than an ID: a queue view renders a state change without a
+// follow-up GET, and the frames stay meaningful even if they arrive out of
+// order with respect to a client's own polling.
+type QueueTaskChangedPayload struct {
+	Task Task `json:"task"`
 }
 
 // ErrorPayload is the payload of an "error" WS frame.
