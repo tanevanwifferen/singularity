@@ -121,6 +121,10 @@ type Agent struct {
 
 	// notify is called after output or state changes to signal the engine's observer.
 	notify func()
+
+	// summaryOnce guards the one-shot title call so an agent can never be
+	// summarised twice (once per cheap-model call is a real cost).
+	summaryOnce sync.Once
 }
 
 // OutputEntry represents a single output chunk from the agent.
@@ -224,8 +228,12 @@ func (a *Agent) start() error {
 	a.State = AgentRunning
 
 	if a.RouteResult != nil {
+		// Report what is actually in effect, not just what the classifier
+		// suggested: an explicit --model / --effort overrides its choice per
+		// field, so the two can differ.
 		a.appendOutputLocked("system", fmt.Sprintf("Routed → model=%s effort=%s (%s: %s)",
-			a.RouteResult.Model, a.RouteResult.Effort, a.RouteResult.Category, a.RouteResult.Reason))
+			routedField(a.model, a.RouteResult.Model), routedField(a.effort, a.RouteResult.Effort),
+			a.RouteResult.Category, a.RouteResult.Reason))
 	}
 	a.appendOutputLocked("system", fmt.Sprintf("Agent %s started [%s]", a.ID, a.backend.Name()))
 
@@ -687,6 +695,16 @@ func (a *Agent) appendOutputLocked(source, content string) {
 	if a.notify != nil {
 		a.notify()
 	}
+}
+
+// routedField renders one routed field as "value" when the classifier's
+// suggestion was applied, or "value (pinned, classifier: suggested)" when the
+// caller overrode it.
+func routedField(applied, suggested string) string {
+	if applied == suggested || suggested == "" {
+		return applied
+	}
+	return fmt.Sprintf("%s (pinned, classifier: %s)", applied, suggested)
 }
 
 // setState changes state (caller must hold mu).
