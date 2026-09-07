@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/queue"
@@ -118,6 +119,33 @@ type Manager struct {
 	store *Store
 
 	seq int64
+
+	// The driver's state. The reconciler itself is reconcile.go; the fields
+	// live here because they are the manager's, and because NewManager is
+	// the one place the channels can be made before anything can Wake.
+	//
+	// tickInterval is the reconciler's fallback poll period. A queue task
+	// change normally wakes it immediately via Notify; the tick covers what
+	// nothing pushes — a verdict file that landed after its review task was
+	// already observed done, and every transition a daemon restart has to
+	// re-derive.
+	tickInterval time.Duration
+	wake         chan struct{}
+	stop         chan struct{}
+	stopped      chan struct{}
+	started      atomic.Bool
+	runOnce      sync.Once
+	stopOnce     sync.Once
+	// stopTimeoutOverride shortens Stop's drain deadline for tests. Zero
+	// means stopDrainTimeout. Set before Start and never mutated after.
+	stopTimeoutOverride time.Duration
+
+	// onFlowChange is called, outside every lock, once per flow transition
+	// the reconciler makes. The daemon fills this slot with its WS
+	// broadcast hook. Guarded by its own mutex so a listener may call back
+	// into the manager.
+	onFlowChange func(Flow)
+	onChangeMu   sync.RWMutex
 }
 
 // NewManager builds a Manager over the given queue and store. Either may be
@@ -127,9 +155,13 @@ type Manager struct {
 // validation wants.
 func NewManager(q TaskQueue, store *Store) *Manager {
 	return &Manager{
-		flows: make(map[string]*Flow),
-		queue: q,
-		store: store,
+		flows:        make(map[string]*Flow),
+		queue:        q,
+		store:        store,
+		tickInterval: defaultTickInterval,
+		wake:         make(chan struct{}, 1),
+		stop:         make(chan struct{}),
+		stopped:      make(chan struct{}),
 	}
 }
 

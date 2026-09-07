@@ -866,3 +866,16 @@ func flowIDs(flows []Flow) string {
 	}
 	return strings.Join(ids, ", ")
 }
+
+// setError sets a task's error text, which is what the reconciler quotes when
+// a step fails.
+func (q *fakeQueue) setError(t *testing.T, id, msg string) {
+	t.Helper()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	task, ok := q.tasks[id]
+	if !ok {
+		t.Fatalf("fakeQueue has no task %s", id)
+	}
+	task.Error = msg
+}
