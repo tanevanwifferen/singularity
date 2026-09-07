@@ -461,10 +461,11 @@ func runAgentsStats(ctx context.Context, _ []string) int {
 
 // smartRouteFlags registers --smart-route and --no-smart-route on fs and
 // returns a resolver to call after fs.Parse with the final --model/--effort
-// values. Routing defaults to ON when the user pinned neither model nor
-// effort; --no-smart-route always wins.
+// values. Routing defaults to ON unless the user pinned BOTH model and
+// effort, leaving the classifier nothing to decide; --no-smart-route always
+// wins.
 func smartRouteFlags(fs *flag.FlagSet) func(model, effort string) bool {
-	sr := fs.Bool("smart-route", false, "force Haiku routing on (--smart-route=false forces off; default: on unless --model/--effort given)")
+	sr := fs.Bool("smart-route", false, "force Haiku routing on (--smart-route=false forces off; default: on unless both --model and --effort are given)")
 	nsr := fs.Bool("no-smart-route", false, "disable smart routing")
 	return func(model, effort string) bool {
 		explicit := false
@@ -478,8 +479,12 @@ func smartRouteFlags(fs *flag.FlagSet) func(model, effort string) bool {
 }
 
 // resolveSmartRoute decides whether to ask the daemon for Haiku routing.
-// Precedence: --no-smart-route > explicit --smart-route[=bool] > default,
-// where the default is ON only when the user gave neither model nor effort.
+// Precedence: --no-smart-route > explicit --smart-route[=bool] > default.
+//
+// The classifier decides three things — model, effort and the display summary
+// — and pinning one of them should suppress only that one. So the default is
+// ON whenever the model OR the effort is still unpinned; it is only OFF when
+// both are pinned, where the classifier would decide nothing that survives.
 func resolveSmartRoute(explicit, smartRoute, noSmartRoute bool, model, effort string) bool {
 	if noSmartRoute {
 		return false
@@ -487,7 +492,7 @@ func resolveSmartRoute(explicit, smartRoute, noSmartRoute bool, model, effort st
 	if explicit {
 		return smartRoute
 	}
-	return model == "" && effort == ""
+	return model == "" || effort == ""
 }
 
 // fmtAgent formats a single AgentSnapshotDTO as a markdown section.
