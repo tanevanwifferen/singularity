@@ -31,6 +31,7 @@ func New() *service.Services {
 		Project:  projectStub{},
 		Agent:    agentStub{},
 		Queue:    queueStub{},
+		Flow:     NewFlowStub(),
 		Jira:     jiraStub{},
 	}
 }

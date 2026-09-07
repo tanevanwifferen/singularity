@@ -128,7 +128,7 @@ func startTestDaemon(t *testing.T) *testDaemon {
 	taskQueue.OnChange(srv.QueueChangeHook())
 	taskQueue.Start()
 
-	srv.SetServices(local.New(srv.Engine(), nil, config.JiraConfig{}, taskQueue))
+	srv.SetServices(local.New(srv.Engine(), nil, config.JiraConfig{}, taskQueue, nil))
 
 	serveCh := make(chan error, 1)
 	go func() { serveCh <- srv.Serve(ln) }()

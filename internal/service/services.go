@@ -28,5 +28,6 @@ type Services struct {
 	Project  ProjectService
 	Agent    AgentService
 	Queue    QueueService
+	Flow     FlowService
 	Jira     JiraService
 }
