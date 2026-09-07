@@ -32,7 +32,7 @@ Terminal UI built with Bubble Tea (Elm-inspired model-view-update). In local mod
 
 | Package | Purpose |
 |---------|---------|
-| `views/` | 13 view implementations (Overview, Branches, Commit, Log, Agents, Config, Sync, BranchCompare, Stashes, Rebase, Worktrees, Pipeline, CreatePR, Project, Workflows) |
+| `views/` | View implementations (Overview, Branches, Commit, Log, Agents, Flows, Config, Sync, BranchCompare, Stashes, Rebase, Worktrees, Pipeline, CreatePR, Project, Workflows). `Flows` is the adversarial-review view — flow list plus the selected flow's round/step tree — registered right after `Agents` in both modes, so it takes `F6` in repo mode and `F7` in project mode and shifts `Config` one key along. |
 | `components/` | Reusable UI primitives: scrollable lists, modals, filter inputs, spinners, text editor, viewport |
 | `router.go` | View navigation — maps F-keys, submenu keys, and `Tab` to view switches; handles project vs repo mode routing |
 | `keybinds.go` | Configurable keybinding manager — loads from JSON, falls back to defaults |
@@ -92,6 +92,33 @@ Responsibilities:
 - Forge detection — identifies GitHub vs GitLab from remote URL, auto-detects auth via `gh`/`glab`
 - MR/PR creation
 - LRU cache with TTL for expensive operations
+
+### Adversarial Review Flows (`internal/flow/`)
+
+Drives repeated implement → review → fix rounds over one working directory until
+a reviewer accepts the work or a round cap is hit — the case a queue DAG cannot
+express, because the round count depends on a verdict that does not exist when
+the work is submitted.
+
+A flow is built *on top of* the queue rather than beside it: it owns one queue
+(`flow-<flow_id>`) and appends one round's two tasks at a time — a work task
+(`implement` in round 1, `fix` afterwards) and a `review` task that depends on
+it, both in the flow's single work dir. Worktree isolation is refused, so every
+round sees the same tree.
+
+| File | Purpose |
+|------|---------|
+| `flow.go` | `Flow`, `Round`, `Verdict`, `Finding` and the state enums (wire-first, snake_case tags — `internal/service` and `internal/api` alias them) |
+| `verdict.go` | Parser for the reviewer's JSON verdict; unparseable or missing is a reject, never an accept |
+| `prompt.go` | Implement / fix / review prompt composition, including the verdict path and prior-round findings |
+| `manager.go` | Record keeper: `Start`, `Get`, `List`, `Cancel`, `Remove`, `Tree` over a `TaskQueue` interface the package defines |
+| `reconcile.go`, `rounds.go` | The reconciler — submits rounds, reads verdicts, applies the one re-review, settles the flow |
+| `store.go`, `restore.go` | One JSON file per flow under `<state-dir>/flows`, plus a verdict dir each; restored on daemon start |
+
+**Flow states:** `pending → running`, then `accepted`, `rejected` (cap reached),
+`errored` or `cancelled`. Progress reaches clients as `flow_updated` WS frames
+carrying the whole flow, plus the ordinary `queue_task_changed` frames its tasks
+produce.
 
 ### Configuration (`internal/config/`)
 
@@ -177,10 +204,20 @@ main()
 | GET | `/api/agent/list` | List all agents in pool |
 | GET | `/api/agent/stats` | Pool statistics |
 
+### Adversarial Review Flows
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/flow/start` | Start a flow (work dir, goal, review goal, max rounds, work/review opts) |
+| GET | `/api/flow/list` | List flows, optionally filtered by `state` |
+| GET | `/api/flow/get` | One flow by `flow_id`, rounds and verdicts included |
+| GET | `/api/flow/tree` | Flat, parent-linked node list: flow → rounds → steps, with task and agent state |
+| POST | `/api/flow/cancel` | Cancel the flow and the tasks it created |
+| POST | `/api/flow/remove` | Forget a terminal flow's record and its verdict dir (409 while it is still active) |
+
 ### WebSocket
 | Path | Description |
 |------|-------------|
-| `/ws` | Real-time events: repo/branch/pipeline updates, agent output |
+| `/ws` | Real-time events: repo/branch/pipeline updates, agent output, `queue_task_changed`, `flow_updated` |
 
 ## Project Structure
 
@@ -197,6 +234,7 @@ singularity/
 │   │   └── ws.go            # WebSocket client
 │   ├── server/              # HTTP/WebSocket API daemon
 │   ├── engine/              # Claude Code agent pool engine
+│   ├── flow/                # Adversarial review flows (implement → review → fix rounds)
 │   ├── project/             # Multi-repo project management
 │   ├── git/                 # Git operations (CLI wrapper)
 │   ├── client/              # HTTP/WS client library
