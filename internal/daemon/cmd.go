@@ -223,10 +223,22 @@ func Run(opts RunOptions) error {
 		}
 	}
 
-	// Graceful shutdown: HTTP first (5s) so in-flight requests drain,
-	// then engine (which signals agents), then socket file, then pidfile
+	// Graceful shutdown: HTTP first (3s) so in-flight requests drain, then
+	// the scheduler (stopDrainTimeout, see queue.Manager.Stop), then the
+	// engine (which kills every agent and, for worktree-isolated ones, runs
+	// git cleanup synchronously — not free), then socket file, then pidfile
 	// (via the deferred release closure).
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	//
+	// `singularity daemon stop` SIGTERMs and SIGKILLs 10s later (see
+	// cmd/singularity's Stop). This drain and the scheduler's stopDrainTimeout
+	// are what is actually subtracted from that budget before eng.Shutdown
+	// gets to run: 3s here plus stopDrainTimeout leaves eng.Shutdown the
+	// remainder, currently a few seconds — sized for tearing down an
+	// ordinary number of agents, not a guarantee under an unbounded number
+	// of worktree-isolated ones. The listener wait below runs after
+	// eng.Shutdown and is not part of that budget: skipping it only delays
+	// socket cleanup, which the next startup sweeps regardless.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
 		log.Printf("http shutdown: %v", err)
@@ -235,19 +247,20 @@ func Run(opts RunOptions) error {
 	// into an engine that is already tearing its agents down. Stop normally
 	// returns at once (it cancels the run context first, so every pending
 	// spawn is refused) and waits at most stopDrainTimeout for one spawn
-	// already in flight — chosen to fit inside `daemon stop`'s 10s grace
-	// period alongside the 5s HTTP drain above and the 2s listener wait
-	// below. Being SIGKILLed here would skip eng.Shutdown and the socket
-	// cleanup entirely, so when the drain does not complete we carry on
-	// deliberately: the overlap risk is one in-flight StartTask, and the
-	// alternative is orphaning every agent.
+	// already in flight. Being SIGKILLed here would skip eng.Shutdown and
+	// the socket cleanup entirely, so when the drain does not complete we
+	// carry on deliberately: the overlap risk is one in-flight StartTask,
+	// and the alternative is orphaning every agent.
 	if !taskQueue.Stop() {
 		log.Printf("queue: scheduler did not drain in time; continuing shutdown")
 	}
 	if eng := srv.Engine(); eng != nil {
 		eng.Shutdown()
 	}
-	// Wait briefly for Serve to return so the listener is closed.
+	// Wait briefly for Serve to return so the listener is closed. Not
+	// counted against the SIGKILL budget above: eng.Shutdown has already
+	// run by this point, so the worst this loses is the socket-file cleanup
+	// a couple of lines down, which the next startup sweeps regardless.
 	select {
 	case <-serveErr:
 	case <-time.After(2 * time.Second):

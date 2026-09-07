@@ -416,6 +416,7 @@ func TestAbortQueuePolicyCancelsEverythingPending(t *testing.T) {
 	})
 
 	m.tick()
+	bAgent := runner.agentFor(t, tasks[1].ID)
 	runner.setTaskState(t, tasks[0].ID, "error", "boom")
 	m.tick()
 
@@ -428,6 +429,28 @@ func TestAbortQueuePolicyCancelsEverythingPending(t *testing.T) {
 	}
 	if got := stateOf(t, m, tasks[2].ID); got != StateCancelled {
 		t.Errorf("c state = %s, want cancelled", got)
+	}
+
+	// The invariant, not just the call: abortQueueLocked's terminate runs
+	// fire-and-forget, so assert on its effect (agent killed, directory
+	// freed) rather than racing its goroutine directly. Deleting the
+	// TerminateAgent call from abortQueueLocked must fail this.
+	waitFor(t, func() bool {
+		for _, id := range runner.killedIDs() {
+			if id == bAgent {
+				return true
+			}
+		}
+		return false
+	}, "b's agent to be terminated by the queue abort")
+	waitFor(t, func() bool {
+		return !runner.WorkDirBusy("/w2")
+	}, "/w2 to be released after the queue abort")
+
+	next := mustAdd(t, m, []TaskSpec{{Name: "d", Prompt: "p", WorkDir: "/w2"}})
+	m.tick()
+	if got := stateOf(t, m, next[0].ID); got != StateRunning {
+		t.Fatalf("d state = %s, want running once b's agent released /w2", got)
 	}
 }
 
@@ -674,6 +697,45 @@ func TestCancelKillsAgentAndSkipsDependents(t *testing.T) {
 	runner.mu.Unlock()
 	if killed != 1 {
 		t.Errorf("killed %d agents, want 1", killed)
+	}
+}
+
+// TestCancelQueueTerminatesRunningAgents pins the bulk-cancel path that
+// shipped without a single test through three review cycles:
+// Manager.CancelQueue marked every unfinished task cancelled but never
+// terminated the agent behind it, so the operator was told the queue was
+// cancelled while a live agent kept editing its directory and holding an
+// engine slot nothing tracked any more. This must fail before the fix
+// (CancelQueue never calls TerminateAgent) and pass after (it does, mirroring
+// Cancel).
+func TestCancelQueueTerminatesRunningAgents(t *testing.T) {
+	runner := newFakeRunner(4)
+	m := newTestManager(runner)
+	q1 := mustAdd(t, m, []TaskSpec{{QueueID: "q1", Name: "a", Prompt: "p", WorkDir: "/shared"}})
+	m.tick()
+	agentID := runner.agentFor(t, q1[0].ID)
+
+	// A task in an unrelated queue, on the same directory: it cannot dispatch
+	// while a1 is alive, cancelled or not.
+	q2 := mustAdd(t, m, []TaskSpec{{QueueID: "q2", Name: "b", Prompt: "p", WorkDir: "/shared"}})
+
+	if err := m.CancelQueue("q1"); err != nil {
+		t.Fatalf("CancelQueue: %v", err)
+	}
+	if got := stateOf(t, m, q1[0].ID); got != StateCancelled {
+		t.Fatalf("a state = %s, want cancelled", got)
+	}
+	if killed := runner.killedIDs(); len(killed) != 1 || killed[0] != agentID {
+		t.Fatalf("terminated = %v, want [%s]", killed, agentID)
+	}
+	if runner.WorkDirBusy("/shared") {
+		t.Fatal("/shared is still occupied after CancelQueue: the agent's process outlived it")
+	}
+
+	// Only now is the unrelated queue's task free to dispatch into /shared.
+	m.tick()
+	if got := stateOf(t, m, q2[0].ID); got != StateRunning {
+		t.Fatalf("b state = %s, want running once the cancelled queue's agent released /shared", got)
 	}
 }
 

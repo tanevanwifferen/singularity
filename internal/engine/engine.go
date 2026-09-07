@@ -266,7 +266,8 @@ func (e *Engine) KillAgent(sessionID string) error {
 // KillAgent the process really is gone afterwards, so the agent stops holding
 // a slot and its working directory, and unlike RemoveAgent the record — and
 // with it the output the caller may still want to explain what happened —
-// survives. The terminated agent reports state killed.
+// survives. An agent still doing work reports state killed afterwards; one
+// that already reached complete or error is left exactly as it finished.
 func (e *Engine) TerminateAgent(sessionID string) error {
 	agent := e.getAgent(sessionID)
 	if agent == nil {
