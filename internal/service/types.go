@@ -5,6 +5,7 @@ import (
 	"gitlab.com/tanevanwifferen1/singularity/internal/git"
 	"gitlab.com/tanevanwifferen1/singularity/internal/jira"
 	"gitlab.com/tanevanwifferen1/singularity/internal/project"
+	"gitlab.com/tanevanwifferen1/singularity/internal/queue"
 )
 
 // Re-exported DTO types. Views import these via internal/service only and
@@ -122,6 +123,41 @@ type (
 	EngineStats = engine.EngineStats
 )
 
+// --- from internal/queue ---
+
+type (
+	// Task is one unit of queued agent work (prompt, work dir,
+	// dependencies, lifecycle state).
+	Task = queue.Task
+
+	// TaskSpec is the submit-time description of a task, with After
+	// entries naming either batch-local aliases or existing task IDs.
+	TaskSpec = queue.TaskSpec
+
+	// TaskState enum value (blocked/ready/running/waiting_human/done/
+	// failed/cancelled/skipped).
+	TaskState = queue.State
+
+	// TaskOptions is the subset of AgentOptions a queued task may set.
+	TaskOptions = queue.TaskOptions
+
+	// FailurePolicy enum value deciding what happens to a failed task's
+	// dependents.
+	FailurePolicy = queue.FailurePolicy
+
+	// QueueInfo summarises one queue: paused flag plus per-state counts.
+	QueueInfo = queue.Info
+
+	// QueueGraph is one queue's dependency DAG.
+	QueueGraph = queue.Graph
+
+	// GraphNode is one vertex of a QueueGraph.
+	GraphNode = queue.GraphNode
+
+	// GraphEdge is one dependency edge of a QueueGraph.
+	GraphEdge = queue.GraphEdge
+)
+
 // --- from internal/project ---
 
 type (
@@ -222,6 +258,25 @@ const (
 	AgentComplete = engine.AgentComplete
 	AgentError    = engine.AgentError
 	AgentKilled   = engine.AgentKilled
+)
+
+// TaskState values mirroring internal/queue.
+const (
+	TaskBlocked      = queue.StateBlocked
+	TaskReady        = queue.StateReady
+	TaskRunning      = queue.StateRunning
+	TaskWaitingHuman = queue.StateWaitingHuman
+	TaskDone         = queue.StateDone
+	TaskFailed       = queue.StateFailed
+	TaskCancelled    = queue.StateCancelled
+	TaskSkipped      = queue.StateSkipped
+)
+
+// FailurePolicy values mirroring internal/queue.
+const (
+	FailBlock      = queue.FailBlock
+	FailContinue   = queue.FailContinue
+	FailAbortQueue = queue.FailAbortQueue
 )
 
 // WorkflowState values mirroring internal/project.

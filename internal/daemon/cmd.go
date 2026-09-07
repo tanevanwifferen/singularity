@@ -17,6 +17,7 @@ import (
 	"gitlab.com/tanevanwifferen1/singularity/internal/engine"
 	"gitlab.com/tanevanwifferen1/singularity/internal/oneshot"
 	"gitlab.com/tanevanwifferen1/singularity/internal/project"
+	"gitlab.com/tanevanwifferen1/singularity/internal/queue"
 	"gitlab.com/tanevanwifferen1/singularity/internal/server"
 	"gitlab.com/tanevanwifferen1/singularity/internal/service/local"
 )
@@ -179,7 +180,25 @@ func Run(opts RunOptions) error {
 	// descriptions). Packages outside the engine — internal/git — read this
 	// process-wide default instead of importing the engine.
 	oneshot.SetDefault(srv.Engine().DefaultBackend())
-	srv.SetServices(local.New(srv.Engine(), loader, jiraCfg))
+
+	// Task queue. A store that cannot open its directory is not fatal: the
+	// daemon keeps serving, the queue just runs in memory for this lifetime
+	// (NewStore("") is a valid no-op store) and says so in the log.
+	store, serr := queue.NewStore(paths.Queues)
+	if serr != nil {
+		log.Printf("queue: persistence disabled: %v", serr)
+		store, _ = queue.NewStore("")
+	}
+	taskQueue := queue.NewManager(queue.NewEngineRunner(srv.Engine()), store)
+	taskQueue.OnChange(srv.QueueChangeHook())
+	// The scheduler needs to hear about agent state changes, but
+	// OnAgentUpdate is a single slot the server already owns for its WS
+	// broadcasts — hence the additive observer hook.
+	srv.Engine().AddAgentObserver(taskQueue.Notify)
+	taskQueue.Restore()
+	taskQueue.Start()
+
+	srv.SetServices(local.New(srv.Engine(), loader, jiraCfg, taskQueue))
 
 	log.Printf("singularity daemon listening at %s (pid %d)", listenURL, os.Getpid())
 
@@ -212,6 +231,9 @@ func Run(opts RunOptions) error {
 	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
 		log.Printf("http shutdown: %v", err)
 	}
+	// The scheduler stops before the engine so it cannot dispatch a task
+	// into an engine that is already tearing its agents down.
+	taskQueue.Stop()
 	if eng := srv.Engine(); eng != nil {
 		eng.Shutdown()
 	}

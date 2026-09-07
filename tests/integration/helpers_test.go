@@ -103,7 +103,7 @@ func startTestDaemon(t *testing.T) *testDaemon {
 	}
 
 	srv := server.New(url, "")
-	srv.SetServices(local.New(srv.Engine(), nil, config.JiraConfig{}))
+	srv.SetServices(local.New(srv.Engine(), nil, config.JiraConfig{}, nil))
 
 	serveCh := make(chan error, 1)
 	go func() { serveCh <- srv.Serve(ln) }()

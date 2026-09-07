@@ -17,6 +17,7 @@ import (
 	"gitlab.com/tanevanwifferen1/singularity/internal/engine"
 	"gitlab.com/tanevanwifferen1/singularity/internal/git"
 	"gitlab.com/tanevanwifferen1/singularity/internal/project"
+	"gitlab.com/tanevanwifferen1/singularity/internal/queue"
 	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 )
 
@@ -25,8 +26,11 @@ import (
 // owns one). projectLoader may be nil; in that case ProjectService and the
 // project-handle-aware bulk methods on Stash/Diff/Sync return
 // service.ErrUnavailable. jiraCfg may be a zero value when Jira is disabled;
-// the resulting JiraService returns ErrUnavailable for every call.
-func New(eng *engine.Engine, projectLoader *project.Loader, jiraCfg config.JiraConfig) *service.Services {
+// the resulting JiraService returns ErrUnavailable for every call. taskQueue
+// may be nil (QueueService then returns ErrUnavailable); the daemon owns the
+// manager's lifecycle — starting the scheduler and stopping it on shutdown —
+// because those are process concerns, not service ones.
+func New(eng *engine.Engine, projectLoader *project.Loader, jiraCfg config.JiraConfig, taskQueue *queue.Manager) *service.Services {
 	projSvc := newProjectService(projectLoader)
 	return &service.Services{
 		Repo:     &localRepoService{},
@@ -42,6 +46,7 @@ func New(eng *engine.Engine, projectLoader *project.Loader, jiraCfg config.JiraC
 		Forge:    &localForgeService{},
 		Project:  projSvc,
 		Agent:    &localAgentService{eng: eng},
+		Queue:    &localQueueService{mgr: taskQueue},
 		Jira:     newJiraService(eng, jiraCfg),
 	}
 }
@@ -156,6 +161,7 @@ var knownSentinels = []error{
 	service.ErrNoRebaseInProgress,
 	service.ErrPermissionDenied,
 	service.ErrUnavailable,
+	service.ErrInvalidRequest,
 	service.ErrCanceled,
 }
 

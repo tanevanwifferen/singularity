@@ -57,6 +57,16 @@ var (
 	// client not authenticated). Code: "UNAVAILABLE".
 	ErrUnavailable = errors.New("service unavailable")
 
+	// ErrInvalidRequest indicates the request itself was malformed in a way
+	// the caller can fix: an unknown or cyclic task dependency, a missing
+	// required field, an unknown enum value. Code: "BAD_REQUEST".
+	//
+	// Most handlers validate their own inputs before dispatching, so this
+	// sentinel exists for the cases where only the owning subsystem can
+	// tell — the queue accepts or rejects a whole DAG, and "task t3 depends
+	// on unknown task t9" is not something an HTTP handler can check.
+	ErrInvalidRequest = errors.New("invalid request")
+
 	// ErrCanceled indicates the operation was canceled via context. Code: "CANCELED".
 	ErrCanceled = errors.New("canceled")
 )

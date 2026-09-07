@@ -30,6 +30,7 @@ func New() *service.Services {
 		Forge:    forgeStub{},
 		Project:  projectStub{},
 		Agent:    agentStub{},
+		Queue:    queueStub{},
 		Jira:     jiraStub{},
 	}
 }
@@ -355,6 +356,31 @@ func (agentStub) SubscribeAll(context.Context) (<-chan service.AgentEvent, func(
 	return ch, func() {}, nil
 }
 func (agentStub) ReloadModelsConfig() {}
+
+// queueStub --------------------------------------------------------------------
+
+type queueStub struct{}
+
+func (queueStub) Add(context.Context, []service.TaskSpec) ([]service.Task, error) {
+	return nil, unavail()
+}
+func (queueStub) List(context.Context, string, []service.TaskState) ([]service.Task, error) {
+	return nil, unavail()
+}
+func (queueStub) Get(context.Context, string) (*service.Task, error)  { return nil, unavail() }
+func (queueStub) Queues(context.Context) ([]service.QueueInfo, error) { return nil, unavail() }
+func (queueStub) Cancel(context.Context, string) error                { return unavail() }
+func (queueStub) CancelQueue(context.Context, string) error           { return unavail() }
+func (queueStub) Retry(context.Context, string) error                 { return unavail() }
+func (queueStub) Answer(context.Context, string, string) error        { return unavail() }
+func (queueStub) Pause(context.Context, string) error                 { return unavail() }
+func (queueStub) Resume(context.Context, string) error                { return unavail() }
+func (queueStub) QueueInfo(context.Context, string) (*service.QueueInfo, error) {
+	return nil, unavail()
+}
+func (queueStub) Graph(context.Context, string) (*service.QueueGraph, error) {
+	return nil, unavail()
+}
 
 // jiraStub ---------------------------------------------------------------------
 

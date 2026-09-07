@@ -176,6 +176,19 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/agent/subscribe", wrap(s.handleAgentSubscribe))
 	mux.HandleFunc("/api/agent/subscribe_all", wrap(s.handleAgentSubscribeAll))
 
+	// Queue.
+	mux.HandleFunc("/api/queue/add", wrap(s.handleQueueAdd))
+	mux.HandleFunc("/api/queue/list", wrap(s.handleQueueList))
+	mux.HandleFunc("/api/queue/get", wrap(s.handleQueueGet))
+	mux.HandleFunc("/api/queue/queues", wrap(s.handleQueueQueues))
+	mux.HandleFunc("/api/queue/graph", wrap(s.handleQueueGraph))
+	mux.HandleFunc("/api/queue/cancel", wrap(s.handleQueueCancel))
+	mux.HandleFunc("/api/queue/cancel_queue", wrap(s.handleQueueCancelQueue))
+	mux.HandleFunc("/api/queue/retry", wrap(s.handleQueueRetry))
+	mux.HandleFunc("/api/queue/answer", wrap(s.handleQueueAnswer))
+	mux.HandleFunc("/api/queue/pause", wrap(s.handleQueuePause))
+	mux.HandleFunc("/api/queue/resume", wrap(s.handleQueueResume))
+
 	// Jira.
 	mux.HandleFunc("/api/jira/search", wrap(s.handleJiraSearch))
 	mux.HandleFunc("/api/jira/issue", wrap(s.handleJiraIssue))
