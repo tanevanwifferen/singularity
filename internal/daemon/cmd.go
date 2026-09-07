@@ -198,7 +198,7 @@ func Run(opts RunOptions) error {
 	taskQueue.Restore()
 	taskQueue.Start()
 
-	srv.SetServices(local.New(srv.Engine(), loader, jiraCfg, taskQueue))
+	srv.SetServices(local.New(srv.Engine(), loader, jiraCfg, taskQueue, nil))
 
 	log.Printf("singularity daemon listening at %s (pid %d)", listenURL, os.Getpid())
 
