@@ -171,6 +171,17 @@ func (s *localQueueService) Resume(ctx context.Context, queueID string) error {
 	return mapQueueErr(s.mgr.Resume(queueID))
 }
 
+// RemoveQueue forgets a drained queue and deletes its state file.
+func (s *localQueueService) RemoveQueue(ctx context.Context, queueID string) error {
+	if err := checkCtx(ctx); err != nil {
+		return err
+	}
+	if s.mgr == nil {
+		return service.ErrUnavailable
+	}
+	return mapQueueErr(s.mgr.RemoveQueue(queueID))
+}
+
 // mapQueueErr translates the queue package's sentinels into the service
 // ones. It is deliberately separate from mapErr rather than folded into it:
 // mapErr's job is to recover meaning from the stringly-typed errors that

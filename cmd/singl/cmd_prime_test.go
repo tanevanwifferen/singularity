@@ -13,6 +13,7 @@ func TestPrimeGuideCoversDispatcher(t *testing.T) {
 	nouns := []string{
 		"status", "workflows", "agents", "branches", "repos", "stash", "sync",
 		"pipeline", "project", "diff", "commit", "mr", "rebase", "forge", "jira",
+		"queue",
 	}
 	for _, noun := range nouns {
 		if !strings.Contains(primeGuide, "`"+noun+"`") {
@@ -28,6 +29,44 @@ func TestPrimeGuideCoversDispatcher(t *testing.T) {
 		if !strings.Contains(primeGuide, verb) {
 			t.Errorf("primer does not mention agents verb %q", verb)
 		}
+	}
+
+	queueVerbs := []string{
+		"queue add", "queue list", "queue show", "queue graph", "queue wait",
+		"queue cancel", "queue retry", "queue answer", "queue pause",
+		"queue resume", "queue queues", "queue remove",
+	}
+	for _, verb := range queueVerbs {
+		if !strings.Contains(primeGuide, verb) {
+			t.Errorf("primer does not mention %q", verb)
+		}
+	}
+}
+
+// TestPrimeGuideTeachesQueueFirst guards the delegation paradigm the queue
+// introduced: submit a DAG and wait for it, rather than spawn-then-poll. The
+// primer is the only place an orchestrating agent learns this, so the claims
+// it has to make are pinned here.
+func TestPrimeGuideTeachesQueueFirst(t *testing.T) {
+	for _, want := range []string{
+		"queue add --file",       // the recommended submit path
+		"queue wait --queue",     // the recommended block path
+		"backpressure",           // capacity no longer errors
+		"waiting_human",          // the actionable early return
+		"use_worktree",           // the one-agent-per-directory exemption
+		"scheduler enforces",     // ...which the scheduler now polices
+		"escape hatch",           // agents spawn is still documented
+		"agents spawn --workdir", // ...with its example intact
+	} {
+		if !strings.Contains(primeGuide, want) {
+			t.Errorf("primer missing %q", want)
+		}
+	}
+
+	// The old advice to poll a spawned agent until it settles must not be the
+	// documented way to block on unattended work any more.
+	if strings.Contains(primeGuide, "observe by polling, not streaming") {
+		t.Error("primer still frames spawn-then-poll as the main observation step")
 	}
 }
 

@@ -24,8 +24,9 @@ func terminalAgentState(state string) bool {
 	return false
 }
 
-// idListFlag collects --id values: the flag may be repeated, and each value
-// may itself be a comma-separated list.
+// idListFlag collects the values of an id-list flag (--id, --after,
+// --state, ...): the flag may be repeated, and each value may itself be a
+// comma-separated list.
 type idListFlag []string
 
 func (l *idListFlag) String() string { return strings.Join(*l, ",") }

@@ -375,6 +375,7 @@ func (queueStub) Retry(context.Context, string) error                 { return u
 func (queueStub) Answer(context.Context, string, string) error        { return unavail() }
 func (queueStub) Pause(context.Context, string) error                 { return unavail() }
 func (queueStub) Resume(context.Context, string) error                { return unavail() }
+func (queueStub) RemoveQueue(context.Context, string) error           { return unavail() }
 func (queueStub) QueueInfo(context.Context, string) (*service.QueueInfo, error) {
 	return nil, unavail()
 }

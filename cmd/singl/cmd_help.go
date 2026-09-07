@@ -67,6 +67,29 @@ Verbs:
   chat       --id <id> --message <text>                   send input then stream the response (no --json)
   stats                                                   engine-wide counters
 `,
+	"queue": `Usage: singl queue <verb> [flags]
+
+Verbs:
+  add       --workdir <dir> --prompt <task> [--title T] [--after t1,t2] [--queue <id>]
+            [--model M] [--effort low|medium|high] [--timeout SECS] [--backend claude|pi]
+            [--use-worktree] [--context-file P ...] [--allowed-tools a,b]
+            [--max-retries N] [--on-failure block|continue|abort-queue] [--priority N]
+  add       --file <tasks.json>                        submit a whole DAG in one call
+  list      [--queue <id>] [--state s1,s2 ...]         queued tasks
+  show      --id <task-id>                             one task in full
+  graph     [--queue <id>]                             dependency tree (ascii, or --json)
+  wait      [--queue <id>] [--timeout SECS] [--interval SECS]
+                                                       block until the queue drains
+                                                       (exit 0 done, 1 failed/timeout,
+                                                        0 + notice when a task asks a question)
+  cancel    --id <task-id> | --queue <id>              stop one task, or a whole queue
+  retry     --id <task-id>                             requeue a failed/cancelled/skipped task
+  answer    --id <task-id> --message <text>            reply to a task waiting for input
+  pause     --queue <id>                               stop dispatching new tasks
+  resume    --queue <id>                               lift a pause
+  queues                                               every queue with its state tallies
+  remove    --queue <id>                               forget a drained queue and its state file
+`,
 	"workflows": `Usage: singl workflows <verb> [flags]
 
 Verbs:

@@ -54,6 +54,8 @@ func main() {
 		code = cmdWorkflows(ctx, verb, rest)
 	case "agents":
 		code = cmdAgents(ctx, verb, rest)
+	case "queue":
+		code = cmdQueue(ctx, verb, rest)
 	case "branches":
 		code = cmdBranches(ctx, verb, rest)
 	case "repos":
@@ -104,6 +106,7 @@ Commands:
   status
   workflows  list | create | remove | discover   (whole project: one worktree per repo)
   agents     list | get | spawn | resume | kill | remove | output | input | wait | wait-all | watch | watch-all | chat | stats
+  queue      add | list | show | graph | wait | cancel | retry | answer | pause | resume | queues | remove
   branches   list | checkout | create | delete | head | compare | merge
   repos      info | open | find
   diff       workdir | branch | file | staged | unstaged | merge-base | all-repos

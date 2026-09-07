@@ -1,6 +1,6 @@
 # Wire Contract — daemon ↔ TUI
 
-Phase B deliverable. One row per service-interface method (across all 14 interfaces in `internal/service`), specifying its HTTP endpoint (or WS stream subscription topic), the request / response Go types in `internal/api`, and the sentinel error code(s) the operation may return.
+Phase B deliverable. One row per service-interface method (across all 15 interfaces in `internal/service`), specifying its HTTP endpoint (or WS stream subscription topic), the request / response Go types in `internal/api`, and the sentinel error code(s) the operation may return.
 
 Every JSON payload uses snake_case keys. Every `POST` request body is `application/json`. Every JSON response is wrapped in `api.APIResponse{success, data, error, code}` — the "Response type" column below is the Go type that lives inside `data`. Every reachable HTTP error includes a stable string `code` from §1 mapped to the HTTP status code listed there.
 
@@ -22,7 +22,7 @@ Defined as Go constants in `internal/api/errors.go`. The remote client decodes a
 | `PERMISSION_DENIED`       | 401         | `service.ErrPermissionDenied`     |
 | `UNAVAILABLE`             | 503         | `service.ErrUnavailable`          |
 | `CANCELED`                | 499         | `service.ErrCanceled`             |
-| `BAD_REQUEST`             | 400         | (no sentinel — argument errors)   |
+| `BAD_REQUEST`             | 400         | `service.ErrInvalidRequest`       |
 | `INTERNAL`                | 500         | (no sentinel — fallback)          |
 
 `499 Client Closed Request` is non-standard but is unambiguous (no overlap with `408 Request Timeout`) and matches nginx convention for cancellation.
@@ -58,6 +58,7 @@ Stream IDs are opaque UUIDs minted by the daemon. The client may cancel a stream
 | `workflow_updated`            | S→C       | `service.WorkflowEvent`    | NEW; replaces TUI polling tick. |
 | `sync_progress`               | S→C       | `service.SyncProgressEvent`| NEW; piggybacks on `stream:<id>` envelope. |
 | `discovery_progress`          | S→C       | `service.DiscoveryProgressEvent` | NEW; same envelope. |
+| `queue_task_changed`          | S→C       | `api.QueueTaskChangedPayload` | NEW; one frame per task state change, broadcast to every client (the daemon wires it to `queue.Manager.OnChange`). Carries the whole task, so a view needs no follow-up fetch. |
 | `error`                       | S→C       | `api.ErrorPayload`         | Existing — `{error, code?}`. |
 | `subscribed`                  | S→C       | `api.SubscribedPayload`    | Ack reply. |
 | `stream:<id>`                 | S→C       | dynamic                    | Generic stream frame; one envelope per active stream. |
@@ -187,21 +188,35 @@ All endpoints live under `/api`. Streaming operations are marked **stream**: res
 | 98 | `Agent.MaxAgents`        | `GET  /api/agent/max`                              | —                                       | `api.AgentMaxResponse`                      | — |
 | 99 | `Agent.Subscribe`        | `POST /api/agent/subscribe` **stream**             | `api.AgentSubscribeRequest`             | `api.StreamStartResponse`                   | `NOT_FOUND` |
 |100 | `Agent.SubscribeAll`     | `POST /api/agent/subscribe_all` **stream**         | —                                       | `api.StreamStartResponse`                   | — |
+| **Queue** ||||||
+|101 | `Queue.Add`              | `POST /api/queue/add`                              | `api.QueueAddRequest`                   | `api.QueueAddResponse`                      | `BAD_REQUEST`, `UNAVAILABLE` |
+|102 | `Queue.List`             | `GET  /api/queue/list?queue=&state=`               | —                                       | `api.QueueListResponse`                     | `NOT_FOUND`, `BAD_REQUEST` |
+|103 | `Queue.Get`              | `GET  /api/queue/get?task_id=`                     | —                                       | `*api.Task`                                 | `NOT_FOUND`, `BAD_REQUEST` |
+|104 | `Queue.Queues`           | `GET  /api/queue/queues`                           | —                                       | `api.QueueQueuesResponse`                   | `UNAVAILABLE` |
+|105 | `Queue.QueueInfo`        | (no endpoint — client selects from `queues`)        | —                                       | `*api.QueueInfo`                            | `NOT_FOUND` |
+|106 | `Queue.Graph`            | `GET  /api/queue/graph?queue=`                     | —                                       | `api.QueueGraphResponse`                    | `NOT_FOUND`, `BAD_REQUEST` |
+|107 | `Queue.Cancel`           | `POST /api/queue/cancel`                           | `api.QueueTaskRequest`                  | —                                           | `NOT_FOUND`, `BAD_REQUEST` |
+|108 | `Queue.CancelQueue`      | `POST /api/queue/cancel_queue`                     | `api.QueueIDRequest`                    | —                                           | `NOT_FOUND`, `BAD_REQUEST` |
+|109 | `Queue.Retry`            | `POST /api/queue/retry`                            | `api.QueueTaskRequest`                  | —                                           | `NOT_FOUND`, `CONFLICT` |
+|110 | `Queue.Answer`           | `POST /api/queue/answer`                           | `api.QueueAnswerRequest`                | —                                           | `NOT_FOUND`, `CONFLICT`, `BAD_REQUEST` |
+|111 | `Queue.Pause`            | `POST /api/queue/pause`                            | `api.QueueIDRequest`                    | —                                           | `NOT_FOUND`, `BAD_REQUEST` |
+|112 | `Queue.Resume`           | `POST /api/queue/resume`                           | `api.QueueIDRequest`                    | —                                           | `NOT_FOUND`, `BAD_REQUEST` |
+|113 | `Queue.RemoveQueue`      | `POST /api/queue/remove`                           | `api.QueueIDRequest`                    | —                                           | `NOT_FOUND`, `BAD_REQUEST` |
 | **Jira** ||||||
-|101 | `Jira.SearchIssues`      | `POST /api/jira/search`                            | `api.JiraSearchRequest`                 | `*api.SearchResult`                         | `UNAVAILABLE` |
-|102 | `Jira.GetIssue`          | `GET  /api/jira/issue?key=`                        | —                                       | `*api.Issue`                                | `NOT_FOUND`, `UNAVAILABLE` |
-|103 | `Jira.GetMyIssues`       | `GET  /api/jira/my?project=`                       | —                                       | `*api.SearchResult`                         | `UNAVAILABLE` |
-|104 | `Jira.UpdateFields`      | `POST /api/jira/update`                            | `api.JiraUpdateRequest`                 | —                                           | `NOT_FOUND` |
-|105 | `Jira.AddComment`        | `POST /api/jira/comment`                           | `api.JiraCommentRequest`                | —                                           | `NOT_FOUND` |
-|106 | `Jira.CreateIssue`       | `POST /api/jira/create`                            | `api.JiraCreateRequest`                 | `*api.Issue`                                | `UNAVAILABLE` |
-|107 | `Jira.LinkIssues`        | `POST /api/jira/link`                              | `api.JiraLinkRequest`                   | —                                           | `NOT_FOUND` |
-|108 | `Jira.ParseActions`      | `GET  /api/jira/actions?path=`                     | —                                       | `api.JiraActionsResponse`                   | `NOT_FOUND` |
-|109 | `Jira.RefineTicket`      | `POST /api/jira/ai/refine`                         | `api.JiraRefineTicketRequest`           | `api.AgentStartResponse`                    | `AGENT_LIMIT`, `UNAVAILABLE` |
-|110 | `Jira.CreateStories`     | `POST /api/jira/ai/stories`                        | `api.JiraCreateStoriesRequest`          | `api.AgentStartResponse`                    | `AGENT_LIMIT`, `UNAVAILABLE` |
-|111 | `Jira.RefineProposalWithContext` | `POST /api/jira/ai/refine_proposal`        | `api.JiraRefineProposalRequest`         | `api.AgentStartResponse`                    | `AGENT_LIMIT`, `UNAVAILABLE` |
-|112 | `Jira.ReviewTickets`     | `POST /api/jira/ai/review`                         | `api.JiraReviewTicketsRequest`          | `api.AgentStartResponse`                    | `AGENT_LIMIT`, `UNAVAILABLE` |
+|114 | `Jira.SearchIssues`      | `POST /api/jira/search`                            | `api.JiraSearchRequest`                 | `*api.SearchResult`                         | `UNAVAILABLE` |
+|115 | `Jira.GetIssue`          | `GET  /api/jira/issue?key=`                        | —                                       | `*api.Issue`                                | `NOT_FOUND`, `UNAVAILABLE` |
+|116 | `Jira.GetMyIssues`       | `GET  /api/jira/my?project=`                       | —                                       | `*api.SearchResult`                         | `UNAVAILABLE` |
+|117 | `Jira.UpdateFields`      | `POST /api/jira/update`                            | `api.JiraUpdateRequest`                 | —                                           | `NOT_FOUND` |
+|118 | `Jira.AddComment`        | `POST /api/jira/comment`                           | `api.JiraCommentRequest`                | —                                           | `NOT_FOUND` |
+|119 | `Jira.CreateIssue`       | `POST /api/jira/create`                            | `api.JiraCreateRequest`                 | `*api.Issue`                                | `UNAVAILABLE` |
+|120 | `Jira.LinkIssues`        | `POST /api/jira/link`                              | `api.JiraLinkRequest`                   | —                                           | `NOT_FOUND` |
+|121 | `Jira.ParseActions`      | `GET  /api/jira/actions?path=`                     | —                                       | `api.JiraActionsResponse`                   | `NOT_FOUND` |
+|122 | `Jira.RefineTicket`      | `POST /api/jira/ai/refine`                         | `api.JiraRefineTicketRequest`           | `api.AgentStartResponse`                    | `AGENT_LIMIT`, `UNAVAILABLE` |
+|123 | `Jira.CreateStories`     | `POST /api/jira/ai/stories`                        | `api.JiraCreateStoriesRequest`          | `api.AgentStartResponse`                    | `AGENT_LIMIT`, `UNAVAILABLE` |
+|124 | `Jira.RefineProposalWithContext` | `POST /api/jira/ai/refine_proposal`        | `api.JiraRefineProposalRequest`         | `api.AgentStartResponse`                    | `AGENT_LIMIT`, `UNAVAILABLE` |
+|125 | `Jira.ReviewTickets`     | `POST /api/jira/ai/review`                         | `api.JiraReviewTicketsRequest`          | `api.AgentStartResponse`                    | `AGENT_LIMIT`, `UNAVAILABLE` |
 
-**Total: 112 endpoints, one per service-interface method.**
+**Total: 125 service methods over 124 endpoints — one each, except `Queue.QueueInfo`: the per-queue tallies are computed in memory and shipped for every queue at once, so the client selects from `/api/queue/queues` instead of the daemon serving a route that would repeat it.**
 
 ---
 
@@ -211,5 +226,8 @@ All endpoints live under `/api`. Streaming operations are marked **stream**: res
 - `handle` (ProjectHandle, opaque string) appears wherever a method operates on a loaded project.
 - Streaming endpoints return `202 Accepted` on success; the `stream_id` is mandatory.
 - Empty/204-ish endpoints still return `200 OK` + `api.APIResponse{success:true}` (no `data` field). Consumers ignore `data` when the response Go type column is `—`.
+- Queue paths carry the task or queue identifier in the body (`task_id` / `queue_id`) for mutations and as a query param (`task_id` / `queue`) for reads. The `state` list filter on `/api/queue/list` accepts both spellings: repeated (`?state=ready&state=running`) and comma-separated (`?state=ready,running`).
+- The queue's domain types already carry snake_case JSON tags, so `internal/api` aliases them (`api.Task = service.Task = queue.Task`) rather than re-projecting. A tag change therefore cannot land on one side only.
+- `Queue.Add` is atomic: the whole batch is accepted or refused. `BAD_REQUEST` (`service.ErrInvalidRequest`) covers an unknown dependency, a cycle, a missing prompt/work dir, and a `RemoveQueue` refused because a task is still active.
 - Legacy paths kept exactly (no breaking renames during this phase): `/api/status`, `/api/repo/open`, `/api/repo/info`, `/api/repo`, `/api/branch/compare`, `/api/branch/diff`, `/api/commit/message`, `/api/mr/create`, `/api/forge/auth`, `/api/project/list`, `/api/project/load`, `/api/project/status`, `/api/project/refresh`, `/api/project/branch/check`, `/api/project/branch/compare`, `/api/project/context`, `/api/agent/start`, `/api/agent/status`, `/api/agent/output`, `/api/agent/kill`, `/api/agent/input`, `/api/agent/list`, `/api/agent/stats`, `/ws`, `/health`.
 - The legacy `/api/branch/diff` is kept as an alias of `/api/diff/branch`. `/api/agent/status` is kept as an alias of `/api/agent/get`. `/api/project/branch/compare` is kept (one-off cross-repo helper — no service method, no client coverage, intentionally untouched).

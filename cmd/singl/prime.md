@@ -27,8 +27,13 @@ project   set of related repos, configured in ~/.config/singularity/projects.jso
   so worktree paths never contain spaces. A legacy directory named after the
   raw project name is reused if it already exists. Slashes in the branch name
   become dashes in the directory name.
-- Project handles are `proj-<key>` (the bare key also works); agent IDs are opaque strings.
-- One agent per directory. Never point two agents at the same workdir.
+- Project handles are `proj-<key>` (the bare key also works); agent IDs, task IDs
+  and queue IDs are opaque strings.
+- One agent per directory. The **queue scheduler enforces this**: a task whose
+  `workdir` already has a live agent is not dispatched until that agent is gone,
+  even when its dependencies are satisfied. Tasks with `use_worktree` are exempt —
+  the engine gives each of them its own worktree, so they cannot collide.
+  `agents spawn` is not policed: there, never point two agents at the same workdir.
 - An agent spawned through `singl` runs **directly in `--workdir`** — it gets no
   implicit isolation. Create the workflow first, or the agent edits your live tree.
 
@@ -97,13 +102,114 @@ singl --json workflows create --project proj-x --branch fix/prompt-logging
 # then one agents spawn per worktree, one task each
 ```
 
-**2 — spawn.**
+**2 — queue the work as a DAG.** Submit every task in one call and let the
+daemon sequence them; you do not stay alive to babysit the chain.
 
-Spawn one agent per repo worktree for scoped work, or one agent on the workflow
-directory (`<base-dir>/<branch>/`) when the change genuinely spans repos.
+```
+cat > /tmp/tasks.json <<'JSON'
+{"queue": "feature-x",
+ "tasks": [
+   {"name": "api", "title": "api: implement X",
+    "workdir": "/home/me/.worktrees/<project>/feature-x/api",
+    "prompt": "Implement X in this worktree. Run the tests. Report what you changed.",
+    "opts": {"effort": "medium", "timeout_secs": 1800}},
+   {"name": "web", "title": "web: call the new endpoint",
+    "workdir": "/home/me/.worktrees/<project>/feature-x/web",
+    "prompt": "Call the new endpoint. Run the tests. Report what you changed.",
+    "opts": {"effort": "medium", "timeout_secs": 1800}},
+   {"name": "review", "title": "cross-repo review", "after": ["api", "web"],
+    "workdir": "/home/me/.worktrees/<project>/feature-x",
+    "prompt": "Review both diffs against the task. Report problems; do not fix them.",
+    "on_failure": "continue"}
+ ]}
+JSON
+singl --json queue add --file /tmp/tasks.json
+# → {"queue_id":"feature-x","tasks":[{"id":"t1","state":"ready",...},...]}
+```
 
-**One discrete task = one agent.** Never grow an agent's scope after spawning; a
-new task means a new agent (and, if unrelated, a new workflow).
+`after` entries name other tasks in the same file (batch-local `name` keys,
+resolved to task IDs daemon-side) or already-assigned task IDs. The batch is
+accepted or rejected **as one unit** — an unknown name, a cycle or a missing
+prompt/workdir refuses the whole submission, never half of it. A top-level
+`"queue"` applies to every task that does not set its own; with no queue named
+anywhere the daemon mints one and returns its ID.
+
+Per-task keys: `name`, `title`, `workdir` (`work_dir` accepted too), `prompt`,
+`after`, `priority` (higher dispatches first among ready tasks), `max_retries`,
+`on_failure` (`block` — the default, dependents are skipped — `continue`, or
+`abort-queue`), and `opts`: `model`, `effort`, `timeout_secs`, `backend`,
+`use_worktree`, `max_turns`, `context_files`, `allowed_tools`. Unknown keys are
+an error, so a typo is reported instead of silently submitting an empty prompt.
+
+One task at a time takes the same options as flags:
+
+```
+singl --json queue add --workdir <dir> --prompt "..." --title "..." \
+  --after t1,t2 --queue feature-x --effort medium --timeout 1800 --use-worktree \
+  --context-file ./NOTES.md --allowed-tools Read,Edit,Bash --max-retries 1 \
+  --on-failure continue --priority 1
+```
+
+Two things the queue now guarantees, which you used to have to remember:
+
+- **Capacity is backpressure, not an error.** A queued task waits for a free
+  agent slot instead of failing with an agent-limit error, so you can submit a
+  20-task DAG against a pool of 4 and stop checking `agents stats` first.
+- **One agent per working directory is enforced.** Two tasks pointed at the same
+  `workdir` are serialised even if nothing links them in the DAG. Tasks with
+  `"use_worktree": true` are exempt: the engine gives each its own worktree.
+
+**3 — wait for the queue, then read the results.** `queue wait` blocks by
+polling the daemon (no streaming) and fully supports `--json`:
+
+```
+singl --json queue wait   --queue feature-x --timeout 3600 --interval 5
+singl --json queue list   --queue feature-x [--state failed,skipped]
+singl --json queue show   --id <task-id>            # includes agent_id
+singl queue graph  --queue feature-x                # ascii dependency tree (--json for the DAG)
+singl --json queue queues                           # every queue with its state tallies
+```
+
+Task states: `blocked` → `ready` → `running` → `done`, plus `failed`,
+`cancelled`, `skipped` (a dependency failed under `on_failure: block`) and
+`waiting_human` (the agent stopped to ask you something).
+
+`queue wait` exit codes — the whole point of the verb, so check them:
+
+| Exit | Meaning |
+|---|---|
+| `0` | the queue drained and every task is `done` |
+| `0` | a task is `waiting_human` — it returns **early** with a notice naming the task ID and its question. That is actionable by the operator, not an error |
+| `1` | the queue drained but at least one task `failed`, was `cancelled` or was `skipped` |
+| `1` | `--timeout` expired (JSON carries `"timed_out": true` and the last tallies) |
+
+Without `--queue` it waits for every queue on the daemon at once. Default poll
+`--interval` is 5s; `--timeout 0` (the default) waits forever, so always pass a
+timeout for unattended work.
+
+Each task carries the `agent_id` of its most recent attempt, so the transcript
+stays reachable after the task finishes: `singl --json agents output --id
+<agent_id> --offset <n>`.
+
+Steering a queue in flight:
+
+```
+singl queue answer --id <task-id> --message "..."   # unblock a waiting_human task
+singl queue retry  --id <task-id>                   # requeue a failed/cancelled/skipped task
+singl queue cancel --id <task-id>                   # or --queue <id> for the whole queue
+singl queue pause  --queue <id>                     # stop dispatching new tasks; running ones continue
+singl queue resume --queue <id>
+singl queue remove --queue <id>                     # forget a drained queue + delete its state file
+```
+
+`remove` is refused while any task is still `running` or `waiting_human`; cancel
+or wait first.
+
+**4 — escape hatch: one agent, right now.** `agents spawn` is the single-shot
+path — a read-only inspection, a throwaway fix, or work with no dependencies
+worth declaring. It bypasses the queue entirely: no dependency ordering, no
+backpressure (it fails with an agent-limit error once the pool is full) and no
+one-agent-per-directory check.
 
 ```
 singl --json agents spawn --workdir ~/.worktrees/<project>/feature-x/api \
@@ -127,13 +233,18 @@ in the agent output; use `--timeout` there. Model short names
 (`sonnet`/`opus`/`haiku`) are mapped per backend by
 `~/.config/singularity/models.json`.
 
-**3 — observe by polling, not streaming.**
+**One discrete task = one agent.** Never grow an agent's scope after spawning; a
+new task means a new task in the queue (and, if unrelated, a new workflow).
+
+Observe a spawned agent by polling, not streaming:
 
 ```
 singl --json agents get    --id <id>                # state: idle routing starting running complete error killed
 singl --json agents output --id <id> --offset <n>    # incremental; n = entries already consumed
 singl --json agents list
-singl --json agents stats                           # active/max — check capacity before spawning
+singl --json agents stats                           # active/max — only matters for bare spawns
+singl --json agents wait     --id <id> [--id <id2> ...] [--timeout <secs>] [--interval <secs>] [--any]
+singl --json agents wait-all [--timeout <secs>] [--interval <secs>]
 ```
 
 `get`/`list` JSON is a **compact** snapshot: `id`, `state`, `work_dir`,
@@ -152,28 +263,17 @@ appear as `user_input` entries (rendered `[prompt]`; very long prompts are
 truncated with an explicit elision marker — `agents get` has the full task),
 so the log reads as a complete conversation.
 
-To block until an agent finishes, use `wait` — it polls quietly (no streaming)
-and supports `--json`:
-
-```
-singl --json agents wait     --id <id> [--id <id2> ...] [--timeout <secs>] [--interval <secs>] [--any]
-singl --json agents wait-all [--timeout <secs>] [--interval <secs>]
-```
-
-`wait` takes one or more ids (repeat `--id` or comma-separate); with multiple
-ids `--any` returns as soon as the first agent finishes instead of waiting for
-all of them. `wait-all`
-snapshots the currently active agents and waits for those — agents spawned
-later don't extend the wait. Default poll `--interval` is 2s; `--timeout 0`
-(the default) waits forever. Exit `0` only when every waited agent ended
-`complete`; `1` on `error`/`killed` or timeout (JSON then carries the last
-known state plus `"timed_out": true`).
+`agents wait` takes one or more ids (repeat `--id` or comma-separate); with
+multiple ids `--any` returns as soon as the first agent finishes instead of
+waiting for all of them. `wait-all` snapshots the currently active agents and
+waits for those — agents spawned later don't extend the wait. Exit `0` only
+when every waited agent ended `complete`; `1` on `error`/`killed` or timeout.
 
 `agents watch --id <id>` and `agents watch-all` stream live to stdout and **block
-until the agent stops** — use them only when a human is watching; `wait` and
-`wait-all` are their non-streaming, `--json`-capable counterparts.
+until the agent stops** — use them only when a human is watching; `queue wait`,
+`agents wait` and `wait-all` are the non-streaming, `--json`-capable counterparts.
 
-**4 — chat, correct, clear.**
+**5 — chat, correct, clear.**
 
 ```
 singl agents input  --id <id> --message "..."       # non-blocking follow-up; works even after complete
@@ -190,7 +290,7 @@ or reverted separately. New task ⇒ new agent.
 
 "Clear a subagent" = `remove`, then `spawn` a fresh one on the same worktree.
 
-**5 — land the work.** The daemon does the git plumbing; don't shell out to git.
+**6 — land the work.** The daemon does the git plumbing; don't shell out to git.
 
 ```
 singl --json diff workdir     --repo <worktree>
@@ -215,7 +315,7 @@ GITHUB_TOKEN / GITLAB_TOKEN env vars, and finally `tea` for Gitea/Forgejo,
 preferring whatever matches the repo's origin host. When nothing is found the
 error lists every source checked and how to fix it.
 
-**6 — clean up.** One command tears the whole workflow down: every repo's
+**7 — clean up.** One command tears the whole workflow down: every repo's
 worktree removed, local **and remote** feature branches deleted, workflow
 dropped from persistence. Only run it after the MRs are merged (or the work is
 abandoned) — the branch deletion is not undoable from here.
@@ -233,6 +333,7 @@ idempotent for the repos that already cleaned.
 | Noun | Verbs | Key flags |
 |---|---|---|
 | `status` | — | — |
+| `queue` | add list show graph wait cancel retry answer pause resume queues remove | `--file` `--workdir` `--prompt` `--title` `--after` `--queue` `--id` `--state` `--message` `--model` `--effort` `--timeout` `--interval` `--backend` `--use-worktree` `--context-file` `--allowed-tools` `--max-retries` `--on-failure` `--priority` |
 | `agents` | list get spawn resume kill remove output input wait wait-all watch watch-all chat stats | `--id` `--workdir` `--prompt` `--message` `--offset` `--tail` `--last` `--full` `--model` `--effort` `--smart-route` `--max-turns` `--timeout` `--interval` `--any` `--backend` |
 | `project` | list status load info refresh branch-check context workflows | `--name` (load) `--project` (handle) `--branch` |
 | `workflows` | list create remove discover | `--project` `--branch` `--base-dir` (create makes a worktree per repo; remove tears the whole workflow down) |
@@ -251,8 +352,9 @@ idempotent for the repos that already cleaned.
 
 Streaming (blocking) commands: `agents watch`, `agents watch-all`, `agents chat`,
 `sync fetch|pull|push|pull-rebase|all`, `workflows discover`. They reject `--json`.
-`agents wait` / `agents wait-all` block too, but poll instead of stream and
-fully support `--json` — they are the scripted counterparts of watch/watch-all.
+`queue wait`, `agents wait` and `agents wait-all` block too, but poll instead of
+stream and fully support `--json` — they are the scripted counterparts of
+watch/watch-all.
 
 <!-- gitea-forge -->
 The forge layer drives **github** (`gh`), **gitlab** (`glab`) and **gitea**/Forgejo (`tea`).
@@ -264,26 +366,37 @@ in for that host, and prints the exact `tea logins add` command when it is not.
 
 ## Orchestration rules
 
-- Check `agents stats` before spawning — the pool has a hard concurrency cap and
-  `spawn` fails once it's reached.
+- Prefer `queue add` over `agents spawn`. Capacity is backpressure for queued
+  work: a task waits for a free slot instead of failing, so you do not check
+  `agents stats` first and do not handle an agent-limit error. Only a bare
+  `agents spawn` still fails once the pool's hard cap is reached.
 - Subagents inherit **nothing** from your context. Put everything in `--prompt`:
   absolute paths, the definition of done, and "report a summary of what changed".
 - Start every piece of work with a workflow, not a bare worktree — a project's
   repos must be isolated together or the branch cannot be landed as one change.
 - Prefer several small scoped agents over one broad one; when a change spans repos,
   one agent per repo worktree, all inside the same workflow.
-- One discrete task = one agent. Decide *before* spawning whether agents must be
-  isolated (unrelated work ⇒ one workflow each) or should collaborate inside one
-  workflow (same change ⇒ separate repo worktrees, never the same directory).
+- One discrete task = one queued task. Decide *before* submitting whether tasks
+  must be isolated (unrelated work ⇒ one workflow each) or should collaborate
+  inside one workflow (same change ⇒ separate repo worktrees). Two tasks in the
+  same directory are serialised by the scheduler rather than rejected, so this is
+  now about reviewability, not corruption — unless you set `use_worktree`, which
+  gives each task its own worktree and lifts the serialisation.
 - Never use `agents input` to hand an agent a second, unrelated task — spawn a new one.
-- Too big for one agent? Sequence dependent steps as separate agents on the same
-  worktree, spawning the next only after reviewing the previous diff; parallelise
-  independent work across separate workflows.
-- Always pass `--timeout` for unattended work; a runaway agent otherwise runs forever.
-- `agents wait --id <id> --timeout <secs>` is the preferred way to block on
-  unattended work (`watch` is for humans): it polls for a terminal state
-  (`complete`, `error`, `killed`) without streaming and its exit code tells you
-  the outcome. Then drain `agents output --offset` before acting on a result.
+- Too big for one agent? Declare the steps as one DAG with `queue add --file`
+  and let `after` sequence them — that is what the queue is for. Reserve
+  "review the diff, then submit the next task" for steps whose *shape* depends on
+  what the previous one produced; parallelise independent work across workflows.
+- Always pass a timeout for unattended work — `opts.timeout_secs` per task and
+  `queue wait --timeout` on the wait; a runaway agent otherwise runs forever.
+- `queue wait --queue <id> --timeout <secs>` is the preferred way to block on
+  unattended work (`watch` is for humans). Do **not** poll `queue list` or
+  `agents get` in a loop for terminal state: the wait already does that
+  daemon-side and its exit code is the verdict — `0` drained clean, `1` something
+  failed or the timeout expired, `0` plus a printed question when a task is
+  `waiting_human`. Answer that with `queue answer`, then wait again.
+- After a wait settles, read the outcome from `queue list --state failed,skipped`
+  and the transcripts from `agents output --id <task's agent_id> --offset <n>`.
 - Review a subagent's diff yourself (`diff workdir`) before committing or pushing it.
 - Never `remove` an agent you still want to talk to — `kill` keeps it addressable.
 - Do not edit source files yourself. Anything that changes a working tree's
@@ -300,8 +413,12 @@ in for that host, and prints the exact `tea logins add` command when it is not.
 
 ## Known gaps in this build
 
-- `agents spawn` exposes no context-file injection or allowed-tool restriction,
-  though the daemon API supports both.
+- Context-file injection and allowed-tool restriction are now reachable:
+  `queue add --context-file <p> --allowed-tools a,b` (or `opts.context_files` /
+  `opts.allowed_tools` in a `--file` document). `agents spawn` still does not
+  expose them, so use the queue when a task needs either.
+- `queue add` does not expose `--smart-route`/`--max-turns` as flags; set
+  `opts.smart_route` / `opts.max_turns` in a `--file` document instead.
 
 ## Improving the tool
 

@@ -28,6 +28,7 @@ func TestMapErrorEveryCode(t *testing.T) {
 		{api.ErrCodePermissionDenied, service.ErrPermissionDenied},
 		{api.ErrCodeUnavailable, service.ErrUnavailable},
 		{api.ErrCodeCanceled, service.ErrCanceled},
+		{api.ErrCodeBadRequest, service.ErrInvalidRequest},
 	}
 	for _, tc := range cases {
 		t.Run(tc.code, func(t *testing.T) {
@@ -46,10 +47,12 @@ func TestMapErrorEveryCode(t *testing.T) {
 	}
 }
 
-// TestMapErrorBadRequestAndInternal verifies the non-sentinel codes return
-// plain errors (no sentinel to wrap) but still preserve the message.
-func TestMapErrorBadRequestAndInternal(t *testing.T) {
-	for _, code := range []string{api.ErrCodeBadRequest, api.ErrCodeInternal, "TOTALLY_UNKNOWN"} {
+// TestMapErrorInternalAndUnknown verifies the codes that still have no
+// sentinel behind them return plain errors but preserve the message.
+// BAD_REQUEST is no longer among them — it maps to ErrInvalidRequest and is
+// covered by the table above.
+func TestMapErrorInternalAndUnknown(t *testing.T) {
+	for _, code := range []string{api.ErrCodeInternal, "TOTALLY_UNKNOWN"} {
 		err := mapError(code, "boom")
 		if err == nil {
 			t.Errorf("mapError(%q) returned nil", code)
@@ -60,7 +63,7 @@ func TestMapErrorBadRequestAndInternal(t *testing.T) {
 			service.ErrMRAlreadyExists, service.ErrNotFound, service.ErrConflict,
 			service.ErrAgentLimit, service.ErrNoForge, service.ErrRebaseInProgress,
 			service.ErrNoRebaseInProgress, service.ErrPermissionDenied,
-			service.ErrUnavailable, service.ErrCanceled,
+			service.ErrUnavailable, service.ErrCanceled, service.ErrInvalidRequest,
 		} {
 			if errors.Is(err, s) {
 				t.Errorf("code=%q accidentally matched sentinel %v", code, s)

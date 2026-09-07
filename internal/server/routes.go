@@ -188,6 +188,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/queue/answer", wrap(s.handleQueueAnswer))
 	mux.HandleFunc("/api/queue/pause", wrap(s.handleQueuePause))
 	mux.HandleFunc("/api/queue/resume", wrap(s.handleQueueResume))
+	mux.HandleFunc("/api/queue/remove", wrap(s.handleQueueRemove))
 
 	// Jira.
 	mux.HandleFunc("/api/jira/search", wrap(s.handleJiraSearch))
