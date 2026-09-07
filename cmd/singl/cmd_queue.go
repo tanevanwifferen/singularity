@@ -324,9 +324,15 @@ func runQueueRetry(ctx context.Context, args []string) int {
 		func(tctx context.Context, c *client.Client, id string) error { return c.QueueRetry(tctx, id) })
 }
 
+// runQueueAnswer is wired but inert in this build: the agent engine has no
+// way to report that an agent stopped to ask something, so no task ever
+// reaches the state Manager.Answer requires and every call returns CONFLICT.
+// Kept rather than removed because the queue side is complete — only the
+// engine's report is missing — but nothing user-facing may advertise it as
+// live. See "Known gaps" in prime.md.
 func runQueueAnswer(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("queue-answer", flag.ContinueOnError)
-	id := fs.String("id", "", "task ID waiting for input (required)")
+	id := fs.String("id", "", "task ID to answer (required)")
 	message := fs.String("message", "", "the answer to hand the agent (required)")
 	if code, done := parseArgs(fs, args); done {
 		return code

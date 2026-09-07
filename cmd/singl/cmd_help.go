@@ -80,11 +80,10 @@ Verbs:
   graph     [--queue <id>]                             dependency tree (ascii, or --json)
   wait      [--queue <id>] [--timeout SECS] [--interval SECS]
                                                        block until the queue drains
-                                                       (exit 0 done, 1 failed/timeout,
-                                                        0 + notice when a task asks a question)
+                                                       (exit 0 done, 1 failed/timeout)
   cancel    --id <task-id> | --queue <id>              stop one task, or a whole queue
   retry     --id <task-id>                             requeue a failed/cancelled/skipped task
-  answer    --id <task-id> --message <text>            reply to a task waiting for input
+  answer    --id <task-id> --message <text>            inert: no task reaches that state in this build
   pause     --queue <id>                               stop dispatching new tasks
   resume    --queue <id>                               lift a pause
   queues                                               every queue with its state tallies

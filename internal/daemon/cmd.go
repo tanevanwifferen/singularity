@@ -232,7 +232,9 @@ func Run(opts RunOptions) error {
 		log.Printf("http shutdown: %v", err)
 	}
 	// The scheduler stops before the engine so it cannot dispatch a task
-	// into an engine that is already tearing its agents down.
+	// into an engine that is already tearing its agents down. Stop waits
+	// for real completion rather than a timeout, so this line genuinely
+	// serialises the two — see queue.Manager.Stop.
 	taskQueue.Stop()
 	if eng := srv.Engine(); eng != nil {
 		eng.Shutdown()

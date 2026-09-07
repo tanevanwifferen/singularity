@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -27,7 +28,20 @@ func NewEngineRunner(eng *engine.Engine) *EngineRunner {
 // identifiable in the agent list without reading its whole prompt. The
 // queue ID travels as WorkflowID, which the engine logs to the agent's
 // output stream — enough to trace an agent back to the queue that made it.
-func (r *EngineRunner) StartTask(t Task) (string, error) {
+//
+// ctx is honoured by refusing to begin a spawn, not by interrupting one.
+// engine.StartAgent takes no context and is not cancellable: it stats the
+// project path, may run `git worktree add`, and forks a subprocess, none of
+// which unwind cleanly halfway. Adding a context to it would mean threading
+// cancellation through the agent lifecycle for the benefit of one caller,
+// which is out of proportion to the risk. Refusing at this boundary is
+// enough for what the queue needs — Stop cancels, every remaining spawn in
+// the batch returns here immediately, and dispatch cleans up the one that
+// was already under way.
+func (r *EngineRunner) StartTask(ctx context.Context, t Task) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("queue is shutting down: %w", err)
+	}
 	opts := engine.AgentOptions{
 		Model:        t.Opts.Model,
 		Effort:       t.Opts.Effort,
