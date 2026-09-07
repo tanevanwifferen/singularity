@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -30,6 +31,13 @@ type fakeRunner struct {
 	capacityActive *int
 	inputs         []string
 	killed         []string
+	// refused records the tasks whose spawn was declined because the
+	// manager's run context was already cancelled.
+	refused []string
+	// spawnCtx is the context of the most recent StartTask call, kept so a
+	// test can assert dispatch handed over the manager's cancellable one
+	// and not context.Background().
+	spawnCtx context.Context
 }
 
 func newFakeRunner(max int) *fakeRunner {
@@ -42,7 +50,20 @@ func newFakeRunner(max int) *fakeRunner {
 	}
 }
 
-func (f *fakeRunner) StartTask(t Task) (string, error) {
+func (f *fakeRunner) StartTask(ctx context.Context, t Task) (string, error) {
+	// Checked first, exactly like EngineRunner: cancellation is honoured by
+	// refusing to begin a spawn, never by abandoning one. beforeStart is
+	// therefore work that is already past the point of no return, which is
+	// what makes it a faithful stand-in for a slow `git worktree add`.
+	f.mu.Lock()
+	f.spawnCtx = ctx
+	f.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		f.mu.Lock()
+		f.refused = append(f.refused, t.ID)
+		f.mu.Unlock()
+		return "", fmt.Errorf("queue is shutting down: %w", err)
+	}
 	if f.beforeStart != nil {
 		f.beforeStart(t)
 	}
@@ -1127,4 +1148,246 @@ func taskIDsOf(tasks []Task) []string {
 		out = append(out, t.ID)
 	}
 	return out
+}
+
+// killedIDs snapshots the agents the fake was asked to kill.
+func (f *fakeRunner) killedIDs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.killed...)
+}
+
+// lastSpawnCtx returns the context of the most recent StartTask call.
+func (f *fakeRunner) lastSpawnCtx() context.Context {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.spawnCtx
+}
+
+// TestStopWaitsForTheSpawnItCannotCancel is the hole cycle 1 bounded but did
+// not close. Releasing the unspawned claims capped Stop's exposure at one
+// StartTask, but one StartTask doing `git worktree add` can outlast any
+// timeout — and when the timeout expired Stop returned anyway, so the
+// caller went on to eng.Shutdown() while the dispatch goroutine was still
+// inside the engine.
+//
+// The spawn here deliberately takes longer than stopWarnAfter. Stop must
+// still be waiting when it completes, not gone.
+func TestStopWaitsForTheSpawnItCannotCancel(t *testing.T) {
+	runner := newFakeRunner(4)
+	m := newTestManager(runner)
+	tasks := mustAdd(t, m, []TaskSpec{{Name: "a", Prompt: "p", WorkDir: "/w1"}})
+
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var once sync.Once
+	runner.beforeStart = func(Task) {
+		once.Do(func() {
+			entered <- struct{}{}
+			<-release
+		})
+	}
+
+	m.Start()
+	m.Wake()
+	<-entered
+
+	stopped := make(chan struct{})
+	go func() {
+		m.Stop()
+		close(stopped)
+	}()
+
+	// Outlast the point at which Stop used to give up and return.
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned while a spawn was still in flight — eng.Shutdown would race it")
+	case <-time.After(stopWarnAfter + 250*time.Millisecond):
+	}
+	close(release)
+
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Stop never returned after the in-flight spawn completed")
+	}
+
+	// The spawn landed after cancellation, so its agent is killed rather
+	// than adopted and the task goes back to ready with its attempt
+	// refunded — the same treatment a claim that stopped being ours gets.
+	got, err := m.Get(tasks[0].ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.State != StateReady {
+		t.Errorf("task state = %s, want ready — a spawn that raced shutdown must not be adopted", got.State)
+	}
+	if got.AgentID != "" {
+		t.Errorf("task agent = %q, want empty — eng.Shutdown is about to invalidate it", got.AgentID)
+	}
+	if got.Attempts != 0 {
+		t.Errorf("attempts = %d, want 0 — a shutdown is not the task's failure", got.Attempts)
+	}
+	if killed := runner.killedIDs(); len(killed) != 1 {
+		t.Errorf("killed = %v, want exactly the agent spawned into the shutdown", killed)
+	}
+}
+
+// TestStartTaskContextIsCancelledByStop pins the plumbing the unbounded
+// wait rests on. The stop-channel poll at the top of the spawn loop is a
+// fast path that can lose its race; the context cannot, because it travels
+// into the runner itself. If dispatch ever passed context.Background(), or
+// Stop stopped cancelling, Stop would be back to waiting on a whole batch
+// of spawns with nothing to shorten it.
+func TestStartTaskContextIsCancelledByStop(t *testing.T) {
+	runner := newFakeRunner(4)
+	m := newTestManager(runner)
+	mustAdd(t, m, []TaskSpec{{Name: "a", Prompt: "p", WorkDir: "/w1"}})
+	m.tick()
+
+	ctx := runner.lastSpawnCtx()
+	if ctx == nil {
+		t.Fatal("dispatch never called StartTask")
+	}
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("spawn context already cancelled before Stop: %v", err)
+	}
+	m.Stop()
+	if err := ctx.Err(); err == nil {
+		t.Error("Stop did not cancel the context dispatch hands to StartTask")
+	}
+}
+
+// TestEngineRunnerRefusesSpawnAfterCancellation asserts the production
+// runner — not just the fake — declines to reach into the engine once the
+// manager's run context is done. The nil engine is the assertion: a runner
+// that got as far as StartAgent would panic.
+func TestEngineRunnerRefusesSpawnAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	id, err := NewEngineRunner(nil).StartTask(ctx, Task{ID: "t1", Prompt: "p", WorkDir: "/w1"})
+	if err == nil {
+		t.Fatal("StartTask spawned an agent after cancellation")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want it to wrap context.Canceled", err)
+	}
+	if id != "" {
+		t.Errorf("agent ID = %q, want empty", id)
+	}
+	// A refused spawn is backpressure-shaped, not a task failure: dispatch
+	// decides that from the manager's context rather than the error, so the
+	// one thing this must not do is claim the cap refused it.
+	if errors.Is(err, ErrNoCapacity) {
+		t.Error("a cancelled spawn must not masquerade as a capacity refusal")
+	}
+}
+
+// TestStopWithoutStartReturnsImmediately: Stop's wait is now unbounded, so
+// a Manager that never ran its scheduler must not be waited on at all —
+// nothing would ever close m.stopped.
+func TestStopWithoutStartReturnsImmediately(t *testing.T) {
+	m := newTestManager(newFakeRunner(1))
+	done := make(chan struct{})
+	go func() {
+		m.Stop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Stop on an unstarted Manager blocked")
+	}
+}
+
+// TestSlowChangeConsumerDoesNotStallDispatch: the daemon wires OnChange to a
+// WS broadcast that writes to every connected client synchronously, bounded
+// only by a 10s deadline each. Calling that inline from tick() put a wedged
+// peer directly in the dispatch path — ready tasks sat idle with free engine
+// slots, which is precisely the stall the queue exists to remove.
+func TestSlowChangeConsumerDoesNotStallDispatch(t *testing.T) {
+	runner := newFakeRunner(4)
+	m := newTestManager(runner)
+
+	blocked := make(chan struct{})
+	firstFrame := make(chan struct{}, 1)
+	var once sync.Once
+	m.OnChange(func(Task) {
+		once.Do(func() {
+			select {
+			case firstFrame <- struct{}{}:
+			default:
+			}
+			<-blocked
+		})
+	})
+	defer close(blocked)
+
+	first := mustAdd(t, m, []TaskSpec{{Name: "a", Prompt: "p", WorkDir: "/w1"}})
+	select {
+	case <-firstFrame:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no change frame reached the consumer")
+	}
+
+	// The consumer is now wedged and will stay wedged. Dispatch must be
+	// entirely unaffected by that.
+	second := mustAdd(t, m, []TaskSpec{{Name: "b", Prompt: "p", WorkDir: "/w2"}})
+	done := make(chan struct{})
+	go func() {
+		m.tick()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("tick blocked behind a wedged change consumer")
+	}
+
+	for _, task := range []Task{first[0], second[0]} {
+		if got := stateOf(t, m, task.ID); got != StateRunning {
+			t.Errorf("task %s state = %s, want running — dispatch must not wait on a broadcast", task.ID, got)
+		}
+	}
+}
+
+// TestAddEmitsTheReadyPromotion: Add was the only mutator that never called
+// emit, so a dependency-free task's blocked->ready transition — a real state
+// change — reached no subscriber. Nor could the scheduler recover it: the
+// next tick's settle finds the task already correct, so the earliest frame
+// would be dispatch, which for a task behind a paused queue never comes.
+func TestAddEmitsTheReadyPromotion(t *testing.T) {
+	m := newTestManager(newFakeRunner(4))
+
+	frames := make(chan Task, 16)
+	m.OnChange(func(t Task) { frames <- t })
+	defer m.Stop()
+
+	added := mustAdd(t, m, []TaskSpec{
+		{Name: "root", Prompt: "p", WorkDir: "/w1"},
+		{Name: "leaf", Prompt: "p", WorkDir: "/w2", After: []string{"root"}},
+	})
+
+	// Exactly one frame per added task, each carrying its settled state:
+	// the root promoted to ready, the dependent still blocked.
+	want := map[string]State{added[0].ID: StateReady, added[1].ID: StateBlocked}
+	got := map[string]State{}
+	deadline := time.After(2 * time.Second)
+	for len(got) < len(want) {
+		select {
+		case f := <-frames:
+			if prev, dup := got[f.ID]; dup {
+				t.Fatalf("task %s emitted twice (%s then %s)", f.ID, prev, f.State)
+			}
+			got[f.ID] = f.State
+		case <-deadline:
+			t.Fatalf("only %d of %d frames arrived: %v", len(got), len(want), got)
+		}
+	}
+	for id, wantState := range want {
+		if got[id] != wantState {
+			t.Errorf("task %s emitted in state %s, want %s", id, got[id], wantState)
+		}
+	}
 }

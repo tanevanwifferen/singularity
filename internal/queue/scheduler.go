@@ -10,21 +10,51 @@ import (
 // ignored so daemon wiring can call it unconditionally.
 func (m *Manager) Start() {
 	m.runOnce.Do(func() {
+		m.started.Store(true)
 		go m.loop()
 	})
 }
 
+// stopWarnAfter is how long Stop waits before telling the operator why the
+// daemon is taking its time. It is a warning, not a deadline — see Stop.
+const stopWarnAfter = 2 * time.Second
+
 // Stop shuts the scheduler down and waits for the goroutine to exit.
 // Running agents are left alone — they belong to the engine, which has its
 // own shutdown path; the queue only stops making new decisions.
+//
+// The wait is unbounded on purpose. It used to give up after 2s and return
+// anyway, which meant the caller went straight on to eng.Shutdown() while
+// the dispatch goroutine was still inside StartTask — two goroutines tearing
+// down and building up the same engine agent. Cancelling runCtx first is
+// what makes an unbounded wait safe: every spawn not yet started is refused
+// immediately, so the longest Stop can block is the single spawn already in
+// flight, and blocking for that is the correct behaviour rather than a
+// hazard. A warning is logged if that one spawn takes unusually long, so a
+// slow shutdown is diagnosable instead of silent.
 func (m *Manager) Stop() {
+	// Order matters: cancel before closing stop. The dispatch loop reads
+	// runCtx to decide what to do with a spawn that raced the shutdown, and
+	// a claim released via the stop channel while runCtx still looked live
+	// would be re-dispatched by the tick that is already under way.
 	m.stopOnce.Do(func() {
+		m.runCancel()
 		close(m.stop)
 	})
-	select {
-	case <-m.stopped:
-	case <-time.After(2 * time.Second):
-		log.Printf("queue: scheduler did not stop within 2s")
+	if !m.started.Load() {
+		// Never started, so nothing will ever close m.stopped. Waiting
+		// would block forever rather than the old two seconds.
+		return
+	}
+	warn := time.NewTimer(stopWarnAfter)
+	defer warn.Stop()
+	for {
+		select {
+		case <-m.stopped:
+			return
+		case <-warn.C:
+			log.Printf("queue: still waiting for an in-flight agent spawn to return before shutdown")
+		}
 	}
 }
 
@@ -381,15 +411,16 @@ spawn:
 		select {
 		case <-m.stop:
 			// Shutting down. Everything not yet spawned goes back to ready
-			// so Stop waits on at most one in-flight StartTask instead of
-			// the whole batch, and the engine is not handed work it is
-			// about to tear down anyway.
+			// so the engine is not handed work it is about to tear down.
+			// This is the fast path only: runCtx makes the guarantee, since
+			// the runner refuses a spawn begun after cancellation whether
+			// or not this check happened to observe the close in time.
 			changed = append(changed, m.releaseClaims(claims[i:])...)
 			break spawn
 		default:
 		}
 
-		agentID, err := m.runner.StartTask(c.copy)
+		agentID, err := m.runner.StartTask(m.runCtx, c.copy)
 
 		m.mu.Lock()
 		t := m.tasks[c.id]
@@ -399,6 +430,22 @@ spawn:
 			// only thing left to do is not to leak the agent.
 			m.mu.Unlock()
 			if err == nil {
+				orphans = append(orphans, agentID)
+			}
+			continue
+		}
+		if m.runCtx.Err() != nil {
+			// Stop landed while this spawn was in flight. Handled exactly
+			// like a stale claim, and for the same reason: the claim is no
+			// longer ours to complete. Adopting the agent would record an
+			// AgentID that eng.Shutdown is about to invalidate, and failing
+			// the task would blame it for a shutdown. Back to ready with
+			// the attempt refunded, and kill whatever did get spawned.
+			m.releaseClaimLocked(t)
+			changed = append(changed, t.Clone())
+			m.flushLocked()
+			m.mu.Unlock()
+			if err == nil && agentID != "" {
 				orphans = append(orphans, agentID)
 			}
 			continue

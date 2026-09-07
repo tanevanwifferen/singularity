@@ -138,7 +138,8 @@ func (s *localQueueService) Retry(ctx context.Context, taskID string) error {
 	return mapQueueErr(s.mgr.Retry(taskID))
 }
 
-// Answer delivers the operator's reply to a task waiting for input.
+// Answer delivers the operator's reply to a task waiting for input. Inert
+// in this build — see service.QueueService.Answer.
 func (s *localQueueService) Answer(ctx context.Context, taskID, message string) error {
 	if err := checkCtx(ctx); err != nil {
 		return err

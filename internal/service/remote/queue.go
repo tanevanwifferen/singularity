@@ -63,7 +63,8 @@ func (s *remoteQueueService) Retry(ctx context.Context, taskID string) error {
 	return s.c.QueueRetry(ctx, taskID)
 }
 
-// Answer delivers the operator's reply to a task waiting for input.
+// Answer delivers the operator's reply to a task waiting for input. Inert
+// in this build — see service.QueueService.Answer.
 func (s *remoteQueueService) Answer(ctx context.Context, taskID, message string) error {
 	return s.c.QueueAnswer(ctx, taskID, message)
 }

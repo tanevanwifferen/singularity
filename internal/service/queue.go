@@ -65,6 +65,10 @@ type QueueService interface {
 	// Answer delivers the operator's reply to a task whose agent stopped to
 	// ask a question; the agent resumes. Returns ErrConflict when the task
 	// is not waiting for input.
+	//
+	// Inert in this build: the agent engine cannot report that an agent
+	// stopped to ask something, so no task reaches queue.StateWaitingHuman
+	// and every call returns ErrConflict. Callers must not branch on it.
 	Answer(ctx context.Context, taskID, message string) error
 
 	// Pause stops a queue from dispatching anything new. Tasks already

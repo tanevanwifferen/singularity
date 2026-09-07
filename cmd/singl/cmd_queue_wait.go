@@ -23,6 +23,11 @@ const (
 	// queueWaitAnswerNeeded means a task stopped to ask the operator a
 	// question. That is actionable, not a failure, so the wait returns
 	// early and successfully — the caller is expected to answer it.
+	//
+	// Unreachable in this build: the engine never reports the agent state
+	// that puts a task in waiting_human, so info.Waiting is always 0. The
+	// branch is kept so the decision table stays complete, but the exit
+	// codes documented to operators deliberately omit it.
 	queueWaitAnswerNeeded queueWaitOutcome = "waiting_human"
 	// queueWaitDone means the queue drained and every task is done.
 	queueWaitDone queueWaitOutcome = "done"
@@ -85,25 +90,30 @@ func aggregateQueueInfo(infos []api.QueueInfo) api.QueueInfo {
 	return out
 }
 
+// queueWaitUsage is the --help preamble. Hoisted out of fs.Usage so the
+// exit-code contract it advertises can be asserted directly: the previous
+// version documented a waiting_human early return the engine can never
+// produce, and nothing in the suite noticed when prime.md was corrected and
+// the help text was not.
+const queueWaitUsage = `Usage: singl queue wait [--queue <id>] [--timeout SECS] [--interval SECS]
+
+Blocks until the queue drains, polling the daemon (no streaming).
+
+Exit codes:
+  0  the queue drained and every task is done
+  1  the queue drained but at least one task failed or was cancelled
+  1  --timeout expired
+
+Flags:
+`
+
 func runQueueWait(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("queue-wait", flag.ContinueOnError)
 	queueID := fs.String("queue", "", "queue to wait for (default: every queue)")
 	timeout := fs.Int("timeout", 0, "give up after N seconds, exit 1 (0 = wait forever)")
 	interval := fs.Int("interval", 5, "poll interval in seconds")
 	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, `Usage: singl queue wait [--queue <id>] [--timeout SECS] [--interval SECS]
-
-Blocks until the queue drains, polling the daemon (no streaming).
-
-Exit codes:
-  0  the queue drained and every task is done
-  0  a task is waiting_human — returns early and prints the task ID and its
-     question, because that is actionable by the operator, not an error
-  1  the queue drained but at least one task failed or was cancelled
-  1  --timeout expired
-
-Flags:
-`)
+		fmt.Fprint(os.Stderr, queueWaitUsage)
 		fs.PrintDefaults()
 	}
 	if code, done := parseArgs(fs, args); done {

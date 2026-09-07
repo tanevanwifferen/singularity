@@ -189,19 +189,25 @@ All endpoints live under `/api`. Streaming operations are marked **stream**: res
 | 99 | `Agent.Subscribe`        | `POST /api/agent/subscribe` **stream**             | `api.AgentSubscribeRequest`             | `api.StreamStartResponse`                   | `NOT_FOUND` |
 |100 | `Agent.SubscribeAll`     | `POST /api/agent/subscribe_all` **stream**         | —                                       | `api.StreamStartResponse`                   | — |
 | **Queue** ||||||
+<!-- Every `/api/queue/*` route answers `UNAVAILABLE` when the daemon has
+     no queue manager (state directory unreadable): local.New accepts a nil
+     manager and every method degrades rather than panicking. `Queue.Answer`
+     is wired but inert — the engine never reports an agent asking a
+     question, so no task reaches `waiting_human` and it always returns
+     `CONFLICT`. -->
 |101 | `Queue.Add`              | `POST /api/queue/add`                              | `api.QueueAddRequest`                   | `api.QueueAddResponse`                      | `BAD_REQUEST`, `UNAVAILABLE` |
-|102 | `Queue.List`             | `GET  /api/queue/list?queue=&state=`               | —                                       | `api.QueueListResponse`                     | `NOT_FOUND`, `BAD_REQUEST` |
-|103 | `Queue.Get`              | `GET  /api/queue/get?task_id=`                     | —                                       | `*api.Task`                                 | `NOT_FOUND`, `BAD_REQUEST` |
+|102 | `Queue.List`             | `GET  /api/queue/list?queue=&state=`               | —                                       | `api.QueueListResponse`                     | `NOT_FOUND`, `BAD_REQUEST`, `UNAVAILABLE` |
+|103 | `Queue.Get`              | `GET  /api/queue/get?task_id=`                     | —                                       | `*api.Task`                                 | `NOT_FOUND`, `BAD_REQUEST`, `UNAVAILABLE` |
 |104 | `Queue.Queues`           | `GET  /api/queue/queues`                           | —                                       | `api.QueueQueuesResponse`                   | `UNAVAILABLE` |
 |105 | `Queue.QueueInfo`        | (no endpoint — client selects from `queues`)        | —                                       | `*api.QueueInfo`                            | `NOT_FOUND` |
-|106 | `Queue.Graph`            | `GET  /api/queue/graph?queue=`                     | —                                       | `api.QueueGraphResponse`                    | `NOT_FOUND`, `BAD_REQUEST` |
-|107 | `Queue.Cancel`           | `POST /api/queue/cancel`                           | `api.QueueTaskRequest`                  | —                                           | `NOT_FOUND`, `BAD_REQUEST` |
-|108 | `Queue.CancelQueue`      | `POST /api/queue/cancel_queue`                     | `api.QueueIDRequest`                    | —                                           | `NOT_FOUND`, `BAD_REQUEST` |
-|109 | `Queue.Retry`            | `POST /api/queue/retry`                            | `api.QueueTaskRequest`                  | —                                           | `NOT_FOUND`, `CONFLICT` |
-|110 | `Queue.Answer`           | `POST /api/queue/answer`                           | `api.QueueAnswerRequest`                | —                                           | `NOT_FOUND`, `CONFLICT`, `BAD_REQUEST` |
-|111 | `Queue.Pause`            | `POST /api/queue/pause`                            | `api.QueueIDRequest`                    | —                                           | `NOT_FOUND`, `BAD_REQUEST` |
-|112 | `Queue.Resume`           | `POST /api/queue/resume`                           | `api.QueueIDRequest`                    | —                                           | `NOT_FOUND`, `BAD_REQUEST` |
-|113 | `Queue.RemoveQueue`      | `POST /api/queue/remove`                           | `api.QueueIDRequest`                    | —                                           | `NOT_FOUND`, `BAD_REQUEST` |
+|106 | `Queue.Graph`            | `GET  /api/queue/graph?queue=`                     | —                                       | `api.QueueGraphResponse`                    | `NOT_FOUND`, `BAD_REQUEST`, `UNAVAILABLE` |
+|107 | `Queue.Cancel`           | `POST /api/queue/cancel`                           | `api.QueueTaskRequest`                  | —                                           | `NOT_FOUND`, `BAD_REQUEST`, `UNAVAILABLE` |
+|108 | `Queue.CancelQueue`      | `POST /api/queue/cancel_queue`                     | `api.QueueIDRequest`                    | —                                           | `NOT_FOUND`, `BAD_REQUEST`, `UNAVAILABLE` |
+|109 | `Queue.Retry`            | `POST /api/queue/retry`                            | `api.QueueTaskRequest`                  | —                                           | `NOT_FOUND`, `CONFLICT`, `UNAVAILABLE` |
+|110 | `Queue.Answer` *(inert)* | `POST /api/queue/answer`                           | `api.QueueAnswerRequest`                | —                                           | `NOT_FOUND`, `CONFLICT`, `BAD_REQUEST`, `UNAVAILABLE` |
+|111 | `Queue.Pause`            | `POST /api/queue/pause`                            | `api.QueueIDRequest`                    | —                                           | `NOT_FOUND`, `BAD_REQUEST`, `UNAVAILABLE` |
+|112 | `Queue.Resume`           | `POST /api/queue/resume`                           | `api.QueueIDRequest`                    | —                                           | `NOT_FOUND`, `BAD_REQUEST`, `UNAVAILABLE` |
+|113 | `Queue.RemoveQueue`      | `POST /api/queue/remove`                           | `api.QueueIDRequest`                    | —                                           | `NOT_FOUND`, `BAD_REQUEST`, `UNAVAILABLE` |
 | **Jira** ||||||
 |114 | `Jira.SearchIssues`      | `POST /api/jira/search`                            | `api.JiraSearchRequest`                 | `*api.SearchResult`                         | `UNAVAILABLE` |
 |115 | `Jira.GetIssue`          | `GET  /api/jira/issue?key=`                        | —                                       | `*api.Issue`                                | `NOT_FOUND`, `UNAVAILABLE` |

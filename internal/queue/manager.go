@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -8,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -39,10 +41,17 @@ var (
 type AgentRunner interface {
 	// StartTask dispatches a task and returns the new agent's ID.
 	//
+	// ctx is the manager's run context, cancelled by Stop. An implementation
+	// must not begin a spawn once ctx is done: that refusal is what lets
+	// Stop wait for the dispatch loop to actually finish instead of racing
+	// it on a timeout. Returning ctx.Err() (wrapped or bare) is enough —
+	// dispatch decides what to do from the manager's own context, not from
+	// the error value.
+	//
 	// A refusal caused by the agent cap must be reported as an error
 	// wrapping ErrNoCapacity: the scheduler distinguishes that from a
 	// genuine spawn failure and does not consume an attempt for it.
-	StartTask(t Task) (agentID string, err error)
+	StartTask(ctx context.Context, t Task) (agentID string, err error)
 
 	// AgentState returns the agent's current state name (the same strings
 	// engine.AgentState.String() produces), its error text, and whether
@@ -102,9 +111,33 @@ type Manager struct {
 	// by an agent the queue did not start.
 	tickInterval time.Duration
 
+	// emitCh decouples change broadcasts from the goroutine that produced
+	// them. The daemon's OnChange hook writes one WS frame per connected
+	// client synchronously, each bounded only by a 10s write deadline, so
+	// calling it inline put a wedged WS peer directly in the scheduler's
+	// dispatch path — ready tasks sat idle with free engine slots while
+	// tick() blocked in a broadcast. Frames are drained by one goroutine so
+	// order is preserved, and dropped rather than queued without bound when
+	// the consumer cannot keep up: a task change is a hint to re-read, and
+	// stalling the scheduler to guarantee delivery is the worse trade.
+	emitCh       chan Task
+	emitOnce     sync.Once
+	emitDropping atomic.Bool
+
+	// runCtx is cancelled by Stop, before the stop channel is closed. It
+	// exists for the one thing the scheduler does that it cannot otherwise
+	// interrupt: AgentRunner.StartTask, which reaches into the engine and
+	// may sit in `git worktree add` for seconds. Handing it to the runner
+	// lets an in-flight batch refuse every remaining spawn immediately, so
+	// Stop waits on at most the single spawn already under way rather than
+	// timing out and letting eng.Shutdown race the dispatch goroutine.
+	runCtx    context.Context
+	runCancel context.CancelFunc
+
 	wake     chan struct{}
 	stop     chan struct{}
 	stopped  chan struct{}
+	started  atomic.Bool
 	runOnce  sync.Once
 	stopOnce sync.Once
 }
@@ -122,17 +155,27 @@ var taskIDPattern = regexp.MustCompile(`^t(\d+)$`)
 // scheduler able to track state but unable to dispatch (used by tests that
 // only exercise dependency logic).
 func NewManager(runner AgentRunner, store *Store) *Manager {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
 		queues:       make(map[string]*queueState),
 		tasks:        make(map[string]*Task),
 		runner:       runner,
 		store:        store,
 		tickInterval: time.Second,
+		emitCh:       make(chan Task, emitBuffer),
+		runCtx:       ctx,
+		runCancel:    cancel,
 		wake:         make(chan struct{}, 1),
 		stop:         make(chan struct{}),
 		stopped:      make(chan struct{}),
 	}
 }
+
+// emitBuffer is how many change frames may be in flight to the OnChange
+// consumer before emit starts dropping. Sized for a busy tick's worth of
+// transitions with room to spare, so only a genuinely stuck consumer — not
+// an ordinary burst — ever loses a frame.
+const emitBuffer = 256
 
 // OnChange registers the task-change callback. Replaces any previous one.
 func (m *Manager) OnChange(fn func(Task)) {
@@ -141,16 +184,50 @@ func (m *Manager) OnChange(fn func(Task)) {
 	m.onChangeMu.Unlock()
 }
 
-// emit fires the change callback. Called outside m.mu.
+// emit hands the change frames to the broadcast goroutine. Called outside
+// m.mu, and — the point of the indirection — it never blocks: see emitCh.
 func (m *Manager) emit(tasks []Task) {
-	m.onChangeMu.RLock()
-	fn := m.onChange
-	m.onChangeMu.RUnlock()
-	if fn == nil {
+	if len(tasks) == 0 || !m.hasOnChange() {
 		return
 	}
+	m.emitOnce.Do(func() { go m.emitLoop() })
 	for _, t := range tasks {
-		fn(t)
+		select {
+		case m.emitCh <- t:
+		default:
+			// One line per burst rather than one per frame: a stuck
+			// consumer would otherwise drown the log in the same message.
+			if m.emitDropping.CompareAndSwap(false, true) {
+				log.Printf("queue: change broadcast consumer is not keeping up, dropping frames (task %s)", t.ID)
+			}
+		}
+	}
+}
+
+// hasOnChange reports whether a change callback is registered.
+func (m *Manager) hasOnChange() bool {
+	m.onChangeMu.RLock()
+	defer m.onChangeMu.RUnlock()
+	return m.onChange != nil
+}
+
+// emitLoop drains emitCh into the change callback. One goroutine, so frames
+// reach the consumer in the order emit produced them. The hook is re-read
+// per frame because OnChange may replace it at any time.
+func (m *Manager) emitLoop() {
+	for {
+		select {
+		case <-m.stop:
+			return
+		case t := <-m.emitCh:
+			m.emitDropping.Store(false)
+			m.onChangeMu.RLock()
+			fn := m.onChange
+			m.onChangeMu.RUnlock()
+			if fn != nil {
+				fn(t)
+			}
+		}
 	}
 }
 
@@ -357,13 +434,30 @@ func (m *Manager) Add(specs []TaskSpec) ([]Task, error) {
 		m.tasks[t.ID] = t
 	}
 
-	m.refreshBlockedLocked()
+	// The blocked->ready promotion refreshBlockedLocked performs here is a
+	// real state change and has to be broadcast like any other. Nothing
+	// else will: the next tick's settle finds these tasks already correct,
+	// so dispatch is the earliest frame a subscriber would otherwise see —
+	// which for a task behind a long dependency chain or a paused queue is
+	// minutes away, or never.
+	promoted := m.refreshBlockedLocked()
 	for _, id := range assigned {
 		out = append(out, m.tasks[id].Clone())
+	}
+	// out already carries the post-refresh state of every new task, so a
+	// promoted task must not be emitted twice. Copied rather than appended
+	// to in place: out is the caller's return value.
+	changed := make([]Task, len(out), len(out)+len(promoted))
+	copy(changed, out)
+	for _, t := range promoted {
+		if _, isNew := incoming[t.ID]; !isNew {
+			changed = append(changed, t)
+		}
 	}
 	m.flushLocked()
 	m.mu.Unlock()
 
+	m.emit(changed)
 	m.Wake()
 	return out, nil
 }

@@ -26,6 +26,7 @@ import (
 	"gitlab.com/tanevanwifferen1/singularity/internal/client"
 	"gitlab.com/tanevanwifferen1/singularity/internal/config"
 	"gitlab.com/tanevanwifferen1/singularity/internal/daemon"
+	"gitlab.com/tanevanwifferen1/singularity/internal/queue"
 	"gitlab.com/tanevanwifferen1/singularity/internal/server"
 	"gitlab.com/tanevanwifferen1/singularity/internal/service/local"
 )
@@ -66,10 +67,16 @@ func initGitRepo(t *testing.T, dir string) {
 
 // testDaemon bundles the moving parts of an in-process daemon for tests.
 type testDaemon struct {
-	Paths   daemon.Paths
-	Socket  string
-	URL     string
-	Client  *client.Client
+	Paths  daemon.Paths
+	Socket string
+	URL    string
+	Client *client.Client
+	// Queue is the daemon's real queue manager, and Runner is the fake
+	// agent runner behind it. Exposed so a test can drive task completion
+	// without spawning subprocesses while still going through the real
+	// manager, handlers and client.
+	Queue   *queue.Manager
+	Runner  *scriptedRunner
 	srv     *server.Server
 	ln      net.Listener
 	release func()
@@ -103,7 +110,25 @@ func startTestDaemon(t *testing.T) *testDaemon {
 	}
 
 	srv := server.New(url, "")
-	srv.SetServices(local.New(srv.Engine(), nil, config.JiraConfig{}, nil))
+
+	// A real queue manager, not nil. The two halves of the queue were each
+	// only ever tested against a stub of the other — the client against a
+	// hand-written HTTP stub, the handlers against a fake service — so a
+	// response-envelope mismatch passed both suites. The manager is real;
+	// only the agent runner is faked, which is the one piece that would
+	// otherwise fork subprocesses.
+	store, err := queue.NewStore(filepath.Join(home, "queue"))
+	if err != nil {
+		release()
+		t.Fatalf("queue store: %v", err)
+	}
+	runner := newScriptedRunner(2)
+	taskQueue := queue.NewManager(runner, store)
+	runner.notify = taskQueue.Wake
+	taskQueue.OnChange(srv.QueueChangeHook())
+	taskQueue.Start()
+
+	srv.SetServices(local.New(srv.Engine(), nil, config.JiraConfig{}, taskQueue))
 
 	serveCh := make(chan error, 1)
 	go func() { serveCh <- srv.Serve(ln) }()
@@ -122,6 +147,8 @@ func startTestDaemon(t *testing.T) *testDaemon {
 		Socket:  paths.Socket,
 		URL:     url,
 		Client:  c,
+		Queue:   taskQueue,
+		Runner:  runner,
 		srv:     srv,
 		ln:      ln,
 		release: release,
@@ -139,6 +166,14 @@ func (d *testDaemon) shutdown() {
 		return
 	}
 	_ = d.Client.Disconnect()
+
+	// Before the engine, in the same order internal/daemon.Run uses: Stop
+	// waits for any in-flight spawn so nothing is still inside the runner
+	// when the engine is torn down.
+	if d.Queue != nil {
+		d.Runner.releaseAll()
+		d.Queue.Stop()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
