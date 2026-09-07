@@ -3,6 +3,7 @@ package queue
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -26,6 +27,9 @@ func (m *Manager) Add(specs []TaskSpec) ([]Task, error) {
 	byName := make(map[string]string, len(specs))
 	assigned := make([]string, len(specs))
 	autoQueue := ""
+	// seenQueueIDs guards against two specs in this same batch introducing
+	// colliding new queue IDs before either has landed in m.queues.
+	seenQueueIDs := make(map[string]string, len(specs))
 	for i := range specs {
 		s := &specs[i]
 		if s.Prompt == "" {
@@ -50,6 +54,26 @@ func (m *Manager) Add(specs []TaskSpec) ([]Task, error) {
 		if s.QueueID != "" && !idPattern.MatchString(s.QueueID) {
 			m.mu.Unlock()
 			return nil, fmt.Errorf("%w: queue id %q must be alphanumeric with . _ - (max 64 chars)", ErrInvalid, s.QueueID)
+		}
+		// Queue IDs become filenames (store.path), and idPattern accepts
+		// both cases, so "Prod" and "prod" are two queues in m.queues but
+		// one file on a case-insensitive filesystem (macOS/APFS) — each
+		// Save silently overwrites the other's tasks. Reject the clash
+		// against both already-existing queues and ones this same batch is
+		// about to create, rather than let two queues fight over one file.
+		if s.QueueID != "" {
+			fold := strings.ToLower(s.QueueID)
+			if other, ok := seenQueueIDs[fold]; ok && other != s.QueueID {
+				m.mu.Unlock()
+				return nil, fmt.Errorf("%w: queue id %q collides with %q earlier in this batch on a case-insensitive filesystem", ErrInvalid, s.QueueID, other)
+			}
+			seenQueueIDs[fold] = s.QueueID
+			for existing := range m.queues {
+				if existing != s.QueueID && strings.EqualFold(existing, s.QueueID) {
+					m.mu.Unlock()
+					return nil, fmt.Errorf("%w: queue id %q collides with existing queue %q on a case-insensitive filesystem", ErrInvalid, s.QueueID, existing)
+				}
+			}
 		}
 		if s.QueueID == "" {
 			if autoQueue == "" {

@@ -205,6 +205,15 @@ func (m *Manager) reconcile() []Task {
 	m.mu.Lock()
 	var changed []Task
 	abortQueues := make(map[string]bool)
+	// terminateAgents collects agents the queue is about to stop tracking
+	// because it observed them error or (soft-)killed. Collected under the
+	// lock, acted on after it is released: an agent record saying "killed"
+	// is not proof its process is gone (engine.KillAgent soft-closes, so the
+	// TUI can keep talking to it), so the queue has to end it explicitly
+	// rather than infer the engine already did. TerminateAgent is a no-op on
+	// a process that has genuinely already exited, so calling it here for
+	// `error` too costs nothing.
+	var terminateAgents []string
 	for _, o := range obs {
 		t := m.tasks[o.taskID]
 		if t == nil || !t.State.Active() {
@@ -230,6 +239,9 @@ func (m *Manager) reconcile() []Task {
 			msg := o.errTxt
 			if msg == "" {
 				msg = "agent " + o.state
+			}
+			if t.AgentID != "" {
+				terminateAgents = append(terminateAgents, t.AgentID)
 			}
 			m.failLocked(t, msg)
 		case o.state == agentStateWaitingHuman:
@@ -262,6 +274,18 @@ func (m *Manager) reconcile() []Task {
 	}
 	m.flushLocked()
 	m.mu.Unlock()
+
+	// Terminated synchronously, not fire-and-forget: tick() runs dispatch
+	// immediately after reconcile returns, and dispatch decides whether a
+	// directory is free from the same engine state TerminateAgent changes.
+	// A goroutine here would let dispatch run before the kill actually
+	// lands, dispatching a second agent while the first's process is still
+	// alive in the directory it was just declared to have left.
+	for _, agentID := range terminateAgents {
+		if err := m.runner.TerminateAgent(agentID); err != nil {
+			log.Printf("queue: terminate agent %s observed dead in the engine: %v", agentID, err)
+		}
+	}
 
 	// Dependency-derived state is not recomputed here: tick's settle pass
 	// runs immediately after and does it for every tick, idle or not.

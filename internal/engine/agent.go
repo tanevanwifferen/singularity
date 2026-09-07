@@ -570,7 +570,8 @@ func (a *Agent) softClose() {
 }
 
 // terminate ends the agent for good: the subprocess is killed, any worktree
-// is cleaned up, and the record is kept so the transcript stays readable.
+// is cleaned up (unless preserved, see below), and the record is kept so the
+// transcript stays readable.
 //
 // It differs from softClose in that the process does not survive, and from
 // kill in that the state is set even when no subprocess was ever started.
@@ -581,36 +582,67 @@ func (a *Agent) softClose() {
 // state also makes the pending start() refuse, so the routing goroutine
 // cannot resurrect it after the caller believed it gone.
 //
-// An agent already in a terminal state is left alone. A cancel can land
-// after handleResult has moved a worktree agent to complete but before
-// reconcile has seen it, and mergeWorktreeBack's whole point is that the
-// merged worktree survives past completion (worktree.go) for follow-up
-// messages — kill()'s unconditional cleanupWorktree would force-remove it
-// and overwrite a genuine complete/error outcome with killed. A terminal
-// agent already holds neither its slot nor its directory, which is the only
-// contract callers of terminate actually need.
+// The early return is gated on the process, not the state label: a state of
+// complete/error/killed is not proof the subprocess is gone. softClose sets
+// State to killed while deliberately leaving the process running, and the pi
+// backend's session process stays resident past a BackendResult event, so an
+// agent can sit in AgentComplete or AgentError with its process still alive.
+// Calling terminate on either must still end that process — that is the
+// whole reason a caller reaches for terminate over softClose. Only once the
+// process has genuinely exited (waitForExit has closed a.done, or it was
+// never started) is there nothing left to do.
+//
+// A terminal record whose process is still alive keeps its state and its
+// worktree: handleResult deliberately leaves a completed worktree agent's
+// merged worktree in place (worktree.go) and an errored one's preserved for
+// manual merge, precisely so a cancel landing in that window does not
+// overwrite a genuine outcome with killed or force-remove what the operator
+// still needs. So the process is ended but cleanupWorktree is skipped, and
+// the label is left as complete/error. Everything else — still running,
+// starting, routing, or already (soft-)killed — gets the full kill(): state
+// becomes killed and the worktree is cleaned up.
 func (a *Agent) terminate() error {
-	a.mu.Lock()
-	if a.State.Terminal() {
-		a.mu.Unlock()
+	if a.processExited() {
 		return nil
 	}
-	a.State = AgentKilled
+
+	a.mu.Lock()
+	preserveWorktree := a.State == AgentComplete || a.State == AgentError
+	if !preserveWorktree {
+		a.State = AgentKilled
+	}
 	if a.EndedAt == nil {
 		now := time.Now()
 		a.EndedAt = &now
 	}
 	a.mu.Unlock()
 
-	err := a.kill()
+	err := a.kill(preserveWorktree)
 	if a.notify != nil {
 		a.notify()
 	}
 	return err
 }
 
-// kill terminates the agent subprocess and cleans up any worktree.
-func (a *Agent) kill() error {
+// processExited reports whether the subprocess is confirmed gone: either it
+// never started, or waitForExit has already run cmd.Wait() to completion and
+// closed done. Safe to call without a.mu — done is set once at construction
+// and only ever closed, never reassigned.
+func (a *Agent) processExited() bool {
+	select {
+	case <-a.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// kill terminates the agent subprocess and, unless preserveWorktree is set,
+// cleans up any worktree and forces the state to killed. preserveWorktree is
+// for terminate's complete/error-but-still-alive case (see terminate); every
+// other caller (RemoveAgent, Shutdown, the per-agent timeout) wants the
+// unconditional behaviour and passes false.
+func (a *Agent) kill(preserveWorktree bool) error {
 	a.mu.Lock()
 
 	wtPath := a.worktreePath
@@ -619,7 +651,7 @@ func (a *Agent) kill() error {
 
 	if a.cmd == nil || a.cmd.Process == nil {
 		a.mu.Unlock()
-		if wtPath != "" {
+		if wtPath != "" && !preserveWorktree {
 			cleanupWorktree(sourceRepoPath, wtPath, wtBranch)
 		}
 		return nil
@@ -632,7 +664,7 @@ func (a *Agent) kill() error {
 	}
 	a.stdinMu.Unlock()
 
-	if a.State != AgentKilled {
+	if !preserveWorktree && a.State != AgentKilled {
 		a.State = AgentKilled
 	}
 	a.appendOutputLocked("system", "Agent killed")
@@ -640,7 +672,7 @@ func (a *Agent) kill() error {
 	err := a.cmd.Process.Kill()
 	a.mu.Unlock()
 
-	if wtPath != "" {
+	if wtPath != "" && !preserveWorktree {
 		cleanupWorktree(sourceRepoPath, wtPath, wtBranch)
 	}
 

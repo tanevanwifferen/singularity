@@ -22,12 +22,19 @@ type fakeRunner struct {
 	// separately from the state the engine reports. The two really do come
 	// apart: engine.KillAgent soft-closes, moving the state to killed while
 	// the subprocess keeps running (and keeps editing its working
-	// directory). A fake that collapses them cannot fail on the defect that
-	// shipped through two review cycles.
+	// directory). alive is what a test checks to assert a process was
+	// genuinely ended (killedIDs, TerminateAgent) — it is deliberately NOT
+	// what WorkDirBusy answers from, because production's WorkDirBusy does
+	// not know it either: it derives busy from ActiveAgents, i.e. from
+	// state, so it goes false the instant softClose runs even though the
+	// process above is still very much alive. A fake that answered
+	// WorkDirBusy from `alive` would be safer than production and could
+	// never reproduce that gap — which is exactly why it survived five
+	// review cycles at this level.
 	alive map[string]bool
-	// agentDirs and agentWorktree record where each started agent works,
-	// so WorkDirBusy answers from the fake's own agents the way the engine
-	// answers from ActiveAgents.
+	// agentDirs and agentWorktree record where each started agent works, so
+	// WorkDirBusy answers from the fake's own agents' state the way the
+	// engine answers from ActiveAgents.
 	agentDirs     map[string]string
 	agentWorktree map[string]bool
 	// busyDirs marks directories occupied by an agent the queue did not
@@ -141,10 +148,16 @@ func (f *fakeRunner) activeLocked() int {
 	return active
 }
 
-// WorkDirBusy answers the way the engine does: a directory is occupied for
-// as long as some agent's process is alive in it, whatever state the agent
-// record reports. Worktree-isolated agents never match, because the engine
-// rewrites their WorkDir to the private worktree it created for them.
+// WorkDirBusy answers the way EngineRunner's production implementation does:
+// from the agent's reported STATE (busy unless complete/error/killed), not
+// from whether its process is actually still alive. Those two really do come
+// apart — engine.KillAgent soft-closes, moving the state to killed while the
+// subprocess keeps running and keeps editing its directory — and a fake that
+// answers from `alive` instead reports the safe (wrong) answer, which is
+// exactly how this class of defect survived five review cycles at the queue
+// level: the fake never disagreed with what the scheduler assumed. Worktree-
+// isolated agents never match, because the engine rewrites their WorkDir to
+// the private worktree it created for them.
 func (f *fakeRunner) WorkDirBusy(dir string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -153,9 +166,14 @@ func (f *fakeRunner) WorkDirBusy(dir string) bool {
 		return true
 	}
 	for id, agentDir := range f.agentDirs {
-		if f.alive[id] && !f.agentWorktree[id] && agentDir == want {
-			return true
+		if f.agentWorktree[id] || agentDir != want {
+			continue
 		}
+		switch f.states[id] {
+		case "complete", "error", "killed":
+			continue
+		}
+		return true
 	}
 	return false
 }
@@ -314,6 +332,40 @@ func TestAddRejectsUnknownDependency(t *testing.T) {
 	_, err := m.Add([]TaskSpec{{Name: "a", Prompt: "p", WorkDir: "/w", After: []string{"nope"}}})
 	if !errors.Is(err, ErrInvalid) {
 		t.Fatalf("expected ErrInvalid, got %v", err)
+	}
+}
+
+// TestAddRejectsCaseInsensitiveQueueIDCollision is finding 4: Store.path
+// derives a queue's state filename from the raw ID, and idPattern accepts
+// both cases, so "Prod" and "prod" are two queues in m.queues but one file
+// on a case-insensitive filesystem (macOS/APFS) — whichever queue flushes
+// last silently overwrites the other's tasks on disk.
+func TestAddRejectsCaseInsensitiveQueueIDCollision(t *testing.T) {
+	m := newTestManager(newFakeRunner(4))
+	if _, err := m.Add([]TaskSpec{{Name: "a", Prompt: "p", WorkDir: "/w", QueueID: "Prod"}}); err != nil {
+		t.Fatalf("first Add: %v", err)
+	}
+	_, err := m.Add([]TaskSpec{{Name: "b", Prompt: "p", WorkDir: "/w", QueueID: "prod"}})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("expected ErrInvalid for a case-folded queue id collision, got %v", err)
+	}
+}
+
+// TestAddRejectsCaseInsensitiveQueueIDCollisionWithinOneBatch covers the
+// half finding 4's fix would otherwise miss: two specs in the very same
+// batch that both mint a new, colliding queue id before either has landed
+// in m.queues.
+func TestAddRejectsCaseInsensitiveQueueIDCollisionWithinOneBatch(t *testing.T) {
+	m := newTestManager(newFakeRunner(4))
+	_, err := m.Add([]TaskSpec{
+		{Name: "a", Prompt: "p", WorkDir: "/w", QueueID: "Prod"},
+		{Name: "b", Prompt: "p", WorkDir: "/w", QueueID: "prod"},
+	})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("expected ErrInvalid for a same-batch queue id collision, got %v", err)
+	}
+	if _, ok := m.tasks["t1"]; ok {
+		t.Fatal("Add must be atomic: a rejected batch must not leave task t1 committed")
 	}
 }
 
@@ -608,21 +660,70 @@ func TestCancelledTaskReleasesItsWorkingDirectory(t *testing.T) {
 	}
 }
 
-// TestSoftClosedAgentStillHoldsItsDirectory states the engine behaviour the
-// fake now models, and is the reason the two tests above can fail at all: a
-// killed agent record does not mean a dead process.
-func TestSoftClosedAgentStillHoldsItsDirectory(t *testing.T) {
+// TestSoftClosedAgentDoesNotHoldItsDirectory pins the actual engine
+// behaviour (review cycle 5, finding 3): WorkDirBusy is derived from state,
+// not from whether the process is alive, so the moment engine.KillAgent
+// soft-closes an agent, WorkDirBusy reports its directory free — while the
+// subprocess above keeps editing it. An earlier version of this test
+// asserted the opposite, on the assumption that "still holds its directory"
+// was what the fake ought to model; it was not what production does, and a
+// fake asserting the safer, wrong answer is why this whole class of defect
+// went unfalsifiable at the queue level for five cycles. The trap this
+// leaves — the scheduler has no way to see the directory is still occupied —
+// is exactly why reconcile has to terminate a killed agent itself rather
+// than rely on the accounting to catch up (TestReconcileTerminatesAKilledAgentBeforeDispatch).
+func TestSoftClosedAgentDoesNotHoldItsDirectory(t *testing.T) {
 	runner := newFakeRunner(4)
 	m := newTestManager(runner)
 	tasks := mustAdd(t, m, []TaskSpec{{Name: "a", Prompt: "p", WorkDir: "/shared"}})
 	m.tick()
 
-	runner.softClose(runner.agentFor(t, tasks[0].ID))
-	if !runner.WorkDirBusy("/shared") {
-		t.Fatal("a soft-closed agent must still occupy its directory: engine.KillAgent leaves the subprocess running")
+	agentID := runner.agentFor(t, tasks[0].ID)
+	runner.softClose(agentID)
+	if runner.WorkDirBusy("/shared") {
+		t.Fatal("WorkDirBusy = true after softClose: production derives busy from ActiveAgents (state), which excludes AgentKilled immediately — the fake must reproduce that, not paper over it")
 	}
 	if active, _ := runner.Capacity(); active != 0 {
 		t.Errorf("active = %d, want 0 — a soft-closed agent stops counting toward the cap, which is exactly the trap", active)
+	}
+	if !runner.alive[agentID] {
+		t.Fatal("test setup: softClose must not itself end the process — that is what TerminateAgent is for")
+	}
+}
+
+// TestReconcileTerminatesAKilledAgentBeforeDispatch is finding 1 as a test:
+// an operator running `singl agents kill` (or the TUI's kill key) soft-closes
+// the agent — the record says killed, the process does not. Before this fix,
+// reconcile's `killed` branch only failed the task; nothing ever terminated
+// the agent, so its process outlived the task that owned it, invisible to
+// WorkDirBusy and Capacity alike. The fix has to land before dispatch runs in
+// the same tick, or the freed-up directory is claimed by a second agent while
+// the first one's process is still alive in it.
+func TestReconcileTerminatesAKilledAgentBeforeDispatch(t *testing.T) {
+	runner := newFakeRunner(4)
+	m := newTestManager(runner)
+	first := mustAdd(t, m, []TaskSpec{{Name: "a", Prompt: "p", WorkDir: "/shared"}})
+	m.tick()
+	agentID := runner.agentFor(t, first[0].ID)
+
+	// Simulate `singl agents kill`: engine.KillAgent soft-closes, so the
+	// record says killed while runner.alive stays true.
+	runner.softClose(agentID)
+
+	second := mustAdd(t, m, []TaskSpec{{Name: "b", Prompt: "p", WorkDir: "/shared"}})
+	m.tick()
+
+	if got := stateOf(t, m, first[0].ID); got != StateFailed {
+		t.Fatalf("first task state = %s, want failed once the engine reports its agent killed", got)
+	}
+	if killed := runner.killedIDs(); len(killed) != 1 || killed[0] != agentID {
+		t.Fatalf("terminated = %v, want [%s] — reconcile must end a soft-closed agent's process itself, not just fail the task that owned it", killed, agentID)
+	}
+	if runner.alive[agentID] {
+		t.Fatal("agent is still marked alive after reconcile observed it killed")
+	}
+	if got := stateOf(t, m, second[0].ID); got != StateRunning {
+		t.Fatalf("second task state = %s, want running: reconcile's termination has to complete before dispatch runs in the same tick", got)
 	}
 }
 

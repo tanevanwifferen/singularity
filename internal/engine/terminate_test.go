@@ -145,6 +145,11 @@ func TestTerminateAgentReleasesARoutingAgent(t *testing.T) {
 // overwriting a genuine complete/error outcome with killed and running the
 // unconditional worktree cleanup kill() performs. terminate must leave an
 // agent that already stopped exactly as it stopped.
+//
+// These agents never started (cmd is nil), so this exercises the "process
+// never existed" half of terminate's gate. TestTerminateEndsAnAliveAgentEvenWhenAlreadyLabelledTerminal
+// below exercises the other half: the same labels with a process that is
+// very much still alive.
 func TestTerminateIsANoOpOnAnAlreadyTerminalAgent(t *testing.T) {
 	for _, terminal := range []AgentState{AgentComplete, AgentError} {
 		a := newAgent("a-"+terminal.String(), t.TempDir(), "task", AgentOptions{}, stubBackend{})
@@ -159,5 +164,47 @@ func TestTerminateIsANoOpOnAnAlreadyTerminalAgent(t *testing.T) {
 		if a.IsActive() {
 			t.Errorf("a %s agent must not report as active", terminal)
 		}
+	}
+}
+
+// TestTerminateEndsAnAliveAgentEvenWhenAlreadyLabelledTerminal pins review
+// cycle 5's finding 2: a terminal state label is not a statement about the
+// OS process. softClose sets State=killed and deliberately leaves the
+// process running; the pi backend's session process stays resident past a
+// BackendResult event, so State can reach complete or error with the process
+// still alive too. Before this fix, terminate()'s early return matched on
+// a.State.Terminal() alone, so calling it on any of these left the process
+// running forever — silently disabling the one call queue cleanup paths rely
+// on to actually end a soft-closed or resident agent.
+func TestTerminateEndsAnAliveAgentEvenWhenAlreadyLabelledTerminal(t *testing.T) {
+	for _, terminal := range []AgentState{AgentKilled, AgentComplete, AgentError} {
+		t.Run(terminal.String(), func(t *testing.T) {
+			e := New(2)
+			id, pid := startStubAgent(t, e)
+			a := e.GetAgent(id)
+			// Bypass the normal transitions to get a terminal label onto an
+			// agent whose process the test controls directly — the same
+			// shape softClose and a resident pi session produce in
+			// production, without needing either backend here.
+			a.mu.Lock()
+			a.State = terminal
+			a.mu.Unlock()
+
+			if err := e.TerminateAgent(id); err != nil {
+				t.Fatalf("TerminateAgent: %v", err)
+			}
+
+			deadline := time.Now().Add(2 * time.Second)
+			for processAlive(pid) {
+				if time.Now().After(deadline) {
+					t.Fatalf("pid %d still alive after TerminateAgent on a %s-labelled agent: the label must not stop the process from being ended", pid, terminal)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+
+			if got := a.Snapshot().State; got != terminal {
+				t.Errorf("state after terminate = %s, want unchanged %s — a terminal label's outcome must survive", got, terminal)
+			}
+		})
 	}
 }
