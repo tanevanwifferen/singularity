@@ -159,6 +159,14 @@ Two things the queue now guarantees, which you used to have to remember:
   `workdir` are serialised even if nothing links them in the DAG. Tasks with
   `"use_worktree": true` are exempt: the engine gives each its own worktree.
 
+  **Nobody reclaims that worktree automatically** — not when the agent is
+  removed (`agents remove`), not on daemon shutdown, not when the task
+  reaches `done`. Its checkout under `~/.worktrees/<repo>/agent-<id>` and its
+  `agent/<id>/<branch>` branch sit in the source repo until an operator
+  clears them: the TUI's Worktrees view ('w'), or `git worktree remove` /
+  `git worktree prune` by hand. A large `use_worktree` DAG accumulates one
+  checkout and one branch per task — plan to sweep them afterwards.
+
 **3 — wait for the queue, then read the results.** `queue wait` blocks by
 polling the daemon (no streaming) and fully supports `--json`:
 
@@ -283,7 +291,8 @@ singl agents input  --id <id> --message "..."       # non-blocking follow-up; wo
 singl agents chat   --id <id> --message "..."       # sends, then streams the reply (blocks)
 singl agents kill   --id <id>                       # soft close: ends the turn, process stays alive for follow-ups
                                                      # (bare spawn only — on a queue-dispatched task the scheduler
-                                                     # reaps this within one tick: process killed, worktree cleaned;
+                                                     # reaps this within one tick: process terminated. Its worktree,
+                                                     # if any, is NOT — see the use_worktree note in step 2;
                                                      # use `queue cancel --id <task>` for a queued task instead)
 singl agents remove --id <id>                       # terminates the process and drops the agent
 singl --json agents resume --id <id> --message "..." # NEW agent seeded with the old one's history (crash recovery)
@@ -405,9 +414,10 @@ in for that host, and prints the exact `tea logins add` command when it is not.
 - Review a subagent's diff yourself (`diff workdir`) before committing or pushing it.
 - Never `remove` an agent you still want to talk to — `kill` keeps it addressable.
   That only holds for a bare `agents spawn`: killing a queue-dispatched task's
-  agent gets it reaped by the scheduler (process terminated, worktree cleaned)
-  within one tick, so it is no more addressable afterwards than `remove` would
-  leave it. Use `queue cancel --id <task>` to stop a queued task.
+  agent gets it reaped by the scheduler (process terminated — its worktree is
+  not, see the use_worktree note in step 2) within one tick, so it is no more
+  addressable afterwards than `remove` would leave it. Use `queue cancel --id
+  <task>` to stop a queued task.
 - Do not edit source files yourself. Anything that changes a working tree's
   content goes through an agent — including a one-line config flip or a
   mechanical rename across files. "It's only one line" is exactly how an
@@ -436,6 +446,10 @@ in for that host, and prints the exact `tea logins add` command when it is not.
   state: `queue answer` errors with CONFLICT for every input, and `queue wait`
   never returns a question. Do not write a branch for it — a stuck agent shows
   up as a task still `running`, which is what `opts.timeout_secs` is for.
+- `use_worktree` worktrees are never reclaimed automatically — see step 2.
+  `agents remove`, `queue cancel`, a completed task and `daemon stop` all end
+  the agent's process but leave its checkout and branch on disk. Clean them
+  up yourself with the TUI's Worktrees view or `git worktree remove`/`prune`.
 
 ## Improving the tool
 
