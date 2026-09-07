@@ -569,7 +569,7 @@ func (v *CommitView) handleMessageEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // handleConfirmMode handles key events in confirmation mode.
 func (v *CommitView) handleConfirmMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "y", "Y":
+	case "y", "Y", "enter":
 		// Confirm commit
 		v.committing = true
 		v.confirmPending = false
@@ -586,18 +586,6 @@ func (v *CommitView) handleConfirmMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		v.editMode = MessageEditMode
 		v.confirmPending = false
 		return v, nil
-
-	case "enter":
-		// Confirm commit (same as y)
-		v.committing = true
-		v.confirmPending = false
-		return v, func() tea.Msg {
-			err := v.executeCommit()
-			if err != nil {
-				return CommitErrorMsg{err.Error()}
-			}
-			return CommitSuccessMsg{v.commitMessage}
-		}
 	}
 	return v, nil
 }
@@ -1279,6 +1267,20 @@ func (v *CommitView) renderConfirmDialog(s *strings.Builder, th theme.Theme) str
 	return s.String()
 }
 
+// truncateToWidth truncates content to fit within the view's display width,
+// appending "..." if it was shortened. The display width is derived from the
+// view width (minus padding) with a minimum of 20 columns.
+func (v *CommitView) truncateToWidth(content string) string {
+	displayWidth := v.width - 8
+	if displayWidth < 20 {
+		displayWidth = 20
+	}
+	if len(content) > displayWidth {
+		content = content[:displayWidth-3] + "..."
+	}
+	return content
+}
+
 // renderHunkDiffView renders the hunk diff preview with selectable hunks
 func (v *CommitView) renderHunkDiffView(s *strings.Builder, th theme.Theme) string {
 	// Title
@@ -1346,15 +1348,8 @@ func (v *CommitView) renderHunkDiffView(s *strings.Builder, th theme.Theme) stri
 				linePrefix = "  | "
 			}
 
-			content := line.Content
 			// Truncate long lines
-			displayWidth := v.width - 8
-			if displayWidth < 20 {
-				displayWidth = 20
-			}
-			if len(content) > displayWidth {
-				content = content[:displayWidth-3] + "..."
-			}
+			content := v.truncateToWidth(line.Content)
 
 			switch line.LineType {
 			case "+":
@@ -1444,15 +1439,8 @@ func (v *CommitView) renderLineDiffView(s *strings.Builder, th theme.Theme) stri
 		}
 		prefix := cursor + sel + " "
 
-		content := line.Content
 		// Truncate long lines.
-		displayWidth := v.width - 8
-		if displayWidth < 20 {
-			displayWidth = 20
-		}
-		if len(content) > displayWidth {
-			content = content[:displayWidth-3] + "..."
-		}
+		content := v.truncateToWidth(line.Content)
 
 		switch line.LineType {
 		case "+":

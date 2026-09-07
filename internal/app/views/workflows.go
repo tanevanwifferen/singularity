@@ -298,64 +298,10 @@ func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cm
 	v.mergeResults = ""
 	v.detachWorkflowResult = ""
 
-	// Handle Jira picker
-	if v.jiraPicker.IsOpen() {
-		return v, v.handleJiraPickerKey(msg)
-	}
-
-	// Handle Jira confirm-start-workflow modal
-	if v.jiraConfirmIssue != nil {
-		return v, v.handleJiraWorkflowConfirm(msg)
-	}
-
-	// Handle workflow start modal
-	if v.showWorkflowStart {
-		return v, v.handleWorkflowStartInput(msg)
-	}
-
-	// Handle agent prompt modal
-	if v.showAgentPrompt {
-		return v, v.handleAgentPromptInput(msg)
-	}
-
-	// Handle workflow cleanup confirmation
-	if v.showDetachWorkflowConfirm {
-		return v, v.handleDetachWorkflowConfirm(msg)
-	}
-
-	if handled, cmd := v.cleanupConfirm.HandleKey(msg); handled {
+	// Modals and overlays get first crack at the key, in strict priority
+	// order. The first one that claims the key wins.
+	if cmd, handled := v.dispatchModalKey(msg); handled {
 		return v, cmd
-	}
-
-	// Handle batch push confirmation
-	if handled, cmd := v.pushConfirm.HandleKey(msg); handled {
-		return v, cmd
-	}
-
-	// Handle local merge confirmation
-	if handled, cmd := v.mergeConfirm.HandleKey(msg); handled {
-		return v, cmd
-	}
-
-	// Handle local merge summary panel
-	if v.showMergeSummary {
-		return v, v.handleMergeSummary(msg)
-	}
-
-	// Handle MR summary panel
-	if v.showMRSummary {
-		return v, v.handleMRSummary(msg)
-	}
-
-	// Handle batch MR creation confirmation
-	if handled, cmd := v.batchMRConfirm.HandleKey(msg); handled {
-		return v, cmd
-	}
-
-	// If filter is active, let it handle keys
-	if v.filter != nil && v.filter.IsActive() {
-		v.filter.Update(msg)
-		return v, nil
 	}
 
 	switch msg.String() {
@@ -468,6 +414,87 @@ func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cm
 	return v, nil
 }
 
+// dispatchModalKey routes a key event to whichever modal or overlay currently
+// has input priority, checked in the exact order they're allowed to
+// intercept keys. It returns handled=false if nothing claimed the key,
+// meaning the main key switch in handleWorkflowsKeyMsg should run instead.
+func (v *WorkflowsView) dispatchModalKey(msg tea.KeyMsg) (tea.Cmd, bool) {
+	checks := []func() (tea.Cmd, bool){
+		func() (tea.Cmd, bool) {
+			if v.jiraPicker.IsOpen() {
+				return v.handleJiraPickerKey(msg), true
+			}
+			return nil, false
+		},
+		func() (tea.Cmd, bool) {
+			if v.jiraConfirmIssue != nil {
+				return v.handleJiraWorkflowConfirm(msg), true
+			}
+			return nil, false
+		},
+		func() (tea.Cmd, bool) {
+			if v.showWorkflowStart {
+				return v.handleWorkflowStartInput(msg), true
+			}
+			return nil, false
+		},
+		func() (tea.Cmd, bool) {
+			if v.showAgentPrompt {
+				return v.handleAgentPromptInput(msg), true
+			}
+			return nil, false
+		},
+		func() (tea.Cmd, bool) {
+			if v.showDetachWorkflowConfirm {
+				return v.handleDetachWorkflowConfirm(msg), true
+			}
+			return nil, false
+		},
+		func() (tea.Cmd, bool) {
+			handled, cmd := v.cleanupConfirm.HandleKey(msg)
+			return cmd, handled
+		},
+		func() (tea.Cmd, bool) {
+			handled, cmd := v.pushConfirm.HandleKey(msg)
+			return cmd, handled
+		},
+		func() (tea.Cmd, bool) {
+			handled, cmd := v.mergeConfirm.HandleKey(msg)
+			return cmd, handled
+		},
+		func() (tea.Cmd, bool) {
+			if v.showMergeSummary {
+				return v.handleMergeSummary(msg), true
+			}
+			return nil, false
+		},
+		func() (tea.Cmd, bool) {
+			if v.showMRSummary {
+				return v.handleMRSummary(msg), true
+			}
+			return nil, false
+		},
+		func() (tea.Cmd, bool) {
+			handled, cmd := v.batchMRConfirm.HandleKey(msg)
+			return cmd, handled
+		},
+		func() (tea.Cmd, bool) {
+			if v.filter != nil && v.filter.IsActive() {
+				v.filter.Update(msg)
+				return nil, true
+			}
+			return nil, false
+		},
+	}
+
+	for _, check := range checks {
+		if cmd, handled := check(); handled {
+			return cmd, true
+		}
+	}
+	return nil, false
+}
+
 // handleWorkflowsMsg handles non-key, non-standard messages for the workflows view
 // (refresh, push, MR, tick, and Jira picker messages).
 func (v *WorkflowsView) handleWorkflowsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -476,74 +503,19 @@ func (v *WorkflowsView) handleWorkflowsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.refreshWorkflowAgentSnap()
 
 	case worktreesCreatedMsg:
-		v.refreshWorkflowAgentSnap()
-		wf := v.currentWorkflow()
-		if wf != nil {
-			created := 0
-			for _, wr := range wf.Repos {
-				if wr.WorktreeCreated {
-					created++
-				}
-			}
-			v.workflowStatusMsg = fmt.Sprintf(" Worktrees created for '%s' across %d repos\n   Next: press 'a' to spawn an agent, or start working in the worktrees", wf.BranchName, created)
-		}
-		v.saveWorkflows()
-		return v, v.refreshBranchStatusCmd()
+		return v, v.handleWorktreesCreatedMsg()
 
 	case worktreesRemovedMsg:
-		v.refreshWorkflowAgentSnap()
-		wf := v.currentWorkflow()
-		if wf != nil {
-			v.workflowStatusMsg = fmt.Sprintf("Worktrees and branches for '%s' removed", wf.BranchName)
-			v.removeCurrentWorkflow()
-		}
-		v.saveWorkflows()
-		return v, v.refreshBranchStatusCmd()
+		return v, v.handleWorktreesRemovedMsg()
 
 	case branchStatusDoneMsg:
 		// Branch statuses updated; re-render is automatic.
 
 	case pushCheckDoneMsg:
-		if len(msg.repos) == 0 {
-			v.pushResults = "Nothing to push - all repos are up to date"
-		} else {
-			v.pushableRepos = msg.repos
-			sort.Strings(v.pushableRepos)
-			force := msg.force
-			title := "Push All Repos"
-			prompt := fmt.Sprintf("Push %d repo(s) to remote?", len(v.pushableRepos))
-			if force {
-				title = "Force Push All Repos"
-				prompt = fmt.Sprintf("Force push (--force-with-lease) %d repo(s) to remote?", len(v.pushableRepos))
-			}
-			v.pushConfirm.ShowWithCancel(title, prompt,
-				func() tea.Cmd {
-					wf := v.currentWorkflow()
-					v.pushableRepos = nil
-					if wf == nil {
-						return nil
-					}
-					return func() tea.Msg {
-						wf.PushAll(force)
-						return pushDoneMsg{}
-					}
-				},
-				func() { v.pushableRepos = nil })
-		}
+		v.handlePushCheckDoneMsg(msg)
 
 	case pushDoneMsg:
-		wf := v.currentWorkflow()
-		if wf != nil {
-			pushed := 0
-			total := len(wf.Repos)
-			for _, wr := range wf.Repos {
-				if wr.Pushed {
-					pushed++
-				}
-			}
-			v.pushResults = fmt.Sprintf(" Pushed %d/%d repos\n   Next: press 'M' to create merge requests", pushed, total)
-			v.saveWorkflows()
-		}
+		v.handlePushDoneMsg()
 
 	case mergeCheckDoneMsg:
 		v.handleMergeCheckDone(msg)
@@ -553,33 +525,10 @@ func (v *WorkflowsView) handleWorkflowsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return v, v.refreshBranchStatusCmd()
 
 	case mrDoneMsg:
-		wf := v.currentWorkflow()
-		if wf != nil {
-			var lines []string
-			for _, wr := range wf.Repos {
-				if wr.MRURL != "" {
-					title := wr.MRTitle
-					if title == "" {
-						title = "Merge feature branch"
-					}
-					lines = append(lines, fmt.Sprintf("  %s: %s — %s", wr.RepoName, title, wr.MRURL))
-				}
-			}
-			v.mrResults = fmt.Sprintf(" Created %d MRs\n   Next: press 'D' to cleanup worktrees when merged", len(lines))
-			if len(lines) > 0 {
-				v.showMRSummary = true
-				v.mrSummaryLines = lines
-			}
-			v.saveWorkflows()
-		}
+		v.handleMRDoneMsg()
 
 	case WorkflowTickMsg:
-		v.refreshWorkflowAgentSnap()
-		if v.hasRunningAgents() {
-			return v, v.workflowTickCmd()
-		}
-		v.workflowTicking = false
-		return v, nil
+		return v, v.handleWorkflowTickMsg()
 
 	case jiraPickerLoadedMsg:
 		if cmd := v.jiraPicker.HandleMsg(msg); cmd != nil {
@@ -588,6 +537,121 @@ func (v *WorkflowsView) handleWorkflowsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return v, nil
+}
+
+// handleWorktreesCreatedMsg refreshes agent status, reports the worktree
+// creation outcome, and persists workflow state.
+func (v *WorkflowsView) handleWorktreesCreatedMsg() tea.Cmd {
+	v.refreshWorkflowAgentSnap()
+	wf := v.currentWorkflow()
+	if wf != nil {
+		created := 0
+		for _, wr := range wf.Repos {
+			if wr.WorktreeCreated {
+				created++
+			}
+		}
+		v.workflowStatusMsg = fmt.Sprintf(" Worktrees created for '%s' across %d repos\n   Next: press 'a' to spawn an agent, or start working in the worktrees", wf.BranchName, created)
+	}
+	v.saveWorkflows()
+	return v.refreshBranchStatusCmd()
+}
+
+// handleWorktreesRemovedMsg reports worktree removal and drops the workflow
+// from the list.
+func (v *WorkflowsView) handleWorktreesRemovedMsg() tea.Cmd {
+	v.refreshWorkflowAgentSnap()
+	wf := v.currentWorkflow()
+	if wf != nil {
+		v.workflowStatusMsg = fmt.Sprintf("Worktrees and branches for '%s' removed", wf.BranchName)
+		v.removeCurrentWorkflow()
+	}
+	v.saveWorkflows()
+	return v.refreshBranchStatusCmd()
+}
+
+// handlePushCheckDoneMsg turns the async push-eligibility check into a
+// confirm prompt, or reports that there's nothing to push.
+func (v *WorkflowsView) handlePushCheckDoneMsg(msg pushCheckDoneMsg) {
+	if len(msg.repos) == 0 {
+		v.pushResults = "Nothing to push - all repos are up to date"
+		return
+	}
+	v.pushableRepos = msg.repos
+	sort.Strings(v.pushableRepos)
+	force := msg.force
+	title := "Push All Repos"
+	prompt := fmt.Sprintf("Push %d repo(s) to remote?", len(v.pushableRepos))
+	if force {
+		title = "Force Push All Repos"
+		prompt = fmt.Sprintf("Force push (--force-with-lease) %d repo(s) to remote?", len(v.pushableRepos))
+	}
+	v.pushConfirm.ShowWithCancel(title, prompt,
+		func() tea.Cmd {
+			wf := v.currentWorkflow()
+			v.pushableRepos = nil
+			if wf == nil {
+				return nil
+			}
+			return func() tea.Msg {
+				wf.PushAll(force)
+				return pushDoneMsg{}
+			}
+		},
+		func() { v.pushableRepos = nil })
+}
+
+// handlePushDoneMsg reports the outcome of a batch push.
+func (v *WorkflowsView) handlePushDoneMsg() {
+	wf := v.currentWorkflow()
+	if wf == nil {
+		return
+	}
+	pushed := 0
+	total := len(wf.Repos)
+	for _, wr := range wf.Repos {
+		if wr.Pushed {
+			pushed++
+		}
+	}
+	v.pushResults = fmt.Sprintf(" Pushed %d/%d repos\n   Next: press 'M' to create merge requests", pushed, total)
+	v.saveWorkflows()
+}
+
+// handleMRDoneMsg reports the outcome of batch MR creation and opens the MR
+// summary panel when any MRs were created.
+func (v *WorkflowsView) handleMRDoneMsg() {
+	wf := v.currentWorkflow()
+	if wf == nil {
+		return
+	}
+	var lines []string
+	for _, wr := range wf.Repos {
+		if wr.MRURL != "" {
+			title := wr.MRTitle
+			if title == "" {
+				title = "Merge feature branch"
+			}
+			lines = append(lines, fmt.Sprintf("  %s: %s — %s", wr.RepoName, title, wr.MRURL))
+		}
+	}
+	v.mrResults = fmt.Sprintf(" Created %d MRs\n   Next: press 'D' to cleanup worktrees when merged", len(lines))
+	if len(lines) > 0 {
+		v.showMRSummary = true
+		v.mrSummaryLines = lines
+	}
+	v.saveWorkflows()
+}
+
+// handleWorkflowTickMsg refreshes agent snapshots and keeps the tick loop
+// alive while any agent is still running.
+func (v *WorkflowsView) handleWorkflowTickMsg() tea.Cmd {
+	v.refreshWorkflowAgentSnap()
+	if v.hasRunningAgents() {
+		return v.workflowTickCmd()
+	}
+	v.workflowTicking = false
+	return nil
 }
 
 // --- Jira picker handlers ---
@@ -1319,109 +1383,142 @@ func (v *WorkflowsView) renderJiraConfirmModal() string {
 	return renderModal("Start Workflow from Jira", lines, modalWidth(v.width)) + "\n"
 }
 
-// renderModals renders all modal overlays for the workflows view.
+// renderModals renders all modal overlays for the workflows view, in the
+// same priority order dispatchModalKey uses for input.
 func (v *WorkflowsView) renderModals() string {
-	th := theme.GetTheme()
 	var s strings.Builder
 
-	if v.showWorkflowStart {
-		lines := []string{
-			"",
-			fmt.Sprintf("  Branch name: %s", v.workflowBranchInput.Render(th.InfoStyle)),
-			"",
-			"  This creates worktrees for all repos in the",
-			fmt.Sprintf("  project under %s/<branch>/", v.workflowBaseDir),
-			"",
-			"  Enter: Create  Esc: Cancel",
-		}
-		s.WriteString(renderModal("Start Feature Workflow", lines, modalWidth(v.width)))
-		s.WriteString("\n")
-	}
-
-	if v.showAgentPrompt {
-		wf := v.currentWorkflow()
-		wfName := ""
-		wfDir := ""
-		if wf != nil {
-			wfName = wf.BranchName
-			wfDir = wf.WorkflowDir()
-		}
-		lines := []string{
-			"",
-			fmt.Sprintf("  Workflow: %s", th.InfoStyle.Render(wfName)),
-			fmt.Sprintf("  Working dir: %s", th.MutedTextStyle.Render(wfDir)),
-			"",
-			fmt.Sprintf("  Task: %s", v.agentPromptInput.Render(th.InfoStyle)),
-			"",
-			"  The agent will work across all repo worktrees.",
-			"",
-			"  Enter: Spawn  Ctrl+Enter: Newline  Esc: Cancel",
-		}
-		s.WriteString(renderModal("Spawn Agent", lines, modalWidth(v.width)))
-		s.WriteString("\n")
-	}
-
-	if v.showDetachWorkflowConfirm {
-		if wf := v.currentWorkflow(); wf != nil {
-			lines := []string{
-				"",
-				fmt.Sprintf("  Branch: %s", th.InfoStyle.Render(wf.BranchName)),
-				fmt.Sprintf("  Checkout main dir of %d repo(s) as detached HEAD", len(wf.Repos)),
-				"  at each worktree's current HEAD commit?",
-				"",
-				"  y: Confirm  n/Esc: Cancel",
-			}
-			s.WriteString(renderModal("Sync Main Dir to Workflow", lines, modalWidth(v.width)))
-			s.WriteString("\n")
-		}
-	}
-
-	if v.detachWorkflowResult != "" {
-		if strings.HasPrefix(v.detachWorkflowResult, "✗") {
-			s.WriteString(th.DashboardErrorStyle.Render(" " + v.detachWorkflowResult))
-		} else {
-			s.WriteString(th.DashboardAccentStyle.Render(" " + v.detachWorkflowResult))
-		}
-		s.WriteString("\n")
-	}
-
-	if v.cleanupConfirm.Visible {
-		s.WriteString(v.cleanupConfirm.Render(modalWidth(v.width)))
-		s.WriteString("\n")
-	}
-
-	if v.pushConfirm.Visible {
-		s.WriteString(v.pushConfirm.Render(modalWidth(v.width)))
-		s.WriteString("\n")
-	}
-
-	if v.mergeConfirm.Visible {
-		s.WriteString(v.mergeConfirm.Render(modalWidth(v.width)))
-		s.WriteString("\n")
-	}
-
-	if v.showMergeSummary && len(v.mergeSummaryLines) > 0 {
-		lines := []string{""}
-		lines = append(lines, v.mergeSummaryLines...)
-		lines = append(lines, "", "  Esc: Dismiss")
-		s.WriteString(renderModal("Local Merge Results", lines, modalWidth(v.width)))
-		s.WriteString("\n")
-	}
-
-	if v.batchMRConfirm.Visible {
-		s.WriteString(v.batchMRConfirm.Render(modalWidth(v.width)))
-		s.WriteString("\n")
-	}
-
-	if v.showMRSummary && len(v.mrSummaryLines) > 0 {
-		lines := []string{""}
-		lines = append(lines, v.mrSummaryLines...)
-		lines = append(lines, "", "  y: Copy to clipboard  Esc: Dismiss")
-		s.WriteString(renderModal("Merge Requests Created", lines, modalWidth(v.width)))
-		s.WriteString("\n")
-	}
+	s.WriteString(v.renderWorkflowStartModal())
+	s.WriteString(v.renderAgentPromptModal())
+	s.WriteString(v.renderDetachWorkflowConfirmModal())
+	s.WriteString(v.renderDetachWorkflowResultFlash())
+	s.WriteString(v.renderConfirmModal(&v.cleanupConfirm))
+	s.WriteString(v.renderConfirmModal(&v.pushConfirm))
+	s.WriteString(v.renderConfirmModal(&v.mergeConfirm))
+	s.WriteString(v.renderMergeSummaryModal())
+	s.WriteString(v.renderConfirmModal(&v.batchMRConfirm))
+	s.WriteString(v.renderMRSummaryModal())
 
 	return s.String()
+}
+
+// renderWorkflowStartModal renders the "start feature workflow" branch-name
+// input modal.
+func (v *WorkflowsView) renderWorkflowStartModal() string {
+	if !v.showWorkflowStart {
+		return ""
+	}
+	th := theme.GetTheme()
+	lines := []string{
+		"",
+		fmt.Sprintf("  Branch name: %s", v.workflowBranchInput.Render(th.InfoStyle)),
+		"",
+		"  This creates worktrees for all repos in the",
+		fmt.Sprintf("  project under %s/<branch>/", v.workflowBaseDir),
+		"",
+		"  Enter: Create  Esc: Cancel",
+	}
+	return renderModal("Start Feature Workflow", lines, modalWidth(v.width)) + "\n"
+}
+
+// renderAgentPromptModal renders the "spawn agent" task-input modal.
+func (v *WorkflowsView) renderAgentPromptModal() string {
+	if !v.showAgentPrompt {
+		return ""
+	}
+	th := theme.GetTheme()
+	wf := v.currentWorkflow()
+	wfName := ""
+	wfDir := ""
+	if wf != nil {
+		wfName = wf.BranchName
+		wfDir = wf.WorkflowDir()
+	}
+	lines := []string{
+		"",
+		fmt.Sprintf("  Workflow: %s", th.InfoStyle.Render(wfName)),
+		fmt.Sprintf("  Working dir: %s", th.MutedTextStyle.Render(wfDir)),
+		"",
+		fmt.Sprintf("  Task: %s", v.agentPromptInput.Render(th.InfoStyle)),
+		"",
+		"  The agent will work across all repo worktrees.",
+		"",
+		"  Enter: Spawn  Ctrl+Enter: Newline  Esc: Cancel",
+	}
+	return renderModal("Spawn Agent", lines, modalWidth(v.width)) + "\n"
+}
+
+// renderDetachWorkflowConfirmModal renders the "sync main dir" confirmation.
+// It only renders once a workflow is actually selected, which is why this
+// stays its own block rather than joining the generic confirm-modal loop.
+func (v *WorkflowsView) renderDetachWorkflowConfirmModal() string {
+	if !v.showDetachWorkflowConfirm {
+		return ""
+	}
+	wf := v.currentWorkflow()
+	if wf == nil {
+		return ""
+	}
+	th := theme.GetTheme()
+	lines := []string{
+		"",
+		fmt.Sprintf("  Branch: %s", th.InfoStyle.Render(wf.BranchName)),
+		fmt.Sprintf("  Checkout main dir of %d repo(s) as detached HEAD", len(wf.Repos)),
+		"  at each worktree's current HEAD commit?",
+		"",
+		"  y: Confirm  n/Esc: Cancel",
+	}
+	return renderModal("Sync Main Dir to Workflow", lines, modalWidth(v.width)) + "\n"
+}
+
+// renderDetachWorkflowResultFlash renders the detach-sync outcome. This is a
+// flash message rather than a boxed modal, so it doesn't fit renderModal.
+func (v *WorkflowsView) renderDetachWorkflowResultFlash() string {
+	if v.detachWorkflowResult == "" {
+		return ""
+	}
+	th := theme.GetTheme()
+	var s strings.Builder
+	if strings.HasPrefix(v.detachWorkflowResult, "✗") {
+		s.WriteString(th.DashboardErrorStyle.Render(" " + v.detachWorkflowResult))
+	} else {
+		s.WriteString(th.DashboardAccentStyle.Render(" " + v.detachWorkflowResult))
+	}
+	s.WriteString("\n")
+	return s.String()
+}
+
+// renderConfirmModal renders a components.ConfirmPrompt if visible. All four
+// plain yes/no confirmations (cleanup, push, merge, batch MR) share this
+// exact rendering, so they route through one helper instead of four
+// copy-pasted blocks.
+func (v *WorkflowsView) renderConfirmModal(cp *components.ConfirmPrompt) string {
+	if !cp.Visible {
+		return ""
+	}
+	return cp.Render(modalWidth(v.width)) + "\n"
+}
+
+// renderMergeSummaryModal renders the local-merge results panel.
+func (v *WorkflowsView) renderMergeSummaryModal() string {
+	if !v.showMergeSummary || len(v.mergeSummaryLines) == 0 {
+		return ""
+	}
+	lines := []string{""}
+	lines = append(lines, v.mergeSummaryLines...)
+	lines = append(lines, "", "  Esc: Dismiss")
+	return renderModal("Local Merge Results", lines, modalWidth(v.width)) + "\n"
+}
+
+// renderMRSummaryModal renders the created-MRs summary panel.
+func (v *WorkflowsView) renderMRSummaryModal() string {
+	if !v.showMRSummary || len(v.mrSummaryLines) == 0 {
+		return ""
+	}
+	lines := []string{""}
+	lines = append(lines, v.mrSummaryLines...)
+	lines = append(lines, "", "  y: Copy to clipboard  Esc: Dismiss")
+	return renderModal("Merge Requests Created", lines, modalWidth(v.width)) + "\n"
 }
 
 // renderFlashMessages renders transient status messages.

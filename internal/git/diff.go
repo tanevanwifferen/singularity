@@ -2,11 +2,36 @@ package git
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
 )
+
+// runGitCmd runs `git <args>` with its working directory set to repoPath and
+// returns stdout. On failure, the returned error wraps the underlying exec
+// error and, if git wrote anything to stderr, appends it for diagnostics.
+// Callers are expected to wrap this error with their own description, e.g.:
+//
+//	out, err := runGitCmd(repoPath, "diff", "--numstat")
+//	if err != nil {
+//	    return nil, fmt.Errorf("failed to get diff stats: %w", err)
+//	}
+func runGitCmd(repoPath string, args ...string) (string, error) {
+	fullArgs := append([]string{"-C", repoPath}, args...)
+	cmd := exec.Command("git", fullArgs...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	output, err := cmd.Output()
+	if err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return string(output), fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, msg)
+		}
+		return string(output), fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
+	return string(output), nil
+}
 
 // FileChange represents a changed file in a diff
 type FileChange struct {
@@ -33,21 +58,19 @@ func GetBranchDiff(repoPath, branchA, branchB string) (*BranchDiff, error) {
 	revRange := fmt.Sprintf("%s..%s", branchA, branchB)
 
 	// Get name-status for accurate file statuses (A/M/D/R)
-	nameStatusCmd := exec.Command("git", "-C", repoPath, "diff", "--name-status", revRange)
-	nameStatusOut, err := nameStatusCmd.Output()
+	nameStatusOut, err := runGitCmd(repoPath, "diff", "--name-status", revRange)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get branch diff name-status: %w", err)
 	}
-	statusMap := parseNameStatus(string(nameStatusOut))
+	statusMap := parseNameStatus(nameStatusOut)
 
 	// Get numstat for line counts
-	numstatCmd := exec.Command("git", "-C", repoPath, "diff", "--numstat", revRange)
-	numstatOut, err := numstatCmd.Output()
+	numstatOut, err := runGitCmd(repoPath, "diff", "--numstat", revRange)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get diff stats: %w", err)
 	}
 
-	files, totalAdditions, totalDeletions, err := parseNumstatLines(string(numstatOut), statusMap)
+	files, totalAdditions, totalDeletions, err := parseNumstatLines(numstatOut, statusMap)
 	if err != nil {
 		return nil, err
 	}
@@ -83,14 +106,13 @@ func parseNameStatus(output string) map[string]string {
 
 // GetChangedFiles returns just the list of changed file paths
 func GetChangedFiles(repoPath, branchA, branchB string) ([]string, error) {
-	cmd := exec.Command("git", "-C", repoPath, "diff", "--name-only", fmt.Sprintf("%s..%s", branchA, branchB))
-	output, err := cmd.Output()
+	output, err := runGitCmd(repoPath, "diff", "--name-only", fmt.Sprintf("%s..%s", branchA, branchB))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get changed files: %w", err)
 	}
 
 	var files []string
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
 		if line != "" {
 			files = append(files, line)
 		}
@@ -118,25 +140,23 @@ type UnstagedDiff struct {
 // GetStagedFilesDiff returns file-level diff statistics for staged changes
 func GetStagedFilesDiff(repoPath string) (*StagedDiff, error) {
 	// Run git diff --cached --numstat to get staged additions/deletions per file
-	cmd := exec.Command("git", "-C", repoPath, "diff", "--cached", "--numstat")
-	output, err := cmd.Output()
+	output, err := runGitCmd(repoPath, "diff", "--cached", "--numstat")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get staged diff stats: %w", err)
 	}
 
-	return parseNumstatOutput(string(output))
+	return parseNumstatOutput(output)
 }
 
 // GetUnstagedFilesDiff returns file-level diff statistics for unstaged changes
 func GetUnstagedFilesDiff(repoPath string) (*UnstagedDiff, error) {
 	// Run git diff --numstat to get unstaged additions/deletions per file
-	cmd := exec.Command("git", "-C", repoPath, "diff", "--numstat")
-	output, err := cmd.Output()
+	output, err := runGitCmd(repoPath, "diff", "--numstat")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get unstaged diff stats: %w", err)
 	}
 
-	diff, err := parseNumstatOutput(string(output))
+	diff, err := parseNumstatOutput(output)
 	if err != nil {
 		return nil, err
 	}
@@ -151,16 +171,16 @@ func GetUnstagedFilesDiff(repoPath string) (*UnstagedDiff, error) {
 
 // getFileDiff returns the diff content for filePath, either staged (--cached) or unstaged.
 func getFileDiff(repoPath, filePath string, staged bool) (string, error) {
-	args := []string{"-C", repoPath, "diff"}
+	args := []string{"diff"}
 	if staged {
 		args = append(args, "--cached")
 	}
 	args = append(args, "--", filePath)
-	output, err := exec.Command("git", args...).Output()
+	output, err := runGitCmd(repoPath, args...)
 	if err != nil {
 		return "", fmt.Errorf("failed to get file diff: %w", err)
 	}
-	return string(output), nil
+	return output, nil
 }
 
 // GetStagedFileDiff returns the actual diff content for a specific staged file
@@ -245,36 +265,32 @@ func parseNumstatOutput(output string) (*StagedDiff, error) {
 
 // GetFileDiff returns the diff between two branches for a specific file
 func GetFileDiff(repoPath, branchA, branchB, filePath string) (string, error) {
-	cmd := exec.Command("git", "-C", repoPath, "diff", fmt.Sprintf("%s..%s", branchA, branchB), "--", filePath)
-	output, err := cmd.Output()
+	output, err := runGitCmd(repoPath, "diff", fmt.Sprintf("%s..%s", branchA, branchB), "--", filePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to get file diff: %w", err)
 	}
-	return string(output), nil
+	return output, nil
 }
 
 // GetMergeBase returns the best common ancestor commit (merge base) of two refs.
 // Returns the commit SHA, or an error if the merge base cannot be determined.
 func GetMergeBase(repoPath, ref1, ref2 string) (string, error) {
-	cmd := exec.Command("git", "-C", repoPath, "merge-base", ref1, ref2)
-	out, err := cmd.Output()
+	out, err := runGitCmd(repoPath, "merge-base", ref1, ref2)
 	if err != nil {
 		return "", fmt.Errorf("failed to get merge base of %s and %s: %w", ref1, ref2, err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return strings.TrimSpace(out), nil
 }
 
 // ResolveRef tries to find an existing git ref for the given name.
 // First tries the exact name, then "origin/<name>".
 // Returns the first ref that resolves, or the original name if none found.
 func ResolveRef(repoPath, ref string) string {
-	cmd := exec.Command("git", "-C", repoPath, "rev-parse", "--verify", "--quiet", ref)
-	if err := cmd.Run(); err == nil {
+	if _, err := runGitCmd(repoPath, "rev-parse", "--verify", "--quiet", ref); err == nil {
 		return ref
 	}
 	originRef := "origin/" + ref
-	cmd = exec.Command("git", "-C", repoPath, "rev-parse", "--verify", "--quiet", originRef)
-	if err := cmd.Run(); err == nil {
+	if _, err := runGitCmd(repoPath, "rev-parse", "--verify", "--quiet", originRef); err == nil {
 		return originRef
 	}
 	return ref
@@ -282,12 +298,11 @@ func ResolveRef(repoPath, ref string) string {
 
 // GetFileContent gets the raw content of a file at a specific git ref.
 func GetFileContent(repoPath, ref, filePath string) (string, error) {
-	cmd := exec.Command("git", "-C", repoPath, "show", fmt.Sprintf("%s:%s", ref, filePath))
-	output, err := cmd.Output()
+	output, err := runGitCmd(repoPath, "show", fmt.Sprintf("%s:%s", ref, filePath))
 	if err != nil {
 		return "", fmt.Errorf("failed to get content of %s at %s: %w", filePath, ref, err)
 	}
-	return string(output), nil
+	return output, nil
 }
 
 // FilteredDiffHunk wraps DiffHunk with a flag indicating whether all added lines
@@ -398,8 +413,7 @@ func GetWorkdirStatus(repoPath string) (*WorkdirDiff, error) {
 	}
 
 	// Get git status for accurate status indicators
-	cmd := exec.Command("git", "-C", repoPath, "status", "--porcelain=v1")
-	output, err := cmd.Output()
+	output, err := runGitCmd(repoPath, "status", "--porcelain=v1")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get workdir status: %w", err)
 	}
@@ -434,7 +448,7 @@ func GetWorkdirStatus(repoPath string) (*WorkdirDiff, error) {
 	}
 
 	// Parse porcelain status
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	scanner := bufio.NewScanner(strings.NewReader(output))
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
@@ -501,14 +515,10 @@ func GetCommitFiles(repoPath, hash string) ([]FileChange, error) {
 	// Use diff-tree with --no-commit-id -r to list files.
 	// For merge commits, use --first-parent to compare against first parent only.
 	// For initial commits, diff-tree with root flag works.
-	args := []string{"-C", repoPath, "diff-tree", "--no-commit-id", "-r", "--name-status", hash}
-	cmd := exec.Command("git", args...)
-	statusOutput, err := cmd.Output()
+	statusOutput, err := runGitCmd(repoPath, "diff-tree", "--no-commit-id", "-r", "--name-status", hash)
 	if err != nil {
 		// Might be initial commit (no parent) - try with --root
-		args = []string{"-C", repoPath, "diff-tree", "--no-commit-id", "-r", "--root", "--name-status", hash}
-		cmd = exec.Command("git", args...)
-		statusOutput, err = cmd.Output()
+		statusOutput, err = runGitCmd(repoPath, "diff-tree", "--no-commit-id", "-r", "--root", "--name-status", hash)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get commit files: %w", err)
 		}
@@ -516,7 +526,7 @@ func GetCommitFiles(repoPath, hash string) ([]FileChange, error) {
 
 	// Parse name-status output to get file statuses
 	statusMap := make(map[string]string)
-	scanner := bufio.NewScanner(strings.NewReader(string(statusOutput)))
+	scanner := bufio.NewScanner(strings.NewReader(statusOutput))
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
@@ -539,9 +549,7 @@ func GetCommitFiles(repoPath, hash string) ([]FileChange, error) {
 	}
 
 	// Now get numstat for addition/deletion counts
-	numstatArgs := []string{"-C", repoPath, "show", "--numstat", "--format=", hash}
-	cmd = exec.Command("git", numstatArgs...)
-	numstatOutput, err := cmd.Output()
+	numstatOutput, err := runGitCmd(repoPath, "show", "--numstat", "--format=", hash)
 	if err != nil {
 		// Fall back to just the status info without counts
 		var files []FileChange
@@ -562,7 +570,7 @@ func GetCommitFiles(repoPath, hash string) ([]FileChange, error) {
 	}
 
 	// Parse numstat and merge with status info
-	files, _, _, _ := parseNumstatLines(string(numstatOutput), normalizedStatusMap)
+	files, _, _, _ := parseNumstatLines(numstatOutput, normalizedStatusMap)
 
 	// Track which paths appeared in numstat output
 	seenPaths := make(map[string]bool, len(files))
@@ -607,33 +615,29 @@ func normalizeStatus(status string) string {
 // GetCommitFileDiff returns the diff content for a specific file in a commit.
 // Works for merge commits and initial commits.
 func GetCommitFileDiff(repoPath, hash, filePath string) (string, error) {
-	cmd := exec.Command("git", "-C", repoPath, "diff-tree", "-p", "--no-commit-id", hash, "--", filePath)
-	output, err := cmd.Output()
-	if err != nil || len(strings.TrimSpace(string(output))) == 0 {
+	output, err := runGitCmd(repoPath, "diff-tree", "-p", "--no-commit-id", hash, "--", filePath)
+	if err != nil || len(strings.TrimSpace(output)) == 0 {
 		// Fallback for initial commits or merge commits: use show without metadata
-		cmd = exec.Command("git", "-C", repoPath, "show", "--format=", hash, "--", filePath)
-		output, err = cmd.Output()
+		output, err = runGitCmd(repoPath, "show", "--format=", hash, "--", filePath)
 		if err != nil {
 			return "", fmt.Errorf("failed to get commit file diff: %w", err)
 		}
 	}
-	return string(output), nil
+	return output, nil
 }
 
 // GetCommitFullDiff returns the full unified diff for a commit (all files).
 // Works for merge commits and initial commits.
 func GetCommitFullDiff(repoPath, hash string) (string, error) {
-	cmd := exec.Command("git", "-C", repoPath, "diff-tree", "-p", "--no-commit-id", "-r", hash)
-	output, err := cmd.Output()
-	if err != nil || len(strings.TrimSpace(string(output))) == 0 {
+	output, err := runGitCmd(repoPath, "diff-tree", "-p", "--no-commit-id", "-r", hash)
+	if err != nil || len(strings.TrimSpace(output)) == 0 {
 		// Fallback for initial commits or merge commits
-		cmd = exec.Command("git", "-C", repoPath, "show", "--format=", hash)
-		output, err = cmd.Output()
+		output, err = runGitCmd(repoPath, "show", "--format=", hash)
 		if err != nil {
 			return "", fmt.Errorf("failed to get commit full diff: %w", err)
 		}
 	}
-	return string(output), nil
+	return output, nil
 }
 
 // DiffHunk represents a single hunk in a unified diff
@@ -746,28 +750,35 @@ func buildPatch(filePath string, hunk DiffHunk) string {
 	return sb.String()
 }
 
-// StageHunk stages a single hunk using git apply --cached.
-func StageHunk(repoPath, filePath string, hunk DiffHunk) error {
-	patch := buildPatch(filePath, hunk)
-	cmd := exec.Command("git", "-C", repoPath, "apply", "--cached", "--unidiff-zero")
+// applyPatch runs `git apply --cached [--reverse] --unidiff-zero` in repoPath,
+// piping patch in via stdin. action names the operation for error messages
+// (e.g. "stage hunk", "unstage lines"). It is the shared implementation behind
+// StageHunk, UnstageHunk, StageLines, and UnstageLines.
+func applyPatch(repoPath, patch string, reverse bool, action string) error {
+	args := []string{"-C", repoPath, "apply", "--cached"}
+	if reverse {
+		args = append(args, "--reverse")
+	}
+	args = append(args, "--unidiff-zero")
+	cmd := exec.Command("git", args...)
 	cmd.Stdin = strings.NewReader(patch)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to stage hunk: %w: %s", err, string(output))
+		return fmt.Errorf("failed to %s: %w: %s", action, err, string(output))
 	}
 	return nil
+}
+
+// StageHunk stages a single hunk using git apply --cached.
+func StageHunk(repoPath, filePath string, hunk DiffHunk) error {
+	patch := buildPatch(filePath, hunk)
+	return applyPatch(repoPath, patch, false, "stage hunk")
 }
 
 // UnstageHunk unstages a single hunk using git apply --cached --reverse.
 func UnstageHunk(repoPath, filePath string, hunk DiffHunk) error {
 	patch := buildPatch(filePath, hunk)
-	cmd := exec.Command("git", "-C", repoPath, "apply", "--cached", "--reverse", "--unidiff-zero")
-	cmd.Stdin = strings.NewReader(patch)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to unstage hunk: %w: %s", err, string(output))
-	}
-	return nil
+	return applyPatch(repoPath, patch, true, "unstage hunk")
 }
 
 // buildPartialPatch constructs a patch containing only selected lines from a hunk.
@@ -844,24 +855,12 @@ func buildPartialPatch(filePath string, hunk DiffHunk, selectedLineIndices []int
 // selectedLineIndices are zero-based indices into hunk.Lines referring to "+" or "-" lines.
 func StageLines(repoPath, filePath string, hunk DiffHunk, selectedLineIndices []int) error {
 	patch := buildPartialPatch(filePath, hunk, selectedLineIndices, false)
-	cmd := exec.Command("git", "-C", repoPath, "apply", "--cached", "--unidiff-zero")
-	cmd.Stdin = strings.NewReader(patch)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to stage lines: %w: %s", err, string(output))
-	}
-	return nil
+	return applyPatch(repoPath, patch, false, "stage lines")
 }
 
 // UnstageLines unstages selected lines from a single staged hunk using git apply --cached --reverse.
 // selectedLineIndices are zero-based indices into hunk.Lines referring to "+" or "-" lines.
 func UnstageLines(repoPath, filePath string, hunk DiffHunk, selectedLineIndices []int) error {
 	patch := buildPartialPatch(filePath, hunk, selectedLineIndices, true)
-	cmd := exec.Command("git", "-C", repoPath, "apply", "--cached", "--reverse", "--unidiff-zero")
-	cmd.Stdin = strings.NewReader(patch)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to unstage lines: %w: %s", err, string(output))
-	}
-	return nil
+	return applyPatch(repoPath, patch, true, "unstage lines")
 }

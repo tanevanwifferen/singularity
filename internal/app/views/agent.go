@@ -74,15 +74,15 @@ type AgentView struct {
 	outputAutoScroll bool
 
 	// New agent input state
-	showNewAgent bool
-	newAgentTask string
+	showNewAgent  bool
+	newAgentInput components.TextInput
 
 	// Kill confirmation state
 	killConfirm components.ConfirmPrompt
 
 	// Message input state (send to running agent stdin)
 	showMessageInput bool
-	messageInput     string
+	messageInput     components.TextInput
 
 	// Markdown renderer (cached, recreated on width change)
 	mdRenderer      *glamour.TermRenderer
@@ -98,9 +98,9 @@ type AgentView struct {
 
 	// Jira ticket picker
 	jiraPicker       *JiraPickerState
-	jiraConfirmIssue *service.Issue // issue pending agent-start confirmation
-	jiraExtraMsg     string         // custom instructions for the jira agent
-	jiraConfirmMode  string         // "implement" (default), "refine", or "create"
+	jiraConfirmIssue *service.Issue       // issue pending agent-start confirmation
+	jiraExtraInput   components.TextInput // custom instructions for the jira agent
+	jiraConfirmMode  string               // "implement" (default), "refine", or "create"
 
 	// Jira refine/create agent tracking. JiraService lives on v.services;
 	// jiraCfg is kept for display (base URL etc.) but credentials are
@@ -111,7 +111,11 @@ type AgentView struct {
 	approvalView   *ApprovalView
 	approvalAgent  string // agentID of the agent whose approval is shown
 
-	loadMu sync.Mutex // serializes concurrent loadAgents calls
+	// loadMu serializes refreshes and collapses a burst of requests into a
+	// single follow-up pass (see loadAgents).
+	loadMu     sync.Mutex
+	loadActive bool
+	loadAgain  bool
 }
 
 // AgentsReloadedMsg is sent after an async loadAgents completes.
@@ -233,10 +237,42 @@ func (v *AgentView) LoadAgents() {
 	v.loadAgents()
 }
 
-// loadAgents loads the current list of agents from the engine.
+// loadAgents refreshes the agent list, coalescing concurrent requests.
+//
+// One refresh costs two daemon round-trips plus a glamour re-render of the
+// selected agent's output. Every agent event asks for one, so a chatty agent
+// used to queue a dozen of them: each waited for the one before it, and the
+// view ended up rendering a snapshot taken seconds ago — long enough for a
+// just-resumed agent to still show as "done". Requests that arrive while a
+// refresh is running are therefore folded into a single extra pass, which
+// starts after the last of them and so sees at least as fresh a state.
 func (v *AgentView) loadAgents() {
 	v.loadMu.Lock()
-	defer v.loadMu.Unlock()
+	if v.loadActive {
+		v.loadAgain = true
+		v.loadMu.Unlock()
+		return
+	}
+	v.loadActive = true
+	v.loadMu.Unlock()
+
+	for {
+		v.loadAgentsOnce()
+
+		v.loadMu.Lock()
+		if !v.loadAgain {
+			v.loadActive = false
+			v.loadMu.Unlock()
+			return
+		}
+		v.loadAgain = false
+		v.loadMu.Unlock()
+	}
+}
+
+// loadAgentsOnce performs one refresh pass. Only ever called from loadAgents,
+// which guarantees a single pass runs at a time.
+func (v *AgentView) loadAgentsOnce() {
 	v.err = nil
 
 	if v.services == nil {
@@ -579,6 +615,16 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case messageSendDoneMsg:
 		if msg.err != nil {
 			v.err = fmt.Errorf("send input: %w", msg.err)
+			return v, nil
+		}
+		// A follow-up puts a finished agent back into AgentRunning. Reload
+		// instead of waiting for the refresh tick: the list (and the cached
+		// v.selectedAgent behind the output header) would otherwise keep
+		// showing the agent as "done" for up to a full tick after the user
+		// has just given it more work.
+		return v, func() tea.Msg {
+			v.loadAgents()
+			return AgentsReloadedMsg{}
 		}
 
 	case approvalExecDoneMsg:
@@ -621,9 +667,9 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (v *AgentView) handleNewAgentInput(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
-		task := v.newAgentTask
+		task := v.newAgentInput.Value
 		v.showNewAgent = false
-		v.newAgentTask = ""
+		v.newAgentInput.Clear()
 		v.recalcLayout()
 		if task != "" && v.services != nil {
 			svc := v.services
@@ -640,21 +686,10 @@ func (v *AgentView) handleNewAgentInput(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "esc":
 		v.showNewAgent = false
-		v.newAgentTask = ""
+		v.newAgentInput.Clear()
 		v.recalcLayout()
-	case "ctrl+w":
-		v.newAgentTask = components.DeleteWordEnd(v.newAgentTask)
 	default:
-		if msg.Paste && len(msg.Runes) > 0 {
-			v.newAgentTask += string(msg.Runes)
-		} else if len(msg.Runes) == 1 {
-			r := msg.Runes[0]
-			if r >= 32 && r <= 126 {
-				v.newAgentTask += string(r)
-			}
-		} else if msg.String() == "backspace" && len(v.newAgentTask) > 0 {
-			v.newAgentTask = v.newAgentTask[:len(v.newAgentTask)-1]
-		}
+		v.newAgentInput.HandleKey(msg)
 	}
 	return nil
 }
@@ -667,10 +702,10 @@ func (v *AgentView) handleMessageInput(msg tea.KeyMsg) tea.Cmd {
 		if v.services != nil && v.selectedAgent != nil && v.selectedAgent.State == service.AgentError {
 			svc := v.services
 			agentID := v.selectedAgent.ID
-			userMsg := v.messageInput
+			userMsg := v.messageInput.Value
 			ctxFiles := v.contextFiles
 			v.showMessageInput = false
-			v.messageInput = ""
+			v.messageInput.Clear()
 			v.focus = focusOutput
 			v.recalcLayout()
 			return func() tea.Msg {
@@ -683,38 +718,27 @@ func (v *AgentView) handleMessageInput(msg tea.KeyMsg) tea.Cmd {
 			}
 		}
 		var sendCmd tea.Cmd
-		if v.messageInput != "" && v.services != nil && v.selectedAgent != nil {
+		if v.messageInput.Value != "" && v.services != nil && v.selectedAgent != nil {
 			svc := v.services
 			agentID := v.selectedAgent.ID
-			input := v.messageInput
+			input := v.messageInput.Value
 			ctx := v.ctx()
 			sendCmd = func() tea.Msg {
 				return messageSendDoneMsg{err: svc.Agent.SendInput(ctx, agentID, input)}
 			}
 		}
 		v.showMessageInput = false
-		v.messageInput = ""
+		v.messageInput.Clear()
 		v.focus = focusOutput
 		v.recalcLayout()
 		return sendCmd
 	case "esc":
 		v.showMessageInput = false
-		v.messageInput = ""
+		v.messageInput.Clear()
 		v.focus = focusOutput
 		v.recalcLayout()
-	case "ctrl+w":
-		v.messageInput = components.DeleteWordEnd(v.messageInput)
 	default:
-		if msg.Paste && len(msg.Runes) > 0 {
-			v.messageInput += string(msg.Runes)
-		} else if len(msg.Runes) == 1 {
-			r := msg.Runes[0]
-			if r >= 32 && r <= 126 {
-				v.messageInput += string(r)
-			}
-		} else if msg.String() == "backspace" && len(v.messageInput) > 0 {
-			v.messageInput = v.messageInput[:len(v.messageInput)-1]
-		}
+		v.messageInput.HandleKey(msg)
 	}
 	return nil
 }
@@ -795,31 +819,42 @@ func (v *AgentView) handleOutputPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		v.outputViewport.HalfViewUp()
 		return v, nil
 	case "A":
-		// Open approval view for completed Jira refine/create agents
-		if v.selectedAgent != nil && v.jiraAgentMeta != nil {
-			if meta, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
-				if v.selectedAgent.State == service.AgentComplete || v.selectedAgent.State == service.AgentError || v.selectedAgent.State == service.AgentKilled {
-					actions, err := v.parseJiraActionsRaw(meta.ActionsFile)
-					if err == nil && len(actions) > 0 && v.services != nil {
-						v.approvalView = NewApprovalView(actions)
-						v.approvalView.SetSize(v.width, v.height)
-						v.approvalAgent = v.selectedAgent.ID
-					}
-				}
-			}
-		}
+		v.openApprovalView()
 		return v, nil
 	case "i":
 		if v.selectedAgent != nil &&
 			(v.selectedAgent.State == service.AgentRunning || v.selectedAgent.State == service.AgentStarting || v.selectedAgent.State == service.AgentComplete || v.selectedAgent.State == service.AgentKilled || v.selectedAgent.State == service.AgentError) {
 			v.showMessageInput = true
-			v.messageInput = ""
+			v.messageInput.Clear()
 			v.focus = focusInput
 			v.recalcLayout()
 		}
 		return v, nil
 	}
 	return v, nil
+}
+
+// openApprovalView opens the approval view for the selected agent when it is a
+// completed Jira refine/create agent with a parseable, non-empty actions file.
+// Shared by handleOutputPaneKey and handleListPaneKey ("A" key in both panes).
+func (v *AgentView) openApprovalView() {
+	if v.selectedAgent == nil || v.jiraAgentMeta == nil {
+		return
+	}
+	meta, ok := v.jiraAgentMeta[v.selectedAgent.ID]
+	if !ok {
+		return
+	}
+	if v.selectedAgent.State != service.AgentComplete && v.selectedAgent.State != service.AgentError && v.selectedAgent.State != service.AgentKilled {
+		return
+	}
+	actions, err := v.parseJiraActionsRaw(meta.ActionsFile)
+	if err != nil || len(actions) == 0 || v.services == nil {
+		return
+	}
+	v.approvalView = NewApprovalView(actions)
+	v.approvalView.SetSize(v.width, v.height)
+	v.approvalAgent = v.selectedAgent.ID
 }
 
 // handleListPaneKey handles keys when the agent list pane has focus.
@@ -835,7 +870,7 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "n":
 		v.showNewAgent = true
-		v.newAgentTask = ""
+		v.newAgentInput.Clear()
 		v.recalcLayout()
 		return v, nil
 
@@ -879,7 +914,7 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if v.selectedAgent != nil &&
 			(v.selectedAgent.State == service.AgentRunning || v.selectedAgent.State == service.AgentStarting || v.selectedAgent.State == service.AgentComplete || v.selectedAgent.State == service.AgentKilled || v.selectedAgent.State == service.AgentError) {
 			v.showMessageInput = true
-			v.messageInput = ""
+			v.messageInput.Clear()
 			v.focus = focusInput
 			v.recalcLayout()
 		}
@@ -952,24 +987,12 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "a":
 		v.showNewAgent = true
-		v.newAgentTask = ""
+		v.newAgentInput.Clear()
 		v.recalcLayout()
 		return v, nil
 
 	case "A":
-		// Open approval view for completed Jira refine/create agents
-		if v.selectedAgent != nil && v.jiraAgentMeta != nil {
-			if meta, ok := v.jiraAgentMeta[v.selectedAgent.ID]; ok {
-				if v.selectedAgent.State == service.AgentComplete || v.selectedAgent.State == service.AgentError || v.selectedAgent.State == service.AgentKilled {
-					actions, err := v.parseJiraActionsRaw(meta.ActionsFile)
-					if err == nil && len(actions) > 0 && v.services != nil {
-						v.approvalView = NewApprovalView(actions)
-						v.approvalView.SetSize(v.width, v.height)
-						v.approvalAgent = v.selectedAgent.ID
-					}
-				}
-			}
-		}
+		v.openApprovalView()
 		return v, nil
 
 	case "R":
@@ -1167,7 +1190,7 @@ func (v *AgentView) View() string {
 	if v.jiraConfirmIssue != nil {
 		issue := v.jiraConfirmIssue
 		branch := issueToBranchName(issue)
-		input := v.jiraExtraMsg + "█"
+		input := v.jiraExtraInput.RenderPlain()
 
 		// Mode indicator
 		modeLabel := "Implement (worktree)"
@@ -1213,7 +1236,7 @@ func (v *AgentView) View() string {
 		s.WriteString(th.DashboardTitle.Render(fmt.Sprintf(" ┌%s┐", strings.Repeat("─", boxWidth-2))))
 		s.WriteString("\n")
 
-		taskRunes := []rune("Task: " + v.newAgentTask + "█")
+		taskRunes := []rune("Task: " + v.newAgentInput.Value + "█")
 		for len(taskRunes) > 0 {
 			chunk := taskRunes
 			if len(chunk) > innerWidth {
@@ -1289,7 +1312,7 @@ func (v *AgentView) View() string {
 				prompt = "Message (optional): "
 				hint = "Enter: resume in new session   Esc: cancel"
 			}
-			msgLines := wrapText(prompt+v.messageInput+"█", modalWidth(v.width)-4)
+			msgLines := wrapText(prompt+v.messageInput.Value+"█", modalWidth(v.width)-4)
 			msgLines = append(msgLines, "", hint)
 			s.WriteString(renderModal(title, msgLines, modalWidth(v.width)))
 		}
@@ -1389,7 +1412,7 @@ func (v *AgentView) handleJiraPickerKey(msg tea.KeyMsg) tea.Cmd {
 	cmd, done, confirmed, issue := v.jiraPicker.HandleKey(msg)
 	if done && confirmed && issue != nil {
 		v.jiraConfirmIssue = issue
-		v.jiraExtraMsg = ""
+		v.jiraExtraInput.Clear()
 	}
 	return cmd
 }
@@ -1399,10 +1422,10 @@ func (v *AgentView) handleJiraAgentConfirm(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
 		issue := v.jiraConfirmIssue
-		extraMsg := v.jiraExtraMsg
+		extraMsg := v.jiraExtraInput.Value
 		mode := v.jiraConfirmMode
 		v.jiraConfirmIssue = nil
-		v.jiraExtraMsg = ""
+		v.jiraExtraInput.Clear()
 		v.jiraConfirmMode = ""
 		switch mode {
 		case "refine":
@@ -1428,23 +1451,10 @@ func (v *AgentView) handleJiraAgentConfirm(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "esc":
 		v.jiraConfirmIssue = nil
-		v.jiraExtraMsg = ""
+		v.jiraExtraInput.Clear()
 		v.jiraConfirmMode = ""
-	case "ctrl+w":
-		v.jiraExtraMsg = components.DeleteWordEnd(v.jiraExtraMsg)
-	case "backspace":
-		if len(v.jiraExtraMsg) > 0 {
-			v.jiraExtraMsg = v.jiraExtraMsg[:len(v.jiraExtraMsg)-1]
-		}
 	default:
-		if msg.Paste && len(msg.Runes) > 0 {
-			v.jiraExtraMsg += string(msg.Runes)
-		} else if len(msg.Runes) == 1 {
-			r := msg.Runes[0]
-			if r >= 32 {
-				v.jiraExtraMsg += string(r)
-			}
-		}
+		v.jiraExtraInput.HandleKey(msg)
 	}
 	return nil
 }

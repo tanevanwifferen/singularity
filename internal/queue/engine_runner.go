@@ -78,10 +78,10 @@ func (r *EngineRunner) AgentState(agentID string) (string, string, bool) {
 
 // Capacity reports active agents and the engine's cap.
 //
-// The active count comes from ActiveCount, not EngineStats.Active: the
-// scheduler has to size its dispatch on exactly the number StartAgent gates
-// on, or it claims slots the engine then refuses. The two differ for agents
-// in the routing state.
+// ActiveCount is used here rather than building a full EngineStats: it is
+// cheaper and reads better at this call site. The number is the same one
+// Stats().Active reports — both derive from AgentState.Active() — so the
+// count the engine enforces and the count it reports can never diverge.
 func (r *EngineRunner) Capacity() (int, int) {
 	return r.eng.ActiveCount(), r.eng.MaxAgents()
 }

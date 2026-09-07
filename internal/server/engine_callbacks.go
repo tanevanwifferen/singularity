@@ -12,7 +12,8 @@ import (
 // The hook is invoked by the engine whenever any agent's output buffer
 // advances or its state transitions; we read what's new since our last
 // broadcast offset and emit one agent_output frame per OutputEntry, plus
-// agent_complete / agent_error on terminal-state transitions.
+// agent_complete / agent_error on terminal-state transitions and
+// agent_resumed when a finished agent goes back to work.
 func (s *Server) wireEngineCallbacks() {
 	if s.engine == nil {
 		return
@@ -47,6 +48,7 @@ func (s *Server) broadcastAgentUpdate(agentID string) {
 	// Terminal lifecycle events must be broadcast exactly once per agent;
 	// claim that under the same lock.
 	emitTerminal := false
+	emitResumed := false
 	switch snap.State {
 	case engine.AgentComplete, engine.AgentError, engine.AgentKilled:
 		if !s.terminalBroadcast[agentID] {
@@ -55,8 +57,16 @@ func (s *Server) broadcastAgentUpdate(agentID string) {
 		}
 	default:
 		// Non-terminal state (e.g. a resumed agent running again): re-arm
-		// the terminal broadcast for this agent's next completion.
-		delete(s.terminalBroadcast, agentID)
+		// the terminal broadcast for this agent's next completion. If we had
+		// already reported this agent as finished, the walk back to a
+		// non-terminal state is news in its own right — agent_output frames
+		// carry no state, so a client holding "complete" would otherwise need
+		// to re-poll to notice. Claimed under the same lock as the re-arm so
+		// overlapping callbacks emit it exactly once per resume.
+		if s.terminalBroadcast[agentID] {
+			delete(s.terminalBroadcast, agentID)
+			emitResumed = true
+		}
 	}
 	s.outputMu.Unlock()
 
@@ -71,6 +81,16 @@ func (s *Server) broadcastAgentUpdate(agentID string) {
 				},
 			})
 		}
+	}
+
+	if emitResumed {
+		s.wsBroadcast(api.WSMessage{
+			Type: api.WSEventAgentResumed,
+			Payload: api.AgentResumedPayload{
+				AgentID: agentID,
+				State:   snap.State.String(),
+			},
+		})
 	}
 
 	// Emit lifecycle events on terminal states.

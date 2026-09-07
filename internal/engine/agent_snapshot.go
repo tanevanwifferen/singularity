@@ -52,9 +52,9 @@ func (a *Agent) Done() <-chan struct{} {
 	return a.done
 }
 
-// IsActive returns true if the agent is still running.
+// IsActive returns true if the agent still occupies a pool slot.
 func (a *Agent) IsActive() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.State == AgentRunning || a.State == AgentStarting || a.State == AgentRouting
+	return a.State.Active()
 }

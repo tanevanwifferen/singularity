@@ -10,10 +10,12 @@ import (
 )
 
 // TestActiveCountIncludesRoutingAgents pins the number anything gating on
-// capacity has to use. EngineStats.Active omits AgentRouting, so a scheduler
-// sizing its dispatch on it over-dispatches for the whole classifier round
-// trip and then has the spawn refused; ActiveCount must match the count
-// StartAgent's own cap check performs.
+// capacity has to use. Routing agents hold a pool slot, so ActiveCount must
+// match the count StartAgent's own cap check performs — and, since both
+// derive from the same AgentState.Active() predicate, Stats().Active must
+// report the identical number. The two used to be computed independently,
+// and a scheduler sizing its dispatch on the stats number over-dispatched
+// for the whole classifier round trip and then had its spawn refused.
 func TestActiveCountIncludesRoutingAgents(t *testing.T) {
 	e := New(2)
 
@@ -30,8 +32,8 @@ func TestActiveCountIncludesRoutingAgents(t *testing.T) {
 	if got := e.ActiveCount(); got != 2 {
 		t.Errorf("ActiveCount = %d, want 2 — routing agents hold a slot", got)
 	}
-	if got := e.Stats().Active; got != 0 {
-		t.Errorf("Stats().Active = %d, want 0 — the display count deliberately differs; this test exists to record that", got)
+	if got := e.Stats().Active; got != 2 {
+		t.Errorf("Stats().Active = %d, want 2 — it must report the same count as ActiveCount", got)
 	}
 
 	_, err := e.StartAgent(os.TempDir(), "task3", AgentOptions{})
