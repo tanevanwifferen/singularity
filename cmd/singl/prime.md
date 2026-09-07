@@ -171,15 +171,15 @@ singl --json queue queues                           # every queue with its state
 ```
 
 Task states: `blocked` → `ready` → `running` → `done`, plus `failed`,
-`cancelled`, `skipped` (a dependency failed under `on_failure: block`) and
-`waiting_human` (the agent stopped to ask you something).
+`cancelled` and `skipped` (a dependency failed under `on_failure: block`).
+The wire enum also carries `waiting_human`, but nothing in this build ever
+produces it — see Known gaps.
 
 `queue wait` exit codes — the whole point of the verb, so check them:
 
 | Exit | Meaning |
 |---|---|
 | `0` | the queue drained and every task is `done` |
-| `0` | a task is `waiting_human` — it returns **early** with a notice naming the task ID and its question. That is actionable by the operator, not an error |
 | `1` | the queue drained but at least one task `failed`, was `cancelled` or was `skipped` |
 | `1` | `--timeout` expired (JSON carries `"timed_out": true` and the last tallies) |
 
@@ -194,7 +194,6 @@ stays reachable after the task finishes: `singl --json agents output --id
 Steering a queue in flight:
 
 ```
-singl queue answer --id <task-id> --message "..."   # unblock a waiting_human task
 singl queue retry  --id <task-id>                   # requeue a failed/cancelled/skipped task
 singl queue cancel --id <task-id>                   # or --queue <id> for the whole queue
 singl queue pause  --queue <id>                     # stop dispatching new tasks; running ones continue
@@ -202,8 +201,7 @@ singl queue resume --queue <id>
 singl queue remove --queue <id>                     # forget a drained queue + delete its state file
 ```
 
-`remove` is refused while any task is still `running` or `waiting_human`; cancel
-or wait first.
+`remove` is refused while any task is still `running`; cancel or wait first.
 
 **4 — escape hatch: one agent, right now.** `agents spawn` is the single-shot
 path — a read-only inspection, a throwaway fix, or work with no dependencies
@@ -393,8 +391,7 @@ in for that host, and prints the exact `tea logins add` command when it is not.
   unattended work (`watch` is for humans). Do **not** poll `queue list` or
   `agents get` in a loop for terminal state: the wait already does that
   daemon-side and its exit code is the verdict — `0` drained clean, `1` something
-  failed or the timeout expired, `0` plus a printed question when a task is
-  `waiting_human`. Answer that with `queue answer`, then wait again.
+  failed or the timeout expired.
 - After a wait settles, read the outcome from `queue list --state failed,skipped`
   and the transcripts from `agents output --id <task's agent_id> --offset <n>`.
 - Review a subagent's diff yourself (`diff workdir`) before committing or pushing it.
@@ -419,6 +416,12 @@ in for that host, and prints the exact `tea logins add` command when it is not.
   expose them, so use the queue when a task needs either.
 - `queue add` does not expose `--smart-route`/`--max-turns` as flags; set
   `opts.smart_route` / `opts.max_turns` in a `--file` document instead.
+- Human escalation is not implemented. `waiting_human` exists in the task-state
+  enum and the queue handles it end to end, but the agent engine has no way to
+  report that an agent stopped to ask something, so no task ever reaches that
+  state: `queue answer` errors with CONFLICT for every input, and `queue wait`
+  never returns a question. Do not write a branch for it — a stuck agent shows
+  up as a task still `running`, which is what `opts.timeout_secs` is for.
 
 ## Improving the tool
 

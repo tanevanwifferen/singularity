@@ -1,6 +1,8 @@
 package queue
 
 import (
+	"errors"
+	"fmt"
 	"path/filepath"
 	"time"
 
@@ -41,7 +43,14 @@ func (r *EngineRunner) StartTask(t Task) (string, error) {
 	if t.Opts.TimeoutSecs > 0 {
 		opts.Timeout = time.Duration(t.Opts.TimeoutSecs) * time.Second
 	}
-	return r.eng.StartAgent(t.WorkDir, t.Prompt, opts)
+	id, err := r.eng.StartAgent(t.WorkDir, t.Prompt, opts)
+	if errors.Is(err, engine.ErrAgentLimit) {
+		// Translate into the queue's own sentinel so the scheduler can
+		// treat a cap refusal as backpressure without importing the
+		// engine — and so the test fake can produce the same condition.
+		return "", fmt.Errorf("%w: %s", ErrNoCapacity, err.Error())
+	}
+	return id, err
 }
 
 // AgentState reports one agent's state name and error text.
@@ -55,9 +64,13 @@ func (r *EngineRunner) AgentState(agentID string) (string, string, bool) {
 }
 
 // Capacity reports active agents and the engine's cap.
+//
+// The active count comes from ActiveCount, not EngineStats.Active: the
+// scheduler has to size its dispatch on exactly the number StartAgent gates
+// on, or it claims slots the engine then refuses. The two differ for agents
+// in the routing state.
 func (r *EngineRunner) Capacity() (int, int) {
-	stats := r.eng.Stats()
-	return stats.Active, stats.MaxAgents
+	return r.eng.ActiveCount(), r.eng.MaxAgents()
 }
 
 // WorkDirBusy reports whether any active agent is working in workDir.

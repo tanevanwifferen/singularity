@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/api"
@@ -158,7 +159,7 @@ func parseFailurePolicy(s string) (service.FailurePolicy, error) {
 
 func runQueueAdd(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("queue-add", flag.ContinueOnError)
-	file := fs.String("file", "", "submit a whole DAG from a JSON file (mutually exclusive with --workdir/--prompt)")
+	file := fs.String("file", "", "submit a whole DAG from a JSON file (mutually exclusive with every per-task flag except --queue)")
 	workdir := fs.String("workdir", "", "working directory for the task (required without --file)")
 	prompt := fs.String("prompt", "", "task prompt (required without --file)")
 	title := fs.String("title", "", "short label, also used as the agent's summary")
@@ -183,8 +184,15 @@ func runQueueAdd(ctx context.Context, args []string) int {
 
 	var specs []api.TaskSpec
 	if *file != "" {
-		if *workdir != "" || *prompt != "" {
-			fmt.Fprintln(os.Stderr, "error: --file cannot be combined with --workdir/--prompt")
+		// Every per-task flag is ignored in file mode: the specs come from
+		// the document. Accepting them silently was worse than rejecting
+		// them — an operator who passed --use-worktree believed their
+		// tasks were isolated (and exempt from the one-agent-per-directory
+		// serialisation) when they were not. --queue is the one exception;
+		// it deliberately overrides the document.
+		if bad := typedFlagsOtherThan(fs, "file", "queue"); len(bad) > 0 {
+			fmt.Fprintf(os.Stderr, "error: --file cannot be combined with --%s (set these per task in the document; only --queue overrides it)\n",
+				strings.Join(bad, ", --"))
 			return 2
 		}
 		data, err := os.ReadFile(*file)
@@ -252,6 +260,25 @@ func runQueueAdd(ctx context.Context, args []string) int {
 	}
 	md += "\nWait for it: `singl queue wait --queue " + submittedQueueID(tasks) + "`\n"
 	return renderMarkdown(md)
+}
+
+// typedFlagsOtherThan returns the names of the flags the user actually
+// passed, minus the allowed ones. flag.Visit is what makes this possible:
+// it reports only flags that were set, so an explicit --priority 0 is
+// distinguishable from an unset one.
+func typedFlagsOtherThan(fs *flag.FlagSet, allowed ...string) []string {
+	ok := make(map[string]bool, len(allowed))
+	for _, name := range allowed {
+		ok[name] = true
+	}
+	var out []string
+	fs.Visit(func(f *flag.Flag) {
+		if !ok[f.Name] {
+			out = append(out, f.Name)
+		}
+	})
+	sort.Strings(out)
+	return out
 }
 
 // submittedQueueID reports the queue the batch landed in. The daemon mints
