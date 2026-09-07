@@ -652,7 +652,7 @@ func (a *Agent) kill(preserveWorktree bool) error {
 	if a.cmd == nil || a.cmd.Process == nil {
 		a.mu.Unlock()
 		if wtPath != "" && !preserveWorktree {
-			cleanupWorktree(sourceRepoPath, wtPath, wtBranch)
+			cleanupWorktreeFn(sourceRepoPath, wtPath, wtBranch)
 		}
 		return nil
 	}
@@ -673,7 +673,7 @@ func (a *Agent) kill(preserveWorktree bool) error {
 	a.mu.Unlock()
 
 	if wtPath != "" && !preserveWorktree {
-		cleanupWorktree(sourceRepoPath, wtPath, wtBranch)
+		cleanupWorktreeFn(sourceRepoPath, wtPath, wtBranch)
 	}
 
 	if err != nil {

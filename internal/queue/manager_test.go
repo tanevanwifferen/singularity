@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -208,6 +209,21 @@ func (f *fakeRunner) softClose(agentID string) {
 	f.states[agentID] = "killed"
 }
 
+// completeStillAlive models the real engine's handleResult: a BackendResult
+// event moves the state straight to complete without waiting for the
+// subprocess to exit (agent.go's handleResult sets AgentComplete; waitForExit,
+// which would actually confirm the process is gone, runs separately and may
+// not have observed anything yet). setTaskState cannot model this — it treats
+// complete/error as proof the process already exited, which is true only
+// once waitForExit has also run. This is the fake's other divergence point,
+// deliberately named apart from setTaskState so a test cannot reach for the
+// wrong helper by accident.
+func (f *fakeRunner) completeStillAlive(agentID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.states[agentID] = "complete"
+}
+
 // removeAgent models `agents remove`: the record is gone and so is the
 // process.
 func (f *fakeRunner) removeAgent(agentID string) {
@@ -366,6 +382,27 @@ func TestAddRejectsCaseInsensitiveQueueIDCollisionWithinOneBatch(t *testing.T) {
 	}
 	if _, ok := m.tasks["t1"]; ok {
 		t.Fatal("Add must be atomic: a rejected batch must not leave task t1 committed")
+	}
+}
+
+// TestAutoQueueIDSkipsACaseFoldedOperatorNamedQueue is review cycle 6 finding
+// 2: the case-fold guard added for the explicit-ID path (
+// TestAddRejectsCaseInsensitiveQueueIDCollision) sits inside `if s.QueueID !=
+// ""`, so it never runs for the auto-mint path, and mintQueueIDLocked's own
+// guard was an exact map lookup that "Q1" vs. minted "q1" does not trip. On a
+// case-insensitive filesystem that is the same one-file-for-two-queues data
+// loss the explicit-ID guard exists to prevent.
+func TestAutoQueueIDSkipsACaseFoldedOperatorNamedQueue(t *testing.T) {
+	m := newTestManager(newFakeRunner(4))
+	if _, err := m.Add([]TaskSpec{{Name: "a", Prompt: "p", WorkDir: "/w", QueueID: "Q1"}}); err != nil {
+		t.Fatalf("first Add: %v", err)
+	}
+	tasks, err := m.Add([]TaskSpec{{Name: "b", Prompt: "p", WorkDir: "/w"}})
+	if err != nil {
+		t.Fatalf("second Add: %v", err)
+	}
+	if got := tasks[0].QueueID; strings.EqualFold(got, "Q1") {
+		t.Fatalf("auto-minted queue id = %q, collides case-insensitively with operator-named queue %q", got, "Q1")
 	}
 }
 
@@ -721,6 +758,43 @@ func TestReconcileTerminatesAKilledAgentBeforeDispatch(t *testing.T) {
 	}
 	if runner.alive[agentID] {
 		t.Fatal("agent is still marked alive after reconcile observed it killed")
+	}
+	if got := stateOf(t, m, second[0].ID); got != StateRunning {
+		t.Fatalf("second task state = %s, want running: reconcile's termination has to complete before dispatch runs in the same tick", got)
+	}
+}
+
+// TestReconcileTerminatesACompletedAgentBeforeDispatch is review cycle 6
+// finding 1 as a test: b03f146 applied "a terminal state label is not proof
+// the process is gone" to the killed and error branches but not to complete
+// — the branch every successful task takes. A backend that finishes a turn
+// while keeping its process alive (completeStillAlive models exactly that,
+// see its doc comment) left the first task's agent resident and invisible to
+// WorkDirBusy, so the scheduler dispatched a second agent into the same
+// directory while the first one's process was still there. Before the fix,
+// reconcile's `complete` branch never appended to terminateAgents.
+func TestReconcileTerminatesACompletedAgentBeforeDispatch(t *testing.T) {
+	runner := newFakeRunner(4)
+	m := newTestManager(runner)
+	first := mustAdd(t, m, []TaskSpec{{Name: "a", Prompt: "p", WorkDir: "/shared"}})
+	m.tick()
+	agentID := runner.agentFor(t, first[0].ID)
+
+	// The agent's turn finished (state complete) but, unlike setTaskState's
+	// model, its process has not actually exited yet.
+	runner.completeStillAlive(agentID)
+
+	second := mustAdd(t, m, []TaskSpec{{Name: "b", Prompt: "p", WorkDir: "/shared"}})
+	m.tick()
+
+	if got := stateOf(t, m, first[0].ID); got != StateDone {
+		t.Fatalf("first task state = %s, want done once the engine reports its agent complete", got)
+	}
+	if killed := runner.killedIDs(); len(killed) != 1 || killed[0] != agentID {
+		t.Fatalf("terminated = %v, want [%s] — reconcile must end a completed agent's process itself, not just mark the task done", killed, agentID)
+	}
+	if runner.alive[agentID] {
+		t.Fatal("agent is still marked alive after reconcile observed it complete")
 	}
 	if got := stateOf(t, m, second[0].ID); got != StateRunning {
 		t.Fatalf("second task state = %s, want running: reconcile's termination has to complete before dispatch runs in the same tick", got)

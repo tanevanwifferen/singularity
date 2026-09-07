@@ -47,6 +47,53 @@ func (pidBackend) UnattendedSessionCommand(string) (string, []string, error) {
 	return "true", nil, nil
 }
 
+// resultThenCatBackend is pidBackend plus one twist: before settling into
+// `cat` (blocked on stdin, alive until killed), it emits a line ParseEvent
+// turns into a BackendResult. That is the shape both real backends have —
+// claude runs --print --input-format stream-json and pi runs --mode rpc, and
+// agent.go's own comment says "the pi backend's session process stays
+// resident past a BackendResult event" — and handleResult acts on it by
+// setting AgentComplete immediately, before waitForExit ever gets a chance
+// to confirm the process actually exited. So an agent reaches `complete`
+// with its subprocess still alive on stdin, which is exactly the case
+// reconcile's agentStateComplete branch has to terminate itself rather than
+// infer the engine already did.
+type resultThenCatBackend struct{ pidFile string }
+
+func (b resultThenCatBackend) Name() string   { return "result-then-cat-stub" }
+func (b resultThenCatBackend) Binary() string { return "sh" }
+func (b resultThenCatBackend) Args(string, string, int, []string) []string {
+	return []string{"-c", "echo $$ > " + b.pidFile + "; echo RESULT; exec cat"}
+}
+func (resultThenCatBackend) Env() []string { return nil }
+func (resultThenCatBackend) InitialInput(task, _ string) ([]byte, error) {
+	return []byte(task + "\n"), nil
+}
+func (resultThenCatBackend) FollowUpInput(message, _ string, _ bool) ([]byte, error) {
+	return []byte(message + "\n"), nil
+}
+func (resultThenCatBackend) PostStartCommands(string) [][]byte { return nil }
+func (resultThenCatBackend) ParseEvent(line []byte) ([]*engine.BackendEvent, error) {
+	if strings.TrimSpace(string(line)) == "RESULT" {
+		return []*engine.BackendEvent{{Kind: engine.BackendResult, Subtype: "success"}}, nil
+	}
+	return []*engine.BackendEvent{{Kind: engine.BackendIgnore}}, nil
+}
+func (resultThenCatBackend) OneShotCommand(string) (string, []string) { return "true", nil }
+func (resultThenCatBackend) UnattendedSessionCommand(string) (string, []string, error) {
+	return "true", nil, nil
+}
+
+func newResultThenCatStubEngine(t *testing.T, pidFile string) *engine.Engine {
+	t.Helper()
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	eng := engine.New(4)
+	eng.SetDefaultBackend(resultThenCatBackend{pidFile: pidFile})
+	return eng
+}
+
 func processAlive(pid int) bool { return syscall.Kill(pid, 0) == nil }
 
 // startStubAgent dispatches t through the real EngineRunner and returns the
@@ -157,6 +204,44 @@ func TestEngineRunnerSoftCloseIsNotEnough(t *testing.T) {
 	// WorkDirBusy honest (or dishonest in a new way) with nothing to fail.
 	if r.WorkDirBusy(dir) {
 		t.Fatal("WorkDirBusy = true after KillAgent while the pid is still alive: the directory-freed-early divergence this test exists to pin has disappeared or been masked")
+	}
+}
+
+// TestEngineRunnerCompleteIsNotEnough is TestEngineRunnerSoftCloseIsNotEnough's
+// counterpart for review cycle 6 finding 1: `complete` is reached the same
+// way `killed` is — a state label with no guarantee the process behind it is
+// gone. resultThenCatBackend's agent finishes its turn (handleResult sets
+// AgentComplete) while its subprocess keeps running on stdin, which is
+// exactly the shape a real backend has when it is left open for a follow-up.
+func TestEngineRunnerCompleteIsNotEnough(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "pid")
+	eng := newResultThenCatStubEngine(t, pidFile)
+	r := NewEngineRunner(eng)
+
+	id, pid := startStubAgent(t, r, Task{ID: "t1", Prompt: "p", WorkDir: dir}, pidFile)
+	t.Cleanup(func() { _ = r.TerminateAgent(id) })
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if got := eng.GetAgent(id).Snapshot().State; got == engine.AgentComplete {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("agent %s never reached complete", id)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !processAlive(pid) {
+		t.Fatalf("pid %d died once the agent reported complete; sendInput's doc says a completed agent's process stays alive until explicitly removed", pid)
+	}
+	// The divergence itself, pinned: complete drops the agent from
+	// ActiveAgents just like killed does, so WorkDirBusy reports the
+	// directory free while the pid above is demonstrably still in it. This
+	// is exactly why reconcile has to terminate a completed agent's process
+	// itself rather than infer the engine already did (scheduler.go).
+	if r.WorkDirBusy(dir) {
+		t.Fatal("WorkDirBusy = true while the agent is complete but the pid is still alive: the divergence this test exists to pin has disappeared or been masked")
 	}
 }
 

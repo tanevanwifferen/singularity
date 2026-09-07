@@ -227,6 +227,11 @@ func tailOutput(out []byte) string {
 	return "...(truncated)...\n" + string(out[len(out)-maxSessionOutput:])
 }
 
+// cleanupWorktreeFn is the seam kill() calls through, so a test can assert
+// directly on the preserveWorktree decision (called or not) without needing
+// a real git repository to exercise cleanupWorktree's own effect.
+var cleanupWorktreeFn = cleanupWorktree
+
 // cleanupWorktree removes the worktree and deletes the temporary branch.
 func cleanupWorktree(repoPath, wtPath, branch string) {
 	// Remove the worktree (force in case of uncommitted files)
