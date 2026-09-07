@@ -342,6 +342,13 @@ func mapError(code, msg string) error {
 		return sentinelErr{msg, service.ErrUnavailable}
 	case api.ErrCodeCanceled:
 		return sentinelErr{msg, service.ErrCanceled}
+	case api.ErrCodeBadRequest:
+		// BAD_REQUEST used to be the one code with no sentinel behind it.
+		// The queue changed that: a DAG the manager rejects (unknown
+		// dependency, cycle, missing prompt) arrives as
+		// service.ErrInvalidRequest, and callers need errors.Is to tell a
+		// malformed submission apart from a daemon failure.
+		return sentinelErr{msg, service.ErrInvalidRequest}
 	}
 	if msg == "" {
 		return errors.New("unknown error")

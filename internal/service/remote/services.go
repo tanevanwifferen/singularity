@@ -41,6 +41,7 @@ func New(c *client.Client) *service.Services {
 		Forge:    &remoteForgeService{c: c},
 		Project:  &remoteProjectService{c: c},
 		Agent:    &remoteAgentService{c: c},
+		Queue:    &remoteQueueService{c: c},
 		Jira:     &remoteJiraService{c: c},
 	}
 }

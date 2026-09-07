@@ -74,4 +74,11 @@ type QueueService interface {
 
 	// Resume lifts a pause.
 	Resume(ctx context.Context, queueID string) error
+
+	// RemoveQueue forgets a queue entirely and deletes its persisted state.
+	// Refused with ErrInvalidRequest while any task is still active: a
+	// running agent would keep reporting into a queue that no longer
+	// exists. Cancel or wait first. Returns ErrNotFound for an unknown
+	// queueID.
+	RemoveQueue(ctx context.Context, queueID string) error
 }

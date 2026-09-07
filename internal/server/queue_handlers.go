@@ -143,6 +143,13 @@ func (s *Server) handleQueueResume(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleQueueRemove handles POST /api/queue/remove.
+func (s *Server) handleQueueRemove(w http.ResponseWriter, r *http.Request) {
+	s.withQueueID(w, r, func(queueID string) error {
+		return s.Services.Queue.RemoveQueue(r.Context(), queueID)
+	})
+}
+
 // handleQueueAnswer handles POST /api/queue/answer.
 func (s *Server) handleQueueAnswer(w http.ResponseWriter, r *http.Request) {
 	if !s.requireMethod(w, r, http.MethodPost) || !s.requireServices(w) {

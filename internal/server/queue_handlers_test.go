@@ -83,6 +83,10 @@ func (s *stubQueue) Resume(_ context.Context, queueID string) error {
 	s.gotQueueID = queueID
 	return s.err
 }
+func (s *stubQueue) RemoveQueue(_ context.Context, queueID string) error {
+	s.gotQueueID = queueID
+	return s.err
+}
 
 // newQueueTestServer builds a Server whose only wired capability is the
 // queue stub. server.New is deliberately not used: it constructs an engine
@@ -242,6 +246,12 @@ func TestQueueHandlerValidation(t *testing.T) {
 			"pause without queue_id",
 			func(s *Server) http.HandlerFunc { return s.handleQueuePause },
 			postJSON("/api/queue/pause", `{}`),
+			http.StatusBadRequest,
+		},
+		{
+			"remove without queue_id",
+			func(s *Server) http.HandlerFunc { return s.handleQueueRemove },
+			postJSON("/api/queue/remove", `{}`),
 			http.StatusBadRequest,
 		},
 		{
