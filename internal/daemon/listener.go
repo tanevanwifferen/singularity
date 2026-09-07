@@ -55,6 +55,15 @@ func Listen(spec string) (net.Listener, string, error) {
 }
 
 func listenUnix(path string) (net.Listener, string, error) {
+	// Checked before bind: net.Listen reports an over-long path as a bare
+	// "bind: invalid argument", which tells the user nothing about the real
+	// constraint. A deep SINGULARITY_HOME is the usual way to hit this.
+	if len(path) >= maxSocketPath {
+		return nil, "", fmt.Errorf(
+			"unix socket path too long: %s is %d bytes, but this platform allows at most %d (sun_path is %d bytes including its terminating NUL); "+
+				"set SINGULARITY_HOME to a shorter directory, or listen on TCP with --listen tcp://127.0.0.1:8420",
+			path, len(path), maxSocketPath-1, maxSocketPath)
+	}
 	// Ensure parent dir exists 0700.
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, "", fmt.Errorf("mkdir socket dir: %w", err)
