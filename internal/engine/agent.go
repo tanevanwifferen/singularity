@@ -54,6 +54,15 @@ func (s AgentState) Terminal() bool {
 	return s == AgentComplete || s == AgentError || s == AgentKilled
 }
 
+// Active reports whether the state occupies a slot in the engine's agent pool.
+// Routing counts: smart routing is on by default and an agent sits there for
+// the whole classifier round trip, still holding its slot. This is the single
+// predicate the capacity check and Stats() report from, so the number the daemon
+// enforces can never diverge from the number it reports.
+func (s AgentState) Active() bool {
+	return s == AgentRunning || s == AgentStarting || s == AgentRouting
+}
+
 // Agent wraps a coding-agent subprocess with structured output streaming.
 // The concrete protocol (claude stream-json, pi RPC, …) is delegated to Backend.
 type Agent struct {
@@ -760,11 +769,11 @@ func (a *Agent) Done() <-chan struct{} {
 	return a.done
 }
 
-// IsActive returns true if the agent is still running.
+// IsActive returns true if the agent still occupies a pool slot.
 func (a *Agent) IsActive() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.State == AgentRunning || a.State == AgentStarting || a.State == AgentRouting
+	return a.State.Active()
 }
 
 // formatToolUseSummary creates a concise summary of a tool use event.
