@@ -114,12 +114,7 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 
 	e.mu.Lock()
 	// Check capacity
-	activeCount := 0
-	for _, a := range e.agents {
-		if a.IsActive() {
-			activeCount++
-		}
-	}
+	activeCount := e.activeCountLocked()
 	if activeCount >= e.maxAgents {
 		e.mu.Unlock()
 		return "", fmt.Errorf("agent limit reached (%d/%d active)", activeCount, e.maxAgents)
@@ -336,7 +331,7 @@ func (e *Engine) ListAgents() []*Agent {
 	return agents
 }
 
-// ActiveAgents returns only running/starting agents sorted by ID
+// ActiveAgents returns only agents occupying a pool slot, sorted by ID
 func (e *Engine) ActiveAgents() []*Agent {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -401,6 +396,24 @@ func (e *Engine) PruneStaleWorktrees(repoPath string) {
 	go CleanupStaleWorktrees(repoPath, active)
 }
 
+// ActiveCount returns the number of agents currently occupying a pool slot.
+func (e *Engine) ActiveCount() int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.activeCountLocked()
+}
+
+// activeCountLocked is ActiveCount with e.mu already held.
+func (e *Engine) activeCountLocked() int {
+	n := 0
+	for _, a := range e.agents {
+		if a.IsActive() {
+			n++
+		}
+	}
+	return n
+}
+
 // MaxAgents returns the maximum number of concurrent agents allowed.
 // This value is set at construction and never changes.
 func (e *Engine) MaxAgents() int {
@@ -418,9 +431,11 @@ func (e *Engine) Stats() EngineStats {
 	for _, a := range e.agents {
 		stats.Total++
 		snap := a.Snapshot()
-		switch snap.State {
-		case AgentRunning, AgentStarting:
+		if snap.State.Active() {
 			stats.Active++
+			continue
+		}
+		switch snap.State {
 		case AgentComplete:
 			stats.Completed++
 		case AgentError:

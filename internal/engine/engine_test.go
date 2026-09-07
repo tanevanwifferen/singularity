@@ -239,6 +239,39 @@ func TestEngineStats(t *testing.T) {
 	}
 }
 
+// An agent parked in AgentRouting still holds a pool slot: the capacity check
+// in StartAgent refuses spawns while it is there, so Stats must report it as
+// active or callers computing MaxAgents-Active see slots that do not exist.
+func TestEngineStatsCountsRouting(t *testing.T) {
+	e := New(10)
+
+	agents := map[string]AgentState{
+		"a1": AgentRouting,
+		"a2": AgentStarting,
+		"a3": AgentRunning,
+		"a4": AgentComplete,
+	}
+
+	e.mu.Lock()
+	for id, state := range agents {
+		a := newAgent(id, os.TempDir(), "task", AgentOptions{}, NewClaudeBackend())
+		a.State = state
+		e.agents[id] = a
+	}
+	e.mu.Unlock()
+
+	stats := e.Stats()
+	if stats.Active != 3 {
+		t.Errorf("expected active 3 (routing+starting+running), got %d", stats.Active)
+	}
+	if got := e.ActiveCount(); got != stats.Active {
+		t.Errorf("ActiveCount %d disagrees with Stats().Active %d", got, stats.Active)
+	}
+	if sum := stats.Active + stats.Completed + stats.Errored + stats.Killed; sum != stats.Total {
+		t.Errorf("buckets sum to %d, total is %d", sum, stats.Total)
+	}
+}
+
 func TestShutdown(t *testing.T) {
 	e := New(10)
 
