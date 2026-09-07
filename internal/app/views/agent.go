@@ -558,6 +558,22 @@ func (v *AgentView) selectAgent(info AgentInfo) {
 	v.refreshSelectedAgentOutput()
 }
 
+// SelectAgentByID moves the cursor onto the agent with the given ID and
+// opens its output pane, reporting whether the agent was found. It is how
+// the app's OpenAgentMsg handler lands on the agent a flow tree's step
+// named.
+func (v *AgentView) SelectAgentByID(id string) bool {
+	for i, a := range v.filter.FilteredItems() {
+		if a.ID == id {
+			v.filter.SelectAt(i)
+			v.selectAgent(a)
+			v.focus = focusOutput
+			return true
+		}
+	}
+	return false
+}
+
 // deselectAgent closes the output pane.
 func (v *AgentView) deselectAgent() {
 	v.selectedAgent = nil
