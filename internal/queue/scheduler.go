@@ -1,7 +1,6 @@
 package queue
 
 import (
-	"errors"
 	"log"
 	"time"
 )
@@ -16,23 +15,45 @@ func (m *Manager) Start() {
 }
 
 // stopWarnAfter is how long Stop waits before telling the operator why the
-// daemon is taking its time. It is a warning, not a deadline — see Stop.
-const stopWarnAfter = 2 * time.Second
+// daemon is taking its time; stopDrainTimeout is how long it waits before
+// giving up. See Stop for where the number comes from.
+const (
+	stopWarnAfter = 2 * time.Second
 
-// Stop shuts the scheduler down and waits for the goroutine to exit.
-// Running agents are left alone — they belong to the engine, which has its
-// own shutdown path; the queue only stops making new decisions.
+	// stopDrainTimeout has to stay under the caller's own grace period, and
+	// under what is left of it by the time Stop is reached: `singularity
+	// daemon stop` SIGTERMs and SIGKILLs 10s later, and daemon.Run spends
+	// up to 5s draining HTTP before this and up to 2s waiting for the
+	// listener after it. Three seconds is what that budget leaves with room
+	// for eng.Shutdown, which is in-memory signalling and does not need
+	// much. Deliberately shorter than a slow `git worktree add` can take:
+	// the point is not to outwait the spawn, it is to make sure the engine
+	// teardown and socket cleanup still happen when we cannot.
+	stopDrainTimeout = 3 * time.Second
+)
+
+// Stop shuts the scheduler down and waits for the goroutine to exit. It
+// reports whether the wait completed. Running agents are left alone — they
+// belong to the engine, which has its own shutdown path; the queue only
+// stops making new decisions.
 //
-// The wait is unbounded on purpose. It used to give up after 2s and return
-// anyway, which meant the caller went straight on to eng.Shutdown() while
-// the dispatch goroutine was still inside StartTask — two goroutines tearing
-// down and building up the same engine agent. Cancelling runCtx first is
-// what makes an unbounded wait safe: every spawn not yet started is refused
-// immediately, so the longest Stop can block is the single spawn already in
-// flight, and blocking for that is the correct behaviour rather than a
-// hazard. A warning is logged if that one spawn takes unusually long, so a
-// slow shutdown is diagnosable instead of silent.
-func (m *Manager) Stop() {
+// Cancelling runCtx before closing stop is what makes the wait short in
+// practice: every spawn not yet started is refused immediately, so the only
+// thing Stop can be waiting on is the single spawn already in flight. That
+// ordering also fixes what the timeout used to break — returning early let
+// the caller run eng.Shutdown() while the dispatch goroutine was still
+// inside StartTask, two goroutines tearing down and building up the same
+// engine agent.
+//
+// The bound is a backstop for the one case cancellation cannot reach: a
+// spawn already past its context check and stuck in `git worktree add` on a
+// large repo, or in os.Stat on a wedged mount. Waiting for that
+// unconditionally trades a narrow race for a much worse failure — the
+// daemon is SIGKILLed at the end of its grace period, so eng.Shutdown never
+// runs (every agent orphaned) and the socket file is left behind. Giving up
+// keeps the ordered shutdown at the cost of that narrow window, and says so
+// in the log, which is the trade the project prefers.
+func (m *Manager) Stop() bool {
 	// Order matters: cancel before closing stop. The dispatch loop reads
 	// runCtx to decide what to do with a spawn that raced the shutdown, and
 	// a claim released via the stop channel while runCtx still looked live
@@ -43,19 +64,34 @@ func (m *Manager) Stop() {
 	})
 	if !m.started.Load() {
 		// Never started, so nothing will ever close m.stopped. Waiting
-		// would block forever rather than the old two seconds.
-		return
+		// would block until the deadline for no reason.
+		return true
 	}
 	warn := time.NewTimer(stopWarnAfter)
 	defer warn.Stop()
+	deadline := time.NewTimer(m.stopTimeout())
+	defer deadline.Stop()
 	for {
 		select {
 		case <-m.stopped:
-			return
+			return true
 		case <-warn.C:
 			log.Printf("queue: still waiting for an in-flight agent spawn to return before shutdown")
+		case <-deadline.C:
+			log.Printf("queue: gave up after %s waiting for an in-flight agent spawn; "+
+				"engine shutdown may overlap it — a spawn this slow is usually `git worktree add` on a large repo",
+				m.stopTimeout())
+			return false
 		}
 	}
+}
+
+// stopTimeout is stopDrainTimeout unless a test overrode it.
+func (m *Manager) stopTimeout() time.Duration {
+	if d := m.stopTimeoutOverride; d > 0 {
+		return d
+	}
+	return stopDrainTimeout
 }
 
 // Wake asks the scheduler to run a tick as soon as it can. Non-blocking:
@@ -275,262 +311,11 @@ func (m *Manager) abortQueueLocked(queueID string) []Task {
 		if agentID != "" && m.runner != nil {
 			// Fire-and-forget so the kill does not run under m.mu.
 			go func(id string) {
-				if err := m.runner.KillAgent(id); err != nil {
-					log.Printf("queue: kill agent %s during queue abort: %v", id, err)
+				if err := m.runner.TerminateAgent(id); err != nil {
+					log.Printf("queue: terminate agent %s during queue abort: %v", id, err)
 				}
 			}(agentID)
 		}
 	}
-	return changed
-}
-
-// claim is a task dispatch marked running and is about to spawn. copy is
-// the snapshot taken at claim time, which stillOurClaim compares against
-// once StartTask returns.
-type claim struct {
-	id   string
-	copy Task
-}
-
-// dispatch starts as many ready tasks as capacity allows.
-func (m *Manager) dispatch() []Task {
-	if m.runner == nil {
-		return nil
-	}
-
-	active, max := m.runner.Capacity()
-	if max > 0 && active >= max {
-		// No slot free. Not an error: capacity is backpressure here, which
-		// is the whole reason queued tasks exist.
-		return nil
-	}
-
-	// Pass 1: pick the eligible tasks and the working directories that need
-	// checking, under the lock.
-	m.mu.Lock()
-	var candidates []*Task
-	for _, t := range m.tasks {
-		if t.State != StateReady {
-			continue
-		}
-		if q := m.queues[t.QueueID]; q != nil && q.paused {
-			continue
-		}
-		candidates = append(candidates, t)
-	}
-	ordered := dispatchOrder(candidates)
-	wantDirs := make([]string, 0, len(ordered))
-	seenDir := make(map[string]bool, len(ordered))
-	for _, t := range ordered {
-		if t.Opts.UseWorktree || seenDir[t.WorkDir] {
-			continue
-		}
-		seenDir[t.WorkDir] = true
-		wantDirs = append(wantDirs, t.WorkDir)
-	}
-	m.mu.Unlock()
-
-	if len(ordered) == 0 {
-		return nil
-	}
-
-	// Pass 2: ask the runner which directories are occupied, with the lock
-	// released. WorkDirBusy walks the engine and snapshots every active
-	// agent — one agent mutex each — so calling it inside the claim loop
-	// would park every concurrent queue read behind up to one traversal per
-	// candidate. Same discipline as reconcile's AgentState calls.
-	busy := make(map[string]bool, len(wantDirs))
-	for _, dir := range wantDirs {
-		busy[dir] = m.runner.WorkDirBusy(dir)
-	}
-
-	// Pass 3: claim the tasks to start under the lock, marking them running
-	// before releasing it, so a concurrent tick cannot dispatch the same
-	// task twice. StartTask itself runs unlocked.
-	var claims []claim
-	m.mu.Lock()
-	slots := max - active
-	if max <= 0 {
-		slots = len(ordered)
-	}
-	// Working directories claimed within this tick: WorkDirBusy only sees
-	// agents the engine already knows about, so two tasks on the same
-	// directory in one tick would both pass the check.
-	//
-	// Worktree-isolated tasks are exempt from both checks. The engine gives
-	// each such agent its own worktree and rewrites the agent's WorkDir to
-	// it, so several of them can share a nominal repo path without ever
-	// touching the same files — serialising them would be pure loss.
-	claimedDirs := make(map[string]bool)
-	for _, cand := range ordered {
-		if slots <= 0 {
-			break
-		}
-		// Re-verify: the lock was released for the busy-directory probe, so
-		// the task may have been cancelled or retried in the meantime.
-		t := m.tasks[cand.ID]
-		if t == nil || t.State != StateReady {
-			continue
-		}
-		if q := m.queues[t.QueueID]; q != nil && q.paused {
-			continue
-		}
-		if !t.Opts.UseWorktree {
-			if claimedDirs[t.WorkDir] || busy[t.WorkDir] {
-				continue
-			}
-			claimedDirs[t.WorkDir] = true
-		}
-		t.Attempts++
-		t.State = StateRunning
-		t.Error = ""
-		now := time.Now()
-		t.StartedAt = &now
-		t.EndedAt = nil
-		if q := m.queues[t.QueueID]; q != nil {
-			q.dirty = true
-		}
-		claims = append(claims, claim{id: t.ID, copy: t.Clone()})
-		slots--
-	}
-	m.flushLocked()
-	m.mu.Unlock()
-
-	if len(claims) == 0 {
-		return nil
-	}
-
-	var changed []Task
-	// Agents spawned for a task that stopped being ours mid-spawn. Killed
-	// after the loop, outside the lock: leaving one alive would hold an
-	// engine slot and a working directory that nothing tracks any more.
-	var orphans []string
-
-spawn:
-	for i, c := range claims {
-		select {
-		case <-m.stop:
-			// Shutting down. Everything not yet spawned goes back to ready
-			// so the engine is not handed work it is about to tear down.
-			// This is the fast path only: runCtx makes the guarantee, since
-			// the runner refuses a spawn begun after cancellation whether
-			// or not this check happened to observe the close in time.
-			changed = append(changed, m.releaseClaims(claims[i:])...)
-			break spawn
-		default:
-		}
-
-		agentID, err := m.runner.StartTask(m.runCtx, c.copy)
-
-		m.mu.Lock()
-		t := m.tasks[c.id]
-		if t == nil || !m.stillOurClaim(t, c.copy) {
-			// The task was cancelled, retried or removed while StartTask
-			// was in flight. Its state belongs to whoever changed it; the
-			// only thing left to do is not to leak the agent.
-			m.mu.Unlock()
-			if err == nil {
-				orphans = append(orphans, agentID)
-			}
-			continue
-		}
-		if m.runCtx.Err() != nil {
-			// Stop landed while this spawn was in flight. Handled exactly
-			// like a stale claim, and for the same reason: the claim is no
-			// longer ours to complete. Adopting the agent would record an
-			// AgentID that eng.Shutdown is about to invalidate, and failing
-			// the task would blame it for a shutdown. Back to ready with
-			// the attempt refunded, and kill whatever did get spawned.
-			m.releaseClaimLocked(t)
-			changed = append(changed, t.Clone())
-			m.flushLocked()
-			m.mu.Unlock()
-			if err == nil && agentID != "" {
-				orphans = append(orphans, agentID)
-			}
-			continue
-		}
-		switch {
-		case errors.Is(err, ErrNoCapacity):
-			// The cap refused the spawn — the scheduler's own capacity read
-			// was stale (an agent started outside the queue, or one was
-			// still being routed). That is backpressure, not a failure: the
-			// task goes back in line with its attempt refunded.
-			m.releaseClaimLocked(t)
-		case err != nil:
-			// The engine refused the spawn for a real reason. The attempt
-			// still counts: a task whose workdir no longer exists fails
-			// every time, and refunding the attempt would loop on it
-			// forever.
-			t.StartedAt = nil
-			m.failLocked(t, "spawn failed: "+err.Error())
-		default:
-			t.AgentID = agentID
-		}
-		if q := m.queues[t.QueueID]; q != nil {
-			q.dirty = true
-		}
-		changed = append(changed, t.Clone())
-		m.flushLocked()
-		m.mu.Unlock()
-	}
-
-	for _, id := range orphans {
-		if err := m.runner.KillAgent(id); err != nil {
-			log.Printf("queue: kill orphaned agent %s: %v", id, err)
-		}
-	}
-
-	m.mu.Lock()
-	changed = append(changed, m.refreshBlockedLocked()...)
-	m.flushLocked()
-	m.mu.Unlock()
-
-	return changed
-}
-
-// stillOurClaim reports whether t is the same claim dispatch made, i.e. no
-// operator action landed while StartTask was unlocked. Attempts and
-// StartedAt together identify the claim: a cancel, a retry, a failure or a
-// re-dispatch all move at least one of them. Caller holds m.mu.
-func (m *Manager) stillOurClaim(t *Task, claimed Task) bool {
-	if t.State != StateRunning || t.AgentID != "" || t.Attempts != claimed.Attempts {
-		return false
-	}
-	return t.StartedAt != nil && claimed.StartedAt != nil && t.StartedAt.Equal(*claimed.StartedAt)
-}
-
-// releaseClaimLocked returns a claimed task to ready with its attempt
-// refunded. For the cases where the spawn never happened at all: the agent
-// cap refused it, or the scheduler is stopping. Neither is the task's
-// doing, so spending a retry on it would eventually fail a task that never
-// ran. Caller holds m.mu.
-func (m *Manager) releaseClaimLocked(t *Task) {
-	t.State = StateReady
-	t.Error = ""
-	t.StartedAt = nil
-	if t.Attempts > 0 {
-		t.Attempts--
-	}
-	if q := m.queues[t.QueueID]; q != nil {
-		q.dirty = true
-	}
-}
-
-// releaseClaims releases a batch of unspawned claims, skipping any that are
-// no longer ours.
-func (m *Manager) releaseClaims(claims []claim) []Task {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var changed []Task
-	for _, c := range claims {
-		t := m.tasks[c.id]
-		if t == nil || !m.stillOurClaim(t, c.copy) {
-			continue
-		}
-		m.releaseClaimLocked(t)
-		changed = append(changed, t.Clone())
-	}
-	m.flushLocked()
 	return changed
 }

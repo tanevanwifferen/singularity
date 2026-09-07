@@ -74,6 +74,9 @@ Verbs:
             [--model M] [--effort low|medium|high] [--timeout SECS] [--backend claude|pi]
             [--use-worktree] [--context-file P ...] [--allowed-tools a,b]
             [--max-retries N] [--on-failure block|continue|abort-queue] [--priority N]
+            [--smart-route[=bool]] [--no-smart-route]
+            Smart routing is on by default, same as agents spawn; in a
+            --file document set "smart_route": false per task to opt out.
   add       --file <tasks.json>                        submit a whole DAG in one call
   list      [--queue <id>] [--state s1,s2 ...]         queued tasks
   show      --id <task-id>                             one task in full

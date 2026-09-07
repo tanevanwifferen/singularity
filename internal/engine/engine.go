@@ -249,7 +249,7 @@ func (e *Engine) GetOutputEntries(sessionID string, offset int) ([]OutputEntry, 
 
 // KillAgent soft-closes an agent: marks it as killed but leaves the subprocess alive
 // so follow-up messages can still be sent. The process is only terminated when
-// RemoveAgent is called (i.e., during cleanup).
+// TerminateAgent or RemoveAgent is called (i.e., during cleanup).
 func (e *Engine) KillAgent(sessionID string) error {
 	agent := e.getAgent(sessionID)
 	if agent == nil {
@@ -257,6 +257,22 @@ func (e *Engine) KillAgent(sessionID string) error {
 	}
 	agent.softClose()
 	return nil
+}
+
+// TerminateAgent kills the agent's subprocess and cleans up its worktree,
+// keeping the agent record so its transcript stays readable.
+//
+// This is the call for a caller that means "stop doing this work now": unlike
+// KillAgent the process really is gone afterwards, so the agent stops holding
+// a slot and its working directory, and unlike RemoveAgent the record — and
+// with it the output the caller may still want to explain what happened —
+// survives. The terminated agent reports state killed.
+func (e *Engine) TerminateAgent(sessionID string) error {
+	agent := e.getAgent(sessionID)
+	if agent == nil {
+		return fmt.Errorf("agent not found: %s", sessionID)
+	}
+	return agent.terminate()
 }
 
 // SendInput sends a follow-up message to a running agent's stdin

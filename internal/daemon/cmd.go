@@ -232,10 +232,18 @@ func Run(opts RunOptions) error {
 		log.Printf("http shutdown: %v", err)
 	}
 	// The scheduler stops before the engine so it cannot dispatch a task
-	// into an engine that is already tearing its agents down. Stop waits
-	// for real completion rather than a timeout, so this line genuinely
-	// serialises the two — see queue.Manager.Stop.
-	taskQueue.Stop()
+	// into an engine that is already tearing its agents down. Stop normally
+	// returns at once (it cancels the run context first, so every pending
+	// spawn is refused) and waits at most stopDrainTimeout for one spawn
+	// already in flight — chosen to fit inside `daemon stop`'s 10s grace
+	// period alongside the 5s HTTP drain above and the 2s listener wait
+	// below. Being SIGKILLed here would skip eng.Shutdown and the socket
+	// cleanup entirely, so when the drain does not complete we carry on
+	// deliberately: the overlap risk is one in-flight StartTask, and the
+	// alternative is orphaning every agent.
+	if !taskQueue.Stop() {
+		log.Printf("queue: scheduler did not drain in time; continuing shutdown")
+	}
 	if eng := srv.Engine(); eng != nil {
 		eng.Shutdown()
 	}

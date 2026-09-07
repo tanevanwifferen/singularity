@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sync"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/queue"
@@ -27,6 +28,13 @@ type scriptedRunner struct {
 	states map[string]string // agentID -> engine state name
 	byTask map[string]string // taskID  -> agentID
 	order  []string          // task IDs in dispatch order
+	// alive and dirs model what WorkDirBusy answers from: the engine
+	// reports a directory occupied for as long as an agent's process is
+	// alive in it, which is not the same thing as the agent record being
+	// non-terminal. Keeping them apart is what lets the integration DAGs
+	// exercise directory serialisation instead of being exempt from it.
+	alive map[string]bool
+	dirs  map[string]string // agentID -> cleaned work dir ("" when worktree-isolated)
 	// notify wakes the scheduler so a released task advances immediately
 	// instead of waiting out the fallback tick.
 	notify func()
@@ -37,6 +45,8 @@ func newScriptedRunner(max int) *scriptedRunner {
 		max:    max,
 		states: map[string]string{},
 		byTask: map[string]string{},
+		alive:  map[string]bool{},
+		dirs:   map[string]string{},
 	}
 }
 
@@ -52,6 +62,12 @@ func (r *scriptedRunner) StartTask(ctx context.Context, t queue.Task) (string, e
 	r.seq++
 	id := fmt.Sprintf("a%d", r.seq)
 	r.states[id] = "running"
+	r.alive[id] = true
+	if !t.Opts.UseWorktree {
+		// A worktree-isolated agent gets its own directory from the
+		// engine, so it never collides on the nominal repo path.
+		r.dirs[id] = filepath.Clean(t.WorkDir)
+	}
 	r.byTask[t.ID] = id
 	r.order = append(r.order, t.ID)
 	return id, nil
@@ -82,16 +98,26 @@ func (r *scriptedRunner) activeLocked() int {
 	return n
 }
 
-// WorkDirBusy always reports free: the integration DAGs share one fixture
-// repo on purpose, and serialising them on the directory would hide the
-// dependency ordering the tests are there to observe.
-func (r *scriptedRunner) WorkDirBusy(string) bool { return false }
+// WorkDirBusy reports a directory occupied while a process the runner
+// started is still alive in it, exactly as the engine does.
+func (r *scriptedRunner) WorkDirBusy(dir string) bool {
+	want := filepath.Clean(dir)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id, agentDir := range r.dirs {
+		if r.alive[id] && agentDir == want {
+			return true
+		}
+	}
+	return false
+}
 
 func (r *scriptedRunner) SendInput(string, string) error { return nil }
 
-func (r *scriptedRunner) KillAgent(agentID string) error {
+func (r *scriptedRunner) TerminateAgent(agentID string) error {
 	r.mu.Lock()
 	r.states[agentID] = "killed"
+	r.alive[agentID] = false
 	r.mu.Unlock()
 	if r.notify != nil {
 		r.notify()
@@ -120,6 +146,7 @@ func (r *scriptedRunner) complete(taskID string) {
 	r.mu.Lock()
 	if id, ok := r.byTask[taskID]; ok {
 		r.states[id] = "complete"
+		r.alive[id] = false
 	}
 	r.mu.Unlock()
 	if r.notify != nil {
@@ -134,6 +161,7 @@ func (r *scriptedRunner) releaseAll() {
 	for _, id := range r.byTask {
 		if st := r.states[id]; st == "running" {
 			r.states[id] = "complete"
+			r.alive[id] = false
 		}
 	}
 	r.mu.Unlock()

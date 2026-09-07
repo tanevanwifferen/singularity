@@ -48,7 +48,7 @@ func (r *EngineRunner) StartTask(ctx context.Context, t Task) (string, error) {
 		AllowedTools: t.Opts.AllowedTools,
 		MaxTurns:     t.Opts.MaxTurns,
 		ContextFiles: t.Opts.ContextFiles,
-		SmartRoute:   t.Opts.SmartRoute,
+		SmartRoute:   t.Opts.RouteEnabled(),
 		UseWorktree:  t.Opts.UseWorktree,
 		Summary:      t.Title,
 		WorkflowID:   t.QueueID,
@@ -109,8 +109,18 @@ func (r *EngineRunner) SendInput(agentID, message string) error {
 	return r.eng.SendInput(agentID, message)
 }
 
-// KillAgent soft-closes the agent: the turn ends but the process stays
-// addressable, matching what the agent view's kill action does.
-func (r *EngineRunner) KillAgent(agentID string) error {
-	return r.eng.KillAgent(agentID)
+// TerminateAgent really ends the agent: the subprocess is killed and any
+// worktree cleaned up, leaving the record (and its transcript) in place.
+//
+// engine.KillAgent is deliberately not used here even though it is what the
+// TUI's kill action calls. It soft-closes — State becomes killed while the
+// process keeps running so an operator can carry on talking to the agent —
+// which is right for a human at a terminal and wrong for the queue: the
+// agent stops counting toward ActiveCount and WorkDirBusy the moment it is
+// soft-closed, so the next tick would dispatch a second agent into the
+// directory the first one is still editing. engine.RemoveAgent terminates
+// too but drops the record, which would take the cancelled task's output
+// with it and make reconcile see the agent vanish rather than be killed.
+func (r *EngineRunner) TerminateAgent(agentID string) error {
+	return r.eng.TerminateAgent(agentID)
 }
