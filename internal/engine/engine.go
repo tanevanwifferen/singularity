@@ -207,7 +207,7 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 		go func() {
 			select {
 			case <-time.After(opts.Timeout):
-				agent.kill()
+				agent.kill(false)
 				agent.appendOutput("system", fmt.Sprintf("Agent killed: timeout after %s", opts.Timeout))
 			case <-agent.Done():
 				// Agent finished before timeout
@@ -344,7 +344,7 @@ func (e *Engine) RemoveAgent(sessionID string) error {
 		return fmt.Errorf("agent not found: %s", sessionID)
 	}
 
-	agent.kill()
+	agent.kill(false)
 
 	delete(e.agents, sessionID)
 	return nil
@@ -437,7 +437,7 @@ func (e *Engine) Shutdown() {
 	defer e.mu.Unlock()
 
 	for _, agent := range e.agents {
-		agent.kill()
+		agent.kill(false)
 	}
 	e.agents = make(map[string]*Agent)
 }

@@ -141,14 +141,22 @@ func TestEngineRunnerSoftCloseIsNotEnough(t *testing.T) {
 	if !processAlive(pid) {
 		t.Fatalf("pid %d died: engine.KillAgent is documented to soft-close, so the TUI can keep talking to the agent", pid)
 	}
-	// The agent record now says killed, so ActiveAgents drops it and
-	// WorkDirBusy reports the directory free — while the process above is
-	// demonstrably still in it. Nothing in the scheduler can defend
-	// against that, which is why the runner terminates instead. The
-	// directory state is not asserted here on purpose: it follows from the
-	// engine's active-agent definition, and this test's job is the process.
 	if got := eng.GetAgent(id).Snapshot().State; got != engine.AgentKilled {
 		t.Errorf("state after KillAgent = %s, want killed", got)
+	}
+	// The divergence itself, pinned: the agent record now says killed, so
+	// ActiveAgents drops it and WorkDirBusy reports the directory free,
+	// while the pid above is demonstrably still in it editing files.
+	// Nothing in the scheduler can tell the difference from WorkDirBusy
+	// alone, which is why the queue has to terminate a killed agent's
+	// process itself rather than infer the engine already ended it
+	// (reconcile, scheduler.go). A previous cycle left this unasserted on
+	// the grounds that it "follows from the engine's active-agent
+	// definition" — true, but that is precisely the fact review cycle 5
+	// found nothing was pinning, so a future change could silently make
+	// WorkDirBusy honest (or dishonest in a new way) with nothing to fail.
+	if r.WorkDirBusy(dir) {
+		t.Fatal("WorkDirBusy = true after KillAgent while the pid is still alive: the directory-freed-early divergence this test exists to pin has disappeared or been masked")
 	}
 }
 

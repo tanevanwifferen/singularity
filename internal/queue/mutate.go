@@ -100,6 +100,13 @@ func (m *Manager) Retry(taskID string) error {
 		m.mu.Unlock()
 		return ErrNotRetryable
 	}
+	// Captured before it is cleared below. Every path that lands a task here
+	// already terminates its agent (Cancel, CancelQueue, reconcile's
+	// error/killed branch), so this is normally a no-op — but Retry is
+	// itself a point where the queue stops tracking a task's agent, and that
+	// release must be made explicit rather than assumed true by
+	// construction of every other caller.
+	agentID := t.AgentID
 	t.State = StateBlocked
 	t.Error = ""
 	t.Question = ""
@@ -114,6 +121,12 @@ func (m *Manager) Retry(taskID string) error {
 	changed = append(changed, t.Clone())
 	m.flushLocked()
 	m.mu.Unlock()
+
+	if agentID != "" && m.runner != nil {
+		if err := m.runner.TerminateAgent(agentID); err != nil {
+			log.Printf("queue: terminate agent %s while retrying task %s: %v", agentID, taskID, err)
+		}
+	}
 
 	m.emit(changed)
 	m.Wake()
