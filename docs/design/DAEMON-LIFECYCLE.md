@@ -97,6 +97,16 @@ The socket file is removed on shutdown. On startup, if a stale socket file
 exists, we attempt `net.Dial("unix", path)`; if the dial fails we `os.Remove`
 it before listening. (`net.Listen` refuses to bind over an existing file.)
 
+#### Path length limit
+
+`sockaddr_un.sun_path` is a fixed-size array — 108 bytes on Linux, 104 on
+macOS/BSD — and the kernel copies the path in including its terminating NUL.
+Bind on a longer path fails with `EINVAL`, which surfaces as an opaque
+`bind: invalid argument`. A deep `SINGULARITY_HOME` is the realistic way to
+hit this, so `listenUnix` checks the length itself before binding and reports
+the path, its length, the platform limit, and the two ways out (a shorter
+`SINGULARITY_HOME`, or `--listen tcp://...`).
+
 ### Optional — TCP
 
 ```
@@ -278,6 +288,12 @@ func waitForSocket(path string, timeout time.Duration) error {
     return ErrDaemonStartupTimeout
 }
 ```
+
+A daemon that died on a real fault logged the cause to `daemon.log` before
+exiting, so a spawn that times out reads the tail of that log and includes it
+in the returned error — otherwise a fatal misconfiguration is indistinguishable
+from a merely slow start. The error still wraps `ErrDaemonStartupTimeout`, so
+`errors.Is` keeps matching; with no log content it is returned bare.
 
 `Setsid` (Linux) / `Setpgid` (everywhere) detaches the child from our TTY so
 that hitting Ctrl-C on the TUI later doesn't also kill the daemon. The
