@@ -331,7 +331,7 @@ idempotent for the repos that already cleaned.
 | Noun | Verbs | Key flags |
 |---|---|---|
 | `status` | — | — |
-| `queue` | add list show graph wait cancel retry answer pause resume queues remove | `--file` `--workdir` `--prompt` `--title` `--after` `--queue` `--id` `--state` `--message` `--model` `--effort` `--timeout` `--interval` `--backend` `--use-worktree` `--context-file` `--allowed-tools` `--max-retries` `--on-failure` `--priority` |
+| `queue` | add list show graph wait cancel retry answer pause resume queues remove | `--file` `--workdir` `--prompt` `--title` `--after` `--queue` `--id` `--state` `--message` `--model` `--effort` `--timeout` `--interval` `--backend` `--use-worktree` `--context-file` `--allowed-tools` `--max-retries` `--on-failure` `--priority` `--smart-route` `--no-smart-route` |
 | `agents` | list get spawn resume kill remove output input wait wait-all watch watch-all chat stats | `--id` `--workdir` `--prompt` `--message` `--offset` `--tail` `--last` `--full` `--model` `--effort` `--smart-route` `--max-turns` `--timeout` `--interval` `--any` `--backend` |
 | `project` | list status load info refresh branch-check context workflows | `--name` (load) `--project` (handle) `--branch` |
 | `workflows` | list create remove discover | `--project` `--branch` `--base-dir` (create makes a worktree per repo; remove tears the whole workflow down) |
@@ -414,8 +414,10 @@ in for that host, and prints the exact `tea logins add` command when it is not.
   `queue add --context-file <p> --allowed-tools a,b` (or `opts.context_files` /
   `opts.allowed_tools` in a `--file` document). `agents spawn` still does not
   expose them, so use the queue when a task needs either.
-- `queue add` does not expose `--smart-route`/`--max-turns` as flags; set
-  `opts.smart_route` / `opts.max_turns` in a `--file` document instead.
+- `queue add` does not expose `--max-turns` as a flag; set `opts.max_turns` in
+  a `--file` document instead. (`--smart-route`/`--no-smart-route` are exposed,
+  and routing is on by default just as it is for `agents spawn` — in a `--file`
+  document set `"smart_route": false` per task to opt out.)
 - Human escalation is not implemented. `waiting_human` exists in the task-state
   enum and the queue handles it end to end, but the agent engine has no way to
   report that an agent stopped to ask something, so no task ever reaches that

@@ -118,15 +118,32 @@ func (p FailurePolicy) Valid() bool {
 // set. Timeout is carried in seconds rather than a time.Duration so the
 // persisted JSON stays readable and stable across Go versions.
 type TaskOptions struct {
-	Model        string   `json:"model,omitempty"`
-	Effort       string   `json:"effort,omitempty"`
-	Backend      string   `json:"backend,omitempty"`
-	MaxTurns     int      `json:"max_turns,omitempty"`
-	TimeoutSecs  int      `json:"timeout_secs,omitempty"`
-	UseWorktree  bool     `json:"use_worktree,omitempty"`
-	SmartRoute   bool     `json:"smart_route,omitempty"`
+	Model       string `json:"model,omitempty"`
+	Effort      string `json:"effort,omitempty"`
+	Backend     string `json:"backend,omitempty"`
+	MaxTurns    int    `json:"max_turns,omitempty"`
+	TimeoutSecs int    `json:"timeout_secs,omitempty"`
+	UseWorktree bool   `json:"use_worktree,omitempty"`
+	// SmartRoute is a tri-state: nil means the submitter did not say, and
+	// RouteEnabled decides. A plain bool would make "unset" and "off"
+	// indistinguishable, which is how a queued task ended up running on
+	// bare backend defaults while the same prompt given to `agents spawn`
+	// was routed.
+	SmartRoute   *bool    `json:"smart_route,omitempty"`
 	ContextFiles []string `json:"context_files,omitempty"`
 	AllowedTools []string `json:"allowed_tools,omitempty"`
+}
+
+// RouteEnabled reports whether this task should be smart-routed: route
+// unless told otherwise.
+//
+// The default deliberately does not restate the CLI's precedence rules
+// (resolveSmartRoute: on unless --model or --effort was pinned). Those
+// belong in one place and are being changed on another branch; a task that
+// pins a model is already handled downstream, where engine.StartAgent skips
+// routing whenever a model is set. All this needs to express is intent.
+func (o TaskOptions) RouteEnabled() bool {
+	return o.SmartRoute == nil || *o.SmartRoute
 }
 
 // Task is one unit of queued agent work.

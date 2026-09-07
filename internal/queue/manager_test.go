@@ -13,11 +13,25 @@ import (
 // fakeRunner is an in-memory AgentRunner. Tests drive agent lifecycles by
 // calling setState, so no subprocess is ever spawned.
 type fakeRunner struct {
-	mu        sync.Mutex
-	states    map[string]string // agentID -> state name
-	errs      map[string]string
-	byTask    map[string]string // taskID -> agentID
-	started   []Task
+	mu      sync.Mutex
+	states  map[string]string // agentID -> state name
+	errs    map[string]string
+	byTask  map[string]string // taskID -> agentID
+	started []Task
+	// alive models the OS process behind each agent the fake started,
+	// separately from the state the engine reports. The two really do come
+	// apart: engine.KillAgent soft-closes, moving the state to killed while
+	// the subprocess keeps running (and keeps editing its working
+	// directory). A fake that collapses them cannot fail on the defect that
+	// shipped through two review cycles.
+	alive map[string]bool
+	// agentDirs and agentWorktree record where each started agent works,
+	// so WorkDirBusy answers from the fake's own agents the way the engine
+	// answers from ActiveAgents.
+	agentDirs     map[string]string
+	agentWorktree map[string]bool
+	// busyDirs marks directories occupied by an agent the queue did not
+	// start — the one case the fake cannot derive from its own state.
 	busyDirs  map[string]bool
 	maxAgents int
 	startErr  error
@@ -42,11 +56,14 @@ type fakeRunner struct {
 
 func newFakeRunner(max int) *fakeRunner {
 	return &fakeRunner{
-		states:    map[string]string{},
-		errs:      map[string]string{},
-		byTask:    map[string]string{},
-		busyDirs:  map[string]bool{},
-		maxAgents: max,
+		states:        map[string]string{},
+		errs:          map[string]string{},
+		byTask:        map[string]string{},
+		alive:         map[string]bool{},
+		agentDirs:     map[string]string{},
+		agentWorktree: map[string]bool{},
+		busyDirs:      map[string]bool{},
+		maxAgents:     max,
 	}
 }
 
@@ -82,6 +99,9 @@ func (f *fakeRunner) StartTask(ctx context.Context, t Task) (string, error) {
 	f.seq++
 	id := fmt.Sprintf("a%d", f.seq)
 	f.states[id] = "running"
+	f.alive[id] = true
+	f.agentDirs[id] = filepath.Clean(t.WorkDir)
+	f.agentWorktree[id] = t.Opts.UseWorktree
 	f.byTask[t.ID] = id
 	f.started = append(f.started, t)
 	return id, nil
@@ -121,10 +141,23 @@ func (f *fakeRunner) activeLocked() int {
 	return active
 }
 
+// WorkDirBusy answers the way the engine does: a directory is occupied for
+// as long as some agent's process is alive in it, whatever state the agent
+// record reports. Worktree-isolated agents never match, because the engine
+// rewrites their WorkDir to the private worktree it created for them.
 func (f *fakeRunner) WorkDirBusy(dir string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.busyDirs[filepath.Clean(dir)]
+	want := filepath.Clean(dir)
+	if f.busyDirs[want] {
+		return true
+	}
+	for id, agentDir := range f.agentDirs {
+		if f.alive[id] && !f.agentWorktree[id] && agentDir == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fakeRunner) SendInput(agentID, message string) error {
@@ -138,12 +171,33 @@ func (f *fakeRunner) SendInput(agentID, message string) error {
 	return nil
 }
 
-func (f *fakeRunner) KillAgent(agentID string) error {
+// TerminateAgent models the contract AgentRunner documents: the process is
+// gone when it returns, so the directory is free again.
+func (f *fakeRunner) TerminateAgent(agentID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.killed = append(f.killed, agentID)
 	f.states[agentID] = "killed"
+	f.alive[agentID] = false
 	return nil
+}
+
+// softClose models engine.KillAgent — the TUI's kill — for the tests that
+// need an agent whose record says killed while its process is still there.
+func (f *fakeRunner) softClose(agentID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.states[agentID] = "killed"
+}
+
+// removeAgent models `agents remove`: the record is gone and so is the
+// process.
+func (f *fakeRunner) removeAgent(agentID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.states, agentID)
+	delete(f.alive, agentID)
+	delete(f.agentDirs, agentID)
 }
 
 // setTaskState marks the agent dispatched for taskID as being in state.
@@ -157,6 +211,12 @@ func (f *fakeRunner) setTaskState(t *testing.T, taskID, state, errText string) {
 	}
 	f.states[id] = state
 	f.errs[id] = errText
+	switch state {
+	case "complete", "error":
+		// The engine only reports these once cmd.Wait returned, so the
+		// process really has exited and the directory really is free.
+		f.alive[id] = false
+	}
 }
 
 func (f *fakeRunner) startedIDs() []string {
@@ -466,6 +526,83 @@ func TestWorkDirBusyBlocksSecondTaskInSameDirectory(t *testing.T) {
 	}
 }
 
+// TestRunningAgentBlocksItsDirectoryAcrossTicks is the invariant a
+// hand-set busyDirs map could never test: the agent the runner itself
+// started has to keep its directory occupied on later ticks, not just
+// within the tick that claimed it.
+func TestRunningAgentBlocksItsDirectoryAcrossTicks(t *testing.T) {
+	runner := newFakeRunner(4)
+	m := newTestManager(runner)
+	first := mustAdd(t, m, []TaskSpec{{Name: "a", Prompt: "p", WorkDir: "/shared"}})
+	m.tick()
+	if got := stateOf(t, m, first[0].ID); got != StateRunning {
+		t.Fatalf("first task state = %s, want running", got)
+	}
+
+	// Submitted after the dispatch, so the in-tick claimedDirs set cannot
+	// be what stops it: only the live agent can.
+	second := mustAdd(t, m, []TaskSpec{{Name: "b", Prompt: "p", WorkDir: "/shared/"}})
+	m.tick()
+	if got := stateOf(t, m, second[0].ID); got != StateReady {
+		t.Fatalf("second task state = %s, want ready while an agent holds /shared", got)
+	}
+
+	// And it goes as soon as the directory is genuinely free.
+	runner.setTaskState(t, first[0].ID, "complete", "")
+	m.tick()
+	if got := stateOf(t, m, second[0].ID); got != StateRunning {
+		t.Fatalf("second task state = %s, want running once the directory freed", got)
+	}
+}
+
+// TestCancelledTaskReleasesItsWorkingDirectory is finding 1 as a test: a
+// cancel has to end the agent's process, because the scheduler treats the
+// directory as free the moment the agent stops counting as active. Against
+// a soft-closing runner the second task dispatches into a directory the
+// first agent is still editing.
+func TestCancelledTaskReleasesItsWorkingDirectory(t *testing.T) {
+	runner := newFakeRunner(4)
+	m := newTestManager(runner)
+	tasks := mustAdd(t, m, []TaskSpec{{Name: "a", Prompt: "p", WorkDir: "/shared"}})
+	m.tick()
+	agentID := runner.agentFor(t, tasks[0].ID)
+
+	if err := m.Cancel(tasks[0].ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if runner.WorkDirBusy("/shared") {
+		t.Fatal("/shared is still occupied after the cancel: the agent's process outlived it, so the next dispatch collides with it")
+	}
+	if killed := runner.killedIDs(); len(killed) != 1 || killed[0] != agentID {
+		t.Errorf("terminated = %v, want [%s]", killed, agentID)
+	}
+
+	// Only now is a second task on the same directory safe.
+	second := mustAdd(t, m, []TaskSpec{{Name: "b", Prompt: "p", WorkDir: "/shared"}})
+	m.tick()
+	if got := stateOf(t, m, second[0].ID); got != StateRunning {
+		t.Fatalf("second task state = %s, want running once the cancelled agent is gone", got)
+	}
+}
+
+// TestSoftClosedAgentStillHoldsItsDirectory states the engine behaviour the
+// fake now models, and is the reason the two tests above can fail at all: a
+// killed agent record does not mean a dead process.
+func TestSoftClosedAgentStillHoldsItsDirectory(t *testing.T) {
+	runner := newFakeRunner(4)
+	m := newTestManager(runner)
+	tasks := mustAdd(t, m, []TaskSpec{{Name: "a", Prompt: "p", WorkDir: "/shared"}})
+	m.tick()
+
+	runner.softClose(runner.agentFor(t, tasks[0].ID))
+	if !runner.WorkDirBusy("/shared") {
+		t.Fatal("a soft-closed agent must still occupy its directory: engine.KillAgent leaves the subprocess running")
+	}
+	if active, _ := runner.Capacity(); active != 0 {
+		t.Errorf("active = %d, want 0 — a soft-closed agent stops counting toward the cap, which is exactly the trap", active)
+	}
+}
+
 func TestWorktreeTasksShareANominalWorkDir(t *testing.T) {
 	runner := newFakeRunner(4)
 	m := newTestManager(runner)
@@ -629,9 +766,7 @@ func TestVanishedAgentFailsItsTask(t *testing.T) {
 
 	m.tick()
 	// Simulate `agents remove` on a queue-owned agent.
-	runner.mu.Lock()
-	delete(runner.states, runner.byTask[id])
-	runner.mu.Unlock()
+	runner.removeAgent(runner.agentFor(t, id))
 	m.tick()
 
 	if got := stateOf(t, m, id); got != StateFailed {
@@ -1148,6 +1283,18 @@ func taskIDsOf(tasks []Task) []string {
 		out = append(out, t.ID)
 	}
 	return out
+}
+
+// agentFor returns the agent the fake dispatched for taskID.
+func (f *fakeRunner) agentFor(t *testing.T, taskID string) string {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id, ok := f.byTask[taskID]
+	if !ok {
+		t.Fatalf("no agent dispatched for task %s", taskID)
+	}
+	return id
 }
 
 // killedIDs snapshots the agents the fake was asked to kill.

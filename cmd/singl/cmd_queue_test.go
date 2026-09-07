@@ -19,7 +19,8 @@ func TestParseBatchFile(t *testing.T) {
 	    {"name":"impl","title":"implement","workdir":"/w/api","prompt":"do it",
 	     "opts":{"model":"sonnet","effort":"medium","timeout_secs":1800,"use_worktree":true},
 	     "priority":2,"max_retries":1,"on_failure":"continue"},
-	    {"name":"review","workdir":"/w/api","prompt":"review it","after":["impl"]},
+	    {"name":"review","workdir":"/w/api","prompt":"review it","after":["impl"],
+	     "opts":{"smart_route":false}},
 	    {"queue":"other","workdir":"/w/web","prompt":"unrelated"}
 	  ]
 	}`
@@ -44,6 +45,22 @@ func TestParseBatchFile(t *testing.T) {
 	}
 	if impl.Priority != 2 || impl.MaxRetries != 1 || impl.OnFailure != service.FailContinue {
 		t.Errorf("impl policy fields = %+v", impl)
+	}
+
+	// Routing is a tri-state on the wire: a task that says nothing is
+	// routed (RouteEnabled decides), and one that says false is not. A
+	// plain bool would collapse the two.
+	if impl.Opts.SmartRoute != nil {
+		t.Errorf("impl smart_route = %v, want unset when the document is silent", *impl.Opts.SmartRoute)
+	}
+	if !impl.Opts.RouteEnabled() {
+		t.Error("a task that did not mention routing must still be routed")
+	}
+	if specs[1].Opts.SmartRoute == nil || *specs[1].Opts.SmartRoute {
+		t.Errorf("review smart_route = %v, want an explicit false", specs[1].Opts.SmartRoute)
+	}
+	if specs[1].Opts.RouteEnabled() {
+		t.Error("smart_route=false in the document was ignored")
 	}
 
 	// Local names travel through untouched: the daemon resolves them to

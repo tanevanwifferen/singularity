@@ -569,6 +569,37 @@ func (a *Agent) softClose() {
 	}
 }
 
+// terminate ends the agent for good: the subprocess is killed, any worktree
+// is cleaned up, and the record is kept so the transcript stays readable.
+//
+// It differs from softClose in that the process does not survive, and from
+// kill in that the state is set even when no subprocess was ever started.
+// That last part matters for an agent killed while it is still routing: kill
+// alone returns early on a nil cmd, leaving the record in AgentRouting, where
+// IsActive keeps reporting it as live forever — holding an engine slot and
+// its working directory against an agent that will never run. Setting the
+// state also makes the pending start() refuse, so the routing goroutine
+// cannot resurrect it after the caller believed it gone.
+func (a *Agent) terminate() error {
+	a.mu.Lock()
+	changed := false
+	if a.State != AgentKilled && a.State != AgentError {
+		a.State = AgentKilled
+		if a.EndedAt == nil {
+			now := time.Now()
+			a.EndedAt = &now
+		}
+		changed = true
+	}
+	a.mu.Unlock()
+
+	err := a.kill()
+	if changed && a.notify != nil {
+		a.notify()
+	}
+	return err
+}
+
 // kill terminates the agent subprocess and cleans up any worktree.
 func (a *Agent) kill() error {
 	a.mu.Lock()

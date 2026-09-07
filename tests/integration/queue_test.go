@@ -66,10 +66,16 @@ func TestQueueDAGRoundTrip(t *testing.T) {
 	ctx, cancel := shortCtx(t)
 	defer cancel()
 
+	// The two middle tasks are concurrent, so they need a directory each:
+	// one agent per working directory is enforced all the way through the
+	// daemon, and two siblings sharing a path would serialise rather than
+	// run together.
+	leftRepo, rightRepo := repoFixture(t), repoFixture(t)
+
 	added, err := d.Client.QueueAdd(ctx, []api.TaskSpec{
 		{Name: "root", Title: "root", Prompt: "p", WorkDir: repo},
-		{Name: "left", Title: "left", Prompt: "p", WorkDir: repo, After: []string{"root"}},
-		{Name: "right", Title: "right", Prompt: "p", WorkDir: repo, After: []string{"root"}},
+		{Name: "left", Title: "left", Prompt: "p", WorkDir: leftRepo, After: []string{"root"}},
+		{Name: "right", Title: "right", Prompt: "p", WorkDir: rightRepo, After: []string{"root"}},
 		{Name: "join", Title: "join", Prompt: "p", WorkDir: repo, After: []string{"left", "right"}},
 	})
 	if err != nil {
@@ -150,6 +156,43 @@ func TestQueueDAGRoundTrip(t *testing.T) {
 	if info.Done != 4 || info.Total != 4 {
 		t.Errorf("queue info done/total = %d/%d, want 4/4", info.Done, info.Total)
 	}
+}
+
+// TestQueueSerialisesTasksSharingAWorkDir pins the one-agent-per-directory
+// invariant end to end, and that a cancel really releases the directory
+// rather than only marking the task terminal. Two independent tasks, one
+// path: the second must wait, and it must be waiting on the agent, not on a
+// dependency it does not have.
+func TestQueueSerialisesTasksSharingAWorkDir(t *testing.T) {
+	d := startTestDaemon(t)
+	repo := repoFixture(t)
+
+	ctx, cancel := shortCtx(t)
+	defer cancel()
+
+	added, err := d.Client.QueueAdd(ctx, []api.TaskSpec{
+		{Name: "first", Prompt: "p", WorkDir: repo},
+		{Name: "second", Prompt: "p", WorkDir: repo},
+	})
+	if err != nil {
+		t.Fatalf("QueueAdd: %v", err)
+	}
+	first, second := added[0].ID, added[1].ID
+
+	waitForTaskState(t, d, first, service.TaskRunning)
+	assertTaskState(t, d, second, service.TaskReady)
+	if d.Runner.started(second) {
+		t.Fatal("the second task was dispatched into a directory another agent holds")
+	}
+
+	// Cancelling the first task has to terminate its agent, which is what
+	// frees the directory. A soft close would leave the process there and
+	// the queue would dispatch on top of it.
+	if err := d.Client.QueueCancel(ctx, first); err != nil {
+		t.Fatalf("QueueCancel: %v", err)
+	}
+	waitForTaskState(t, d, first, service.TaskCancelled)
+	waitForTaskState(t, d, second, service.TaskRunning)
 }
 
 // TestQueueCancelSkipsDependentsOverTheWire pins the other half of the

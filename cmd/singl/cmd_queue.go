@@ -168,6 +168,10 @@ func runQueueAdd(ctx context.Context, args []string) int {
 	fs.Var(&after, "after", "task ID this task depends on (repeatable, or comma-separated)")
 	model := fs.String("model", "", "model override")
 	effort := fs.String("effort", "", "effort level: low|medium|high")
+	// Shared with `agents spawn` on purpose: a queued task has to be routed
+	// the same way the same prompt spawned directly would be, and reusing
+	// the helper means it stays that way when the precedence rules change.
+	smartRoute := smartRouteFlags(fs)
 	timeout := fs.Int("timeout", 0, "agent timeout in seconds (0 = daemon default)")
 	backend := fs.String("backend", "", "agent backend: claude or pi (default: daemon default)")
 	useWorktree := fs.Bool("use-worktree", false, "run the task in its own git worktree (exempts it from the one-agent-per-directory rule)")
@@ -220,6 +224,7 @@ func runQueueAdd(ctx context.Context, args []string) int {
 		if err != nil {
 			return die(err)
 		}
+		route := smartRoute(*model, *effort)
 		specs = []api.TaskSpec{{
 			QueueID: *queueID,
 			Title:   *title,
@@ -232,6 +237,7 @@ func runQueueAdd(ctx context.Context, args []string) int {
 				Backend:      *backend,
 				TimeoutSecs:  *timeout,
 				UseWorktree:  *useWorktree,
+				SmartRoute:   &route,
 				ContextFiles: contextFiles,
 				AllowedTools: allowedTools,
 			},
