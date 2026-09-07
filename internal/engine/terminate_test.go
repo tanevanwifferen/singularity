@@ -535,3 +535,61 @@ func TestTerminatePreservesTheWorktreeOnlyForCompleteOrError(t *testing.T) {
 		})
 	}
 }
+
+// TestShutdownWhileRoutingStartsNoProcess is review cycle 9 finding 3: the
+// Shutdown half of b03f146's terminate()-over-kill(false) fix has no test of
+// its own. Reverting just that one line (Shutdown back to a bare
+// kill(false), leaving RemoveAgent and the timeout goroutine untouched)
+// leaves the whole suite green. Mirrors
+// TestRemoveAgentWhileRoutingStartsNoProcess and
+// TestTimeoutDuringRoutingStopsTheAgent: an agent still being smart-routed
+// has no subprocess yet, so kill's nil-cmd branch would leave it in
+// AgentRouting — not terminal, done not closed — and the classifier
+// returning after the daemon believes everything is torn down would start a
+// real, unbounded process in a directory nothing tracks any more.
+func TestShutdownWhileRoutingStartsNoProcess(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "pid")
+	e := New(2)
+
+	id, err := e.StartAgent(dir, "task", AgentOptions{
+		Backend:    slowRouteBackend{pidFile: pidFile},
+		SmartRoute: true,
+	})
+	if err != nil {
+		t.Fatalf("StartAgent: %v", err)
+	}
+	a := e.GetAgent(id)
+
+	if got := a.Snapshot().State; got != AgentRouting {
+		t.Fatalf("state right after StartAgent = %s, want routing", got)
+	}
+
+	e.Shutdown()
+
+	if got := a.Snapshot().State; !got.Terminal() {
+		t.Fatalf("state after Shutdown while routing = %s, want terminal", got)
+	}
+	if !a.processExited() {
+		t.Error("processExited() = false after Shutdown while routing — done was never closed")
+	}
+	if err := a.start(); err == nil {
+		t.Error("start() succeeded on an agent shut down while routing — a process could still appear in a directory nothing tracks any more")
+	}
+
+	// Give the classifier (500ms) time to return and, if the bug is present,
+	// call start() for real.
+	time.Sleep(700 * time.Millisecond)
+	if data, err := os.ReadFile(pidFile); err == nil {
+		pid, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+		if pid > 0 && processAlive(pid) {
+			t.Fatalf("pid %d is alive: Shutdown was voided and the classifier started a real, unbounded process", pid)
+		}
+	}
+	if e.WorkDirOccupied(dir) {
+		t.Error("WorkDirOccupied = true after Shutdown fired mid-routing with no process ever started")
+	}
+}

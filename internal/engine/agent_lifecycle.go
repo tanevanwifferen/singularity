@@ -302,6 +302,15 @@ func (a *Agent) softClose() {
 // the label is left as complete/error. Everything else — still running,
 // starting, routing, or already (soft-)killed — gets the full kill(): state
 // becomes killed and the worktree is cleaned up.
+//
+// This is every caller's policy, including RemoveAgent and Shutdown, and
+// that is deliberate, not an oversight: this project treats worktree
+// reclamation as an operator action (the TUI's Worktrees view, or `git
+// worktree remove`/`prune` by hand), not something the engine does on an
+// agent's behalf. Do not "fix" RemoveAgent/Shutdown to force cleanupWorktree
+// regardless of state — that would delete a completed agent's merged
+// worktree and, worse, an errored one's, which is kept precisely so a human
+// can salvage it. See the use_worktree note in cmd/singl/prime.md.
 func (a *Agent) terminate() error {
 	if a.processExited() {
 		return nil
