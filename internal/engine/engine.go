@@ -28,7 +28,7 @@ type AgentOptions struct {
 	MaxTurns     int           // Max conversation turns (0 = unlimited; claude only, pi warns)
 	Timeout      time.Duration // Kill agent after this duration (0 = no timeout)
 	ContextFiles []string      // Files to read and inject into the prompt on startup
-	SmartRoute   bool          // Use cheap model to classify prompt and pick model/effort
+	SmartRoute   bool          // Use cheap model to classify prompt and pick model/effort/summary (skipped when both Model and Effort are pinned)
 	UseWorktree  bool          // Create a git worktree for isolation; merge back on completion
 	Summary      string        // One-line summary for display in agent list (auto-generated if empty)
 	WorkflowID   string        // Optional workflow ID (branch name) this agent belongs to
@@ -54,6 +54,10 @@ type Engine struct {
 	maxAgents      int
 	soundCfg       config.SoundConfig
 	defaultBackend Backend // used when AgentOptions.Backend is nil
+
+	// summarize titles an agent whose caller supplied no summary. It is a
+	// field so tests can inject a stub instead of shelling out to a model.
+	summarize Summarizer
 
 	// Observer callbacks: fired when any agent's state or output changes.
 	// Called from agent goroutines -- must be non-blocking.
@@ -82,6 +86,7 @@ func New(maxAgents int) *Engine {
 		maxAgents:      maxAgents,
 		defaultBackend: NewPiBackend(""),
 		updateTimers:   make(map[string]*time.Timer),
+		summarize:      defaultSummarizer,
 	}
 }
 
@@ -131,12 +136,7 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 
 	e.mu.Lock()
 	// Check capacity
-	activeCount := 0
-	for _, a := range e.agents {
-		if a.IsActive() {
-			activeCount++
-		}
-	}
+	activeCount := e.activeCountLocked()
 	if activeCount >= e.maxAgents {
 		e.mu.Unlock()
 		return "", fmt.Errorf("%w (%d/%d active)", ErrAgentLimit, activeCount, e.maxAgents)
@@ -175,32 +175,57 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 		agent.appendOutput("system", fmt.Sprintf("Worktree created at %s (branch: %s)", agent.worktreePath, agent.worktreeBranch))
 	}
 
-	if opts.SmartRoute && opts.Model == "" {
+	// Route whenever the classifier still has something to contribute. Pinning
+	// the model suppresses only the classifier's model choice — not its effort
+	// choice, and not the summary, which used to disappear with it.
+	if opts.SmartRoute && (opts.Model == "" || opts.Effort == "") {
 		// Route async: show agent immediately, classify in background, then start
 		agent.setState(AgentRouting)
 		agent.appendOutput("system", "Routing via Haiku...")
 		go func() {
+			routed := false
 			route, err := RoutePrompt(task, backend)
 			if err != nil {
 				agent.appendOutput("error", fmt.Sprintf("Smart routing failed (%v); falling back to backend defaults", err))
 			} else {
 				agent.mu.Lock()
-				agent.model = route.Model
-				// An explicit --effort from the user beats the classifier.
+				// An explicit --model / --effort from the user beats the
+				// classifier, one field at a time.
+				if opts.Model == "" {
+					agent.model = route.Model
+				}
 				if opts.Effort == "" {
 					agent.effort = route.Effort
 				}
 				agent.RouteResult = route
 				if route.Summary != "" {
 					agent.Summary = route.Summary
+					routed = true
 				}
 				agent.mu.Unlock()
+				if routed {
+					// The list shows Summary, so the routed title is an
+					// observable change like any other.
+					agent.notifySummary()
+				}
+			}
+			// The classifier already returns a title, so only pay for a
+			// second call when routing produced none.
+			if opts.Summary == "" && !routed {
+				agent.summarizeAsync(e.summarize, backend)
 			}
 			if startErr := agent.start(); startErr != nil {
 				agent.appendOutput("error", fmt.Sprintf("Failed to start agent: %v", startErr))
 			}
 		}()
 	} else {
+		// Summarisation used to be a side effect of the routing decision, so
+		// pinning --model silently left the agent titled with the first line
+		// of its own prompt. It is now independent of routing: this branch is
+		// reached when routing is off or has nothing left to decide.
+		if opts.Summary == "" {
+			agent.summarizeAsync(e.summarize, backend)
+		}
 		if err := agent.start(); err != nil {
 			return "", fmt.Errorf("failed to start agent: %w", err)
 		}
@@ -385,7 +410,7 @@ func (e *Engine) ListAgents() []*Agent {
 	return agents
 }
 
-// ActiveAgents returns only running/starting agents sorted by ID
+// ActiveAgents returns only agents occupying a pool slot, sorted by ID
 func (e *Engine) ActiveAgents() []*Agent {
 	e.mu.RLock()
 	defer e.mu.RUnlock()

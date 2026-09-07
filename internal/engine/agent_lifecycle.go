@@ -59,8 +59,12 @@ func (a *Agent) start() error {
 	a.State = AgentRunning
 
 	if a.RouteResult != nil {
+		// Report what is actually in effect, not just what the classifier
+		// suggested: an explicit --model / --effort overrides its choice per
+		// field, so the two can differ.
 		a.appendOutputLocked("system", fmt.Sprintf("Routed → model=%s effort=%s (%s: %s)",
-			a.RouteResult.Model, a.RouteResult.Effort, a.RouteResult.Category, a.RouteResult.Reason))
+			routedField(a.model, a.RouteResult.Model), routedField(a.effort, a.RouteResult.Effort),
+			a.RouteResult.Category, a.RouteResult.Reason))
 	}
 	a.appendOutputLocked("system", fmt.Sprintf("Agent %s started [%s]", a.ID, a.backend.Name()))
 
@@ -187,6 +191,16 @@ func (a *Agent) closeDone() {
 	a.doneOnce.Do(func() { close(a.done) })
 }
 
+// routedField renders one routed field as "value" when the classifier's
+// suggestion was applied, or "value (pinned, classifier: suggested)" when the
+// caller overrode it.
+func routedField(applied, suggested string) string {
+	if applied == suggested || suggested == "" {
+		return applied
+	}
+	return fmt.Sprintf("%s (pinned, classifier: %s)", applied, suggested)
+}
+
 // sendInput sends a follow-up message to the agent's stdin.
 // Accepts messages to running, completed, or soft-closed agents (process stays
 // alive until explicitly removed via RemoveAgent).
@@ -205,9 +219,11 @@ func (a *Agent) sendInput(message string) error {
 	prevEndedAt := a.EndedAt
 
 	// Resume agent back to running when sending a follow-up
+	resumed := false
 	if a.State == AgentComplete || a.State == AgentKilled {
 		a.State = AgentRunning
 		a.EndedAt = nil
+		resumed = true
 	}
 
 	// isStreaming: was the agent already in a running (mid-response) state
@@ -219,10 +235,7 @@ func (a *Agent) sendInput(message string) error {
 
 	data, err := a.backend.FollowUpInput(message, sid, isStreaming)
 	if err != nil {
-		a.mu.Lock()
-		a.State = prevState
-		a.EndedAt = prevEndedAt
-		a.mu.Unlock()
+		a.restoreState(prevState, prevEndedAt, resumed)
 		return fmt.Errorf("backend FollowUpInput: %w", err)
 	}
 
@@ -230,24 +243,44 @@ func (a *Agent) sendInput(message string) error {
 	defer a.stdinMu.Unlock()
 
 	if a.stdin == nil {
-		a.mu.Lock()
-		a.State = prevState
-		a.EndedAt = prevEndedAt
-		a.mu.Unlock()
+		a.restoreState(prevState, prevEndedAt, resumed)
 		return fmt.Errorf("agent %s stdin not available (process exited)", a.ID)
 	}
 
 	_, err = a.stdin.Write(data)
 	if err != nil {
-		a.mu.Lock()
-		a.State = prevState
-		a.EndedAt = prevEndedAt
-		a.mu.Unlock()
+		a.restoreState(prevState, prevEndedAt, resumed)
 		return fmt.Errorf("write to stdin: %w (process may have exited)", err)
+	}
+
+	// Announce the terminal → running transition on its own, before the input
+	// echo. appendOutput below also notifies, but it drops the notification
+	// (and the entry) when the agent has been soft-closed in the meantime, so
+	// leaning on it would let the resume go unobserved — and observers such as
+	// the daemon's WS broadcast read the state from the snapshot a
+	// notification hands them, not from the entry.
+	if resumed && a.notify != nil {
+		a.notify()
 	}
 
 	a.appendOutput("user_input", truncateForLog(message, promptLogLimit))
 	return nil
+}
+
+// restoreState rolls back the resume transition sendInput made optimistically
+// when the follow-up could not be delivered. The rollback notifies observers
+// only when there was a transition to undo: a concurrent notification may
+// already have published the AgentRunning snapshot, and without a second one
+// observers would keep reporting an agent that never actually restarted.
+func (a *Agent) restoreState(state AgentState, endedAt *time.Time, notifyObservers bool) {
+	a.mu.Lock()
+	a.State = state
+	a.EndedAt = endedAt
+	a.mu.Unlock()
+
+	if notifyObservers && a.notify != nil {
+		a.notify()
+	}
 }
 
 // softClose marks the agent as killed without terminating the subprocess.

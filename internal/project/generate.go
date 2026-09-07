@@ -114,8 +114,11 @@ func findGitRepos(root string) ([]RepoDef, error) {
 				Name:          filepath.Base(path),
 				DefaultBranch: branch,
 			})
-			// Don't recurse into this repo.
-			return filepath.SkipDir
+			// Don't recurse into this repo's own contents, but if this is the
+			// root itself, keep walking so nested sub-repos are still found.
+			if path != root {
+				return filepath.SkipDir
+			}
 		}
 
 		return nil

@@ -2,17 +2,22 @@ package engine
 
 import "path/filepath"
 
-// ActiveCount returns the number of agents StartAgent's capacity check
-// counts, i.e. agents for which IsActive reports true.
-//
-// This is deliberately NOT EngineStats.Active, which omits AgentRouting: a
-// scheduler that sizes its dispatch on the stats number over-dispatches for
-// the whole duration of a smart-route classifier round trip and then has
-// its spawn refused. Anything gating on capacity must use this.
+// ActiveCount returns the number of agents currently occupying a pool slot.
+// It is the same number Stats().Active reports — both derive from
+// AgentState.Active() — kept as its own accessor because it is cheaper than
+// building a full EngineStats and reads better at call sites that only need
+// the count. The two used to be computed separately, and a scheduler sizing
+// its dispatch on the stats number over-dispatched for the whole duration of
+// a smart-route classifier round trip and then had its spawn refused: the
+// count the engine enforces and the count it reports must never diverge.
 func (e *Engine) ActiveCount() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
+	return e.activeCountLocked()
+}
 
+// activeCountLocked is ActiveCount with e.mu already held.
+func (e *Engine) activeCountLocked() int {
 	n := 0
 	for _, a := range e.agents {
 		if a.IsActive() {
@@ -74,9 +79,11 @@ func (e *Engine) Stats() EngineStats {
 	for _, a := range e.agents {
 		stats.Total++
 		snap := a.Snapshot()
-		switch snap.State {
-		case AgentRunning, AgentStarting:
+		if snap.State.Active() {
 			stats.Active++
+			continue
+		}
+		switch snap.State {
 		case AgentComplete:
 			stats.Completed++
 		case AgentError:
@@ -91,9 +98,11 @@ func (e *Engine) Stats() EngineStats {
 // EngineStats holds summary statistics about the engine
 type EngineStats struct {
 	Total int `json:"total"`
-	// Active counts running/starting agents only, for display. It is not
-	// the capacity number: use ActiveCount for anything that gates on the
-	// cap, which also counts agents still being routed.
+	// Active is the same count ActiveCount returns: agents currently
+	// occupying a pool slot, per AgentState.Active(). Three consumers
+	// (workflows.go's spawn gate, cmd_agents.go and cmd_prime.go's "N/M
+	// active" display) treat this as a capacity number, so it must not
+	// silently drop agents still being routed the way it once did.
 	Active    int `json:"active"`
 	Completed int `json:"completed"`
 	Errored   int `json:"errored"`

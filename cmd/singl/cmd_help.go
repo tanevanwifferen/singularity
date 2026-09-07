@@ -53,7 +53,8 @@ Verbs:
   list       [--full]                                     list all agents (compact JSON; --full adds task prompt)
   get        --id <id> [--last N] [--full]                one agent snapshot (+ last N output entries)
   spawn      --workdir <dir> --prompt <task> [--model M] [--effort low|medium|high]
-             [--smart-route] [--max-turns N] [--timeout SECS] [--backend claude|pi]
+             [--smart-route|--no-smart-route] [--max-turns N] [--timeout SECS]
+             [--backend claude|pi]
   resume     --id <id> --message <text> [spawn flags]     new agent inheriting history
   kill       --id <id>                                    terminate the agent subprocess
   remove     --id <id>                                    drop the agent from the registry
@@ -66,6 +67,10 @@ Verbs:
   watch-all                                               stream all agents' events (no --json)
   chat       --id <id> --message <text>                   send input then stream the response (no --json)
   stats                                                   engine-wide counters
+
+Smart routing (Haiku picks model, effort and the display summary) is on by
+default; --model / --effort override only that part of it, and it is skipped
+only when both are pinned. --no-smart-route turns it off entirely.
 `,
 	"queue": `Usage: singl queue <verb> [flags]
 

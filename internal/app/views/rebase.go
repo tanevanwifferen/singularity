@@ -547,26 +547,32 @@ func (v *RebaseView) abortRebase() tea.Cmd {
 	}
 }
 
+// operationStyle returns the lipgloss style used to render a rebase
+// operation badge, based on the operation type.
+func operationStyle(op service.RebaseOperation, th theme.Theme) lipgloss.Style {
+	switch op {
+	case service.RebasePick:
+		return th.DashboardAccentStyle // green
+	case service.RebaseReword:
+		return th.InfoStyle // blue
+	case service.RebaseEdit:
+		return th.WarningStyle // yellow
+	case service.RebaseSquash:
+		return th.DashboardErrorStyle // red
+	case service.RebaseFixup:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("227")) // gold
+	case service.RebaseDrop:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Strikethrough(true) // gray strikethrough
+	}
+	return th.StatsStyle
+}
+
 // renderCommitItem renders a single commit item in the list.
 func (v *RebaseView) renderCommitItem(commit service.RebaseCommit, index int, selected bool) string {
 	th := theme.GetTheme()
 
 	// Determine operation color
-	opStyle := th.StatsStyle
-	switch commit.Operation {
-	case service.RebasePick:
-		opStyle = th.DashboardAccentStyle // green
-	case service.RebaseReword:
-		opStyle = th.InfoStyle // blue
-	case service.RebaseEdit:
-		opStyle = th.WarningStyle // yellow
-	case service.RebaseSquash:
-		opStyle = th.DashboardErrorStyle // red
-	case service.RebaseFixup:
-		opStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("227")) // gold
-	case service.RebaseDrop:
-		opStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Strikethrough(true) // gray strikethrough
-	}
+	opStyle := operationStyle(commit.Operation, th)
 
 	namePrefix := "  "
 	if selected {
@@ -614,21 +620,7 @@ func (v *RebaseView) renderTodoList() string {
 
 	for i, commit := range v.commits {
 		// Operation badge with color
-		opStyle := th.StatsStyle
-		switch commit.Operation {
-		case service.RebasePick:
-			opStyle = th.DashboardAccentStyle
-		case service.RebaseReword:
-			opStyle = th.InfoStyle
-		case service.RebaseEdit:
-			opStyle = th.WarningStyle
-		case service.RebaseSquash:
-			opStyle = th.DashboardErrorStyle
-		case service.RebaseFixup:
-			opStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("227"))
-		case service.RebaseDrop:
-			opStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Strikethrough(true)
-		}
+		opStyle := operationStyle(commit.Operation, th)
 
 		opStr := fmt.Sprintf("[%s]", commit.Operation.String())
 		if i == v.cursor {

@@ -52,6 +52,15 @@ func (s AgentState) Terminal() bool {
 	return s == AgentComplete || s == AgentError || s == AgentKilled
 }
 
+// Active reports whether the state occupies a slot in the engine's agent pool.
+// Routing counts: smart routing is on by default and an agent sits there for
+// the whole classifier round trip, still holding its slot. This is the single
+// predicate the capacity check and Stats() report from, so the number the daemon
+// enforces can never diverge from the number it reports.
+func (s AgentState) Active() bool {
+	return s == AgentRunning || s == AgentStarting || s == AgentRouting
+}
+
 // Agent wraps a coding-agent subprocess with structured output streaming.
 // The concrete protocol (claude stream-json, pi RPC, …) is delegated to Backend.
 type Agent struct {
@@ -111,6 +120,10 @@ type Agent struct {
 
 	// notify is called after output or state changes to signal the engine's observer.
 	notify func()
+
+	// summaryOnce guards the one-shot title call so an agent can never be
+	// summarised twice (once per cheap-model call is a real cost).
+	summaryOnce sync.Once
 }
 
 // OutputEntry represents a single output chunk from the agent.

@@ -294,6 +294,53 @@ func (m *Model) registerCommonViews(router *Router, repoPath string, startFKey i
 	return agentView
 }
 
+// gitSubmenuItems returns the git operations submenu items shared between
+// single-repo and project modes. stashViewName/stashLabel let callers swap
+// in the project-specific stash view without duplicating the rest of the
+// list, since the two modes otherwise agree on keys, labels, and order.
+func gitSubmenuItems(stashViewName, stashLabel string) []components.SubmenuItem {
+	return []components.SubmenuItem{
+		{Key: "s", Label: "Sync (push/pull/fetch)", ViewName: "Sync"},
+		{Key: "b", Label: "Branch Compare", ViewName: "BranchCompare"},
+		{Key: "t", Label: stashLabel, ViewName: stashViewName},
+		{Key: "r", Label: "Rebase", ViewName: "Rebase"},
+		{Key: "w", Label: "Worktrees", ViewName: "Worktrees"},
+		{Key: "p", Label: "Pipeline", ViewName: "Pipeline"},
+		{Key: "c", Label: "Create PR", ViewName: "CreatePR"},
+	}
+}
+
+// finishRouterSetup installs router as the active router and wires services
+// into every view that supports it. Shared tail step of initRouter and
+// initProjectRouter.
+func (m *Model) finishRouterSetup(router *Router) {
+	m.router = router
+
+	// Wire services into every view that supports it.
+	m.router.SetAllServices(m.services)
+}
+
+// wireAgentJiraConfig pushes the loaded Jira config into the AgentView, if
+// one is registered on the current router. Must run after finishRouterSetup
+// so getAgentView() can find the view. Shared by initRouter and
+// initProjectRouter.
+func (m *Model) wireAgentJiraConfig() {
+	if m.cfg != nil && m.cfg.Jira.BaseURL != "" {
+		if av := m.getAgentView(); av != nil {
+			av.SetJiraConfig(m.cfg.Jira)
+		}
+	}
+}
+
+// notifyRouterSize pushes the current layout's available view dimensions to
+// the router. Shared tail step of initRouter and initProjectRouter.
+func (m *Model) notifyRouterSize() {
+	if m.layout != nil {
+		vw, vh := m.layout.AvailableViewDimensions()
+		m.router.NotifySize(vw, vh)
+	}
+}
+
 // initRouter initializes the view router with available views.
 func (m *Model) initRouter() {
 	// Create the overview view as the first view (landing page)
@@ -305,15 +352,7 @@ func (m *Model) initRouter() {
 	m.registerCommonViews(router, m.repoPath, 2)
 
 	// Build git submenu items
-	gitItems := []components.SubmenuItem{
-		{Key: "s", Label: "Sync (push/pull/fetch)", ViewName: "Sync"},
-		{Key: "b", Label: "Branch Compare", ViewName: "BranchCompare"},
-		{Key: "t", Label: "Stashes", ViewName: "Stashes"},
-		{Key: "r", Label: "Rebase", ViewName: "Rebase"},
-		{Key: "w", Label: "Worktrees", ViewName: "Worktrees"},
-		{Key: "p", Label: "Pipeline", ViewName: "Pipeline"},
-		{Key: "c", Label: "Create PR", ViewName: "CreatePR"},
-	}
+	gitItems := gitSubmenuItems("Stashes", "Stashes")
 	if m.cfg != nil && m.cfg.Jira.Enabled {
 		jiraView := views.NewJiraView(m.cfg.Jira)
 		jiraView.SetRepoPath(m.repoPath)
@@ -323,24 +362,14 @@ func (m *Model) initRouter() {
 
 	router.RegisterSubmenu("g", "Git", gitItems)
 
-	m.router = router
-
-	// Wire services into every view that supports it.
-	m.router.SetAllServices(m.services)
+	m.finishRouterSetup(router)
 
 	// Wire Jira config to views that support the Jira picker
 	// (must happen after router is set so getAgentView() works)
-	if m.cfg != nil && m.cfg.Jira.BaseURL != "" {
-		if av := m.getAgentView(); av != nil {
-			av.SetJiraConfig(m.cfg.Jira)
-		}
-	}
+	m.wireAgentJiraConfig()
 
 	// Notify router of initial window size
-	if m.layout != nil {
-		vw, vh := m.layout.AvailableViewDimensions()
-		m.router.NotifySize(vw, vh)
-	}
+	m.notifyRouterSize()
 }
 
 // initProjectRouter initializes the router with project-level views for multi-repo mode.
@@ -398,17 +427,10 @@ func (m *Model) initProjectRouter() {
 	router.Register("ProjectStash", projectStashView)
 
 	// Build git submenu items (project-specific items first, then shared)
-	projGitItems := []components.SubmenuItem{
+	projGitItems := append([]components.SubmenuItem{
 		{Key: "a", Label: "Sync All Repos", ViewName: "ProjectSync"},
 		{Key: "d", Label: "Project Diff (open changes)", ViewName: "ProjectDiff"},
-		{Key: "s", Label: "Sync (push/pull/fetch)", ViewName: "Sync"},
-		{Key: "b", Label: "Branch Compare", ViewName: "BranchCompare"},
-		{Key: "t", Label: "Project Stashes", ViewName: "ProjectStash"},
-		{Key: "r", Label: "Rebase", ViewName: "Rebase"},
-		{Key: "w", Label: "Worktrees", ViewName: "Worktrees"},
-		{Key: "p", Label: "Pipeline", ViewName: "Pipeline"},
-		{Key: "c", Label: "Create PR", ViewName: "CreatePR"},
-	}
+	}, gitSubmenuItems("ProjectStash", "Project Stashes")...)
 	if m.cfg != nil && m.cfg.Jira.Enabled {
 		jiraView := views.NewJiraView(m.cfg.Jira)
 		jiraView.SetProject(m.proj)
@@ -418,26 +440,18 @@ func (m *Model) initProjectRouter() {
 
 	router.RegisterSubmenu("g", "Git", projGitItems)
 
-	m.router = router
-
-	// Wire services into every view that supports it.
-	m.router.SetAllServices(m.services)
+	m.finishRouterSetup(router)
 
 	// Wire Jira config to views that support the Jira picker
+	m.wireAgentJiraConfig()
 	if m.cfg != nil && m.cfg.Jira.BaseURL != "" {
-		if av := m.getAgentView(); av != nil {
-			av.SetJiraConfig(m.cfg.Jira)
-		}
 		if wv := m.getWorkflowsView(); wv != nil {
 			wv.SetJiraConfig(m.cfg.Jira)
 		}
 	}
 
 	// Notify router of initial window size
-	if m.layout != nil {
-		vw, vh := m.layout.AvailableViewDimensions()
-		m.router.NotifySize(vw, vh)
-	}
+	m.notifyRouterSize()
 }
 
 // switchToProjectRepo updates all single-repo views to point at the repo at the given index.
@@ -544,90 +558,120 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case views.AgentUpdateMsg:
-		// Agent service notified us of an agent state/output change.
-		if av := m.getAgentView(); av != nil {
-			return m, func() tea.Msg {
-				av.LoadAgents()
-				return views.RefreshDoneMsg{}
-			}
-		}
-		return m, nil
+		return m.handleAgentUpdateMsg(msg)
 	case ConnectionStatusMsg:
-		m.connStatus = msg.Status
-		if msg.Status.Connected {
-			m.statusMsg = fmt.Sprintf("Connected to %s", msg.Status.URL)
-		} else if msg.Status.Reconnecting {
-			m.statusMsg = fmt.Sprintf("Reconnecting to %s...", msg.Status.URL)
-		} else if msg.Status.Error != "" {
-			m.errorMsg = fmt.Sprintf("Connection error: %s", msg.Status.Error)
-		}
-		return m, nil
+		return m.handleConnectionStatusMsg(msg)
 	case views.OpenPRForBranchMsg:
-		// Navigate to PR creation view with the worktree branch pre-selected
-		if m.router != nil {
-			view := m.router.GetView("CreatePR")
-			if prv, ok := view.(*views.PRView); ok {
-				prv.SetPendingSourceBranch(msg.Branch)
-			}
-			m.router.SwitchTo("CreatePR")
-		}
-		return m, func() tea.Msg { return views.RefreshMsg{} }
+		return m.handleOpenPRForBranchMsg(msg)
 	case views.RefreshMsg:
-		// Forward refresh to active view
-		if m.router != nil {
-			if av, ok := m.router.ActiveView().(interface{ Refresh() error }); ok {
-				av.Refresh()
-			}
-		}
-		return m, nil
+		return m.handleRefreshMsg(msg)
 	case views.ConfigSavedMsg:
-		// Config was saved — reload main config and models config
-		if cfg, err := config.LoadDefaultConfig(); err == nil {
-			m.cfg = cfg
-			// Update Jira config in AgentView if present
-			if av := m.getAgentView(); av != nil {
-				av.SetJiraConfig(cfg.Jira)
-			}
-		}
-		// Reload models config for the engine
-		if m.services != nil && m.services.Agent != nil {
-			// The agent service's engine uses the global models config.
-			// Reload it so new agents pick up the updated model aliases.
-			m.services.Agent.ReloadModelsConfig()
-		}
-		m.statusMsg = "Config reloaded"
-		return m, nil
+		return m.handleConfigSavedMsg(msg)
 	case views.ViewChangeMsg:
-		// Handle view changes, possibly with a specific repo path
-		if msg.RepoPath != "" {
-			// Warn if leaving project mode with an active workflow
-			if m.projectMode {
-				if wv := m.getWorkflowsView(); wv != nil && wv.HasActiveWorkflow() {
-					m.statusMsg = "Warning: leaving project mode will disconnect from active workflow"
-				}
-			}
-			// Drill into single-repo mode for the specified repo
-			m.repoPath = msg.RepoPath
-			m.projectMode = false
-			m.loadRepo()
-		} else if msg.ViewName == "Project" && m.proj != nil {
-			// Return to project overview
-			m.projectMode = true
-			m.loadProject()
-		} else {
-			// Simple view switch — switch and run the new view's Init
-			if m.router != nil {
-				if err := m.router.SwitchTo(msg.ViewName); err == nil {
-					return m, m.router.ActiveView().Init()
-				}
-			}
-		}
-		return m, nil
+		return m.handleViewChangeMsg(msg)
 	}
 
 	// Delegate to router
 	_, cmd := m.router.Update(msg)
 	return m, cmd
+}
+
+// handleAgentUpdateMsg handles a notification from the AgentService that an
+// agent's state or output changed, refreshing the AgentView if present.
+func (m Model) handleAgentUpdateMsg(msg views.AgentUpdateMsg) (tea.Model, tea.Cmd) {
+	if av := m.getAgentView(); av != nil {
+		return m, func() tea.Msg {
+			av.LoadAgents()
+			return views.RefreshDoneMsg{}
+		}
+	}
+	return m, nil
+}
+
+// handleConnectionStatusMsg updates connection status/state and any resulting
+// status or error message.
+func (m Model) handleConnectionStatusMsg(msg ConnectionStatusMsg) (tea.Model, tea.Cmd) {
+	m.connStatus = msg.Status
+	if msg.Status.Connected {
+		m.statusMsg = fmt.Sprintf("Connected to %s", msg.Status.URL)
+	} else if msg.Status.Reconnecting {
+		m.statusMsg = fmt.Sprintf("Reconnecting to %s...", msg.Status.URL)
+	} else if msg.Status.Error != "" {
+		m.errorMsg = fmt.Sprintf("Connection error: %s", msg.Status.Error)
+	}
+	return m, nil
+}
+
+// handleOpenPRForBranchMsg navigates to PR creation view with the worktree
+// branch pre-selected.
+func (m Model) handleOpenPRForBranchMsg(msg views.OpenPRForBranchMsg) (tea.Model, tea.Cmd) {
+	if m.router != nil {
+		view := m.router.GetView("CreatePR")
+		if prv, ok := view.(*views.PRView); ok {
+			prv.SetPendingSourceBranch(msg.Branch)
+		}
+		m.router.SwitchTo("CreatePR")
+	}
+	return m, func() tea.Msg { return views.RefreshMsg{} }
+}
+
+// handleRefreshMsg forwards a refresh request to the active view.
+func (m Model) handleRefreshMsg(msg views.RefreshMsg) (tea.Model, tea.Cmd) {
+	if m.router != nil {
+		if av, ok := m.router.ActiveView().(interface{ Refresh() error }); ok {
+			av.Refresh()
+		}
+	}
+	return m, nil
+}
+
+// handleConfigSavedMsg reloads the main config and models config after the
+// Config view saves changes.
+func (m Model) handleConfigSavedMsg(msg views.ConfigSavedMsg) (tea.Model, tea.Cmd) {
+	// Config was saved — reload main config and models config
+	if cfg, err := config.LoadDefaultConfig(); err == nil {
+		m.cfg = cfg
+		// Update Jira config in AgentView if present
+		if av := m.getAgentView(); av != nil {
+			av.SetJiraConfig(cfg.Jira)
+		}
+	}
+	// Reload models config for the engine
+	if m.services != nil && m.services.Agent != nil {
+		// The agent service's engine uses the global models config.
+		// Reload it so new agents pick up the updated model aliases.
+		m.services.Agent.ReloadModelsConfig()
+	}
+	m.statusMsg = "Config reloaded"
+	return m, nil
+}
+
+// handleViewChangeMsg handles view changes, possibly with a specific repo path.
+func (m Model) handleViewChangeMsg(msg views.ViewChangeMsg) (tea.Model, tea.Cmd) {
+	if msg.RepoPath != "" {
+		// Warn if leaving project mode with an active workflow
+		if m.projectMode {
+			if wv := m.getWorkflowsView(); wv != nil && wv.HasActiveWorkflow() {
+				m.statusMsg = "Warning: leaving project mode will disconnect from active workflow"
+			}
+		}
+		// Drill into single-repo mode for the specified repo
+		m.repoPath = msg.RepoPath
+		m.projectMode = false
+		m.loadRepo()
+	} else if msg.ViewName == "Project" && m.proj != nil {
+		// Return to project overview
+		m.projectMode = true
+		m.loadProject()
+	} else {
+		// Simple view switch — switch and run the new view's Init
+		if m.router != nil {
+			if err := m.router.SwitchTo(msg.ViewName); err == nil {
+				return m, m.router.ActiveView().Init()
+			}
+		}
+	}
+	return m, nil
 }
 
 // handleAppKeyMsg handles all key events for the top-level app model.
