@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1871,5 +1872,157 @@ func TestAddEmitsTheReadyPromotion(t *testing.T) {
 		if got[id] != wantState {
 			t.Errorf("task %s emitted in state %s, want %s", id, got[id], wantState)
 		}
+	}
+}
+
+// TestEveryChangeListenerSeesTheSameFrame guards the observer fan-out: the
+// OnChange slot (the daemon's WS hook) and every AddChangeObserver listener
+// must each get the change, with identical contents. Before the split the two
+// consumers competed for one callback field and the later registration
+// silently starved the earlier one.
+func TestEveryChangeListenerSeesTheSameFrame(t *testing.T) {
+	m := newTestManager(newFakeRunner(4))
+	defer m.Stop()
+
+	hook := make(chan Task, 16)
+	obsA := make(chan Task, 16)
+	obsB := make(chan Task, 16)
+	m.OnChange(func(task Task) { hook <- task })
+	m.AddChangeObserver(func(task Task) { obsA <- task })
+	m.AddChangeObserver(func(task Task) { obsB <- task })
+	// A nil observer is ignored rather than panicking on the emit path.
+	m.AddChangeObserver(nil)
+
+	added := mustAdd(t, m, []TaskSpec{{Name: "root", Prompt: "p", WorkDir: "/w1"}})
+
+	recv := func(name string, ch chan Task) Task {
+		t.Helper()
+		select {
+		case task := <-ch:
+			return task
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s never saw a change frame", name)
+			return Task{}
+		}
+	}
+	got := map[string]Task{
+		"OnChange":   recv("OnChange", hook),
+		"observer A": recv("observer A", obsA),
+		"observer B": recv("observer B", obsB),
+	}
+	for name, task := range got {
+		if task.ID != added[0].ID || task.State != StateReady {
+			t.Errorf("%s got task %s in state %s, want %s ready", name, task.ID, task.State, added[0].ID)
+		}
+	}
+	// Same snapshot, not merely the same ID: an observer must not see a
+	// task the WS hook would have described differently.
+	if !reflect.DeepEqual(got["observer A"], got["OnChange"]) || !reflect.DeepEqual(got["observer B"], got["OnChange"]) {
+		t.Errorf("listeners disagree on the frame: hook=%+v A=%+v B=%+v",
+			got["OnChange"], got["observer A"], got["observer B"])
+	}
+}
+
+// TestChangeObserverRegisteredAfterStartFires: emitLoop re-reads the listener
+// set per frame rather than capturing it when the goroutine starts, so a
+// consumer wired up after the manager is already running still gets frames.
+// The flow manager registers exactly like that during daemon startup.
+func TestChangeObserverRegisteredAfterStartFires(t *testing.T) {
+	m := newTestManager(newFakeRunner(4))
+	m.Start()
+	defer m.Stop()
+
+	// Emit at least one frame with only the primary hook registered, so
+	// emitLoop is definitely already running before the observer arrives.
+	hook := make(chan Task, 16)
+	m.OnChange(func(task Task) { hook <- task })
+	mustAdd(t, m, []TaskSpec{{Name: "first", Prompt: "p", WorkDir: "/w1"}})
+	select {
+	case <-hook:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no frame reached the OnChange hook")
+	}
+
+	late := make(chan Task, 16)
+	remove := m.AddChangeObserver(func(task Task) { late <- task })
+	added := mustAdd(t, m, []TaskSpec{{Name: "second", Prompt: "p", WorkDir: "/w2"}})
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case task := <-late:
+			if task.ID == added[0].ID {
+				remove()
+				return
+			}
+		case <-deadline:
+			t.Fatal("observer registered after Start never saw a frame")
+		}
+	}
+}
+
+// TestChangeObserverMayReenterManager pins the no-deadlock property: the emit
+// goroutine snapshots the listeners under onChangeMu and releases it before
+// calling them, and emit itself is only ever called with m.mu dropped. An
+// observer that reads the manager back — the flow reconciler's Get on the
+// task it was just told about — must therefore not wedge the broadcast path.
+func TestChangeObserverMayReenterManager(t *testing.T) {
+	m := newTestManager(newFakeRunner(4))
+	defer m.Stop()
+
+	type seen struct {
+		id    string
+		state State
+		err   error
+	}
+	results := make(chan seen, 16)
+	m.OnChange(func(task Task) {
+		// The primary hook re-enters too: both run on the emit goroutine.
+		_, err := m.List("", nil)
+		results <- seen{id: task.ID, err: err}
+	})
+	m.AddChangeObserver(func(task Task) {
+		got, err := m.Get(task.ID)
+		// Registering from inside a callback must not deadlock either.
+		remove := m.AddChangeObserver(func(Task) {})
+		remove()
+		results <- seen{id: task.ID, state: got.State, err: err}
+	})
+
+	added := mustAdd(t, m, []TaskSpec{{Name: "root", Prompt: "p", WorkDir: "/w1"}})
+
+	for i := 0; i < 2; i++ {
+		select {
+		case r := <-results:
+			if r.err != nil {
+				t.Fatalf("re-entrant manager call failed: %v", r.err)
+			}
+			if r.id != added[0].ID {
+				t.Errorf("frame for %s, want %s", r.id, added[0].ID)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("a listener that calls back into the Manager deadlocked the emit path")
+		}
+	}
+}
+
+// TestChangeObserverWithoutOnChangeStillEmits: emit short-circuits when no
+// listener is registered, so that check has to count observers too —
+// otherwise a daemon that only wired the flow manager would emit nothing.
+func TestChangeObserverWithoutOnChangeStillEmits(t *testing.T) {
+	m := newTestManager(newFakeRunner(4))
+	defer m.Stop()
+
+	frames := make(chan Task, 16)
+	m.AddChangeObserver(func(task Task) { frames <- task })
+
+	added := mustAdd(t, m, []TaskSpec{{Name: "root", Prompt: "p", WorkDir: "/w1"}})
+	select {
+	case task := <-frames:
+		if task.ID != added[0].ID {
+			t.Errorf("frame for %s, want %s", task.ID, added[0].ID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("an observer registered with no OnChange hook saw nothing")
 	}
 }

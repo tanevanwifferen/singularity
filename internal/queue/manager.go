@@ -107,8 +107,16 @@ type Manager struct {
 
 	// onChange, when set, is called (outside the lock) for every task whose
 	// state the scheduler advanced. Used by the daemon for WS broadcasts.
-	onChange   func(Task)
-	onChangeMu sync.RWMutex
+	//
+	// changeObservers holds any number of additional listeners registered
+	// via AddChangeObserver. The split mirrors engine.OnAgentUpdate /
+	// engine.AddAgentObserver: the daemon's WS hook owns the single
+	// onChange slot, and in-process consumers (the flow manager) add
+	// themselves as observers rather than evicting it.
+	onChange     func(Task)
+	changeObs    []changeObserver
+	changeObsSeq int64
+	onChangeMu   sync.RWMutex
 
 	// tickInterval is the scheduler's fallback poll period. Agent updates
 	// normally wake it immediately via Notify; the tick covers the cases
@@ -186,17 +194,77 @@ func NewManager(runner AgentRunner, store *Store) *Manager {
 // an ordinary burst — ever loses a frame.
 const emitBuffer = 256
 
-// OnChange registers the task-change callback. Replaces any previous one.
+// changeObserver pairs an additional change observer with the token used to
+// remove it again. Slice rather than map so notification order stays stable.
+type changeObserver struct {
+	id int64
+	fn func(Task)
+}
+
+// OnChange registers the primary task-change callback. Replaces any previous
+// one. The daemon uses this slot for its WS broadcast hook -- everything else
+// should use AddChangeObserver so the two do not evict each other.
 func (m *Manager) OnChange(fn func(Task)) {
 	m.onChangeMu.Lock()
 	m.onChange = fn
 	m.onChangeMu.Unlock()
 }
 
+// AddChangeObserver registers an additional task-change callback and returns
+// a closure that removes it again. Unlike OnChange, repeated calls
+// accumulate: every registered observer sees every change frame, alongside
+// the OnChange hook. Registering after Start is fine — emitLoop re-reads the
+// listener set per frame. A nil fn is ignored.
+//
+// The callback must be non-blocking: it runs on the single emit goroutine,
+// so a slow observer delays every other listener and eventually costs frames
+// (see emitCh). It may safely call back into the Manager — listeners are
+// snapshotted under onChangeMu and invoked with no lock held.
+//
+// The returned remove closure is idempotent.
+func (m *Manager) AddChangeObserver(fn func(Task)) (remove func()) {
+	if fn == nil {
+		return func() {}
+	}
+	m.onChangeMu.Lock()
+	m.changeObsSeq++
+	id := m.changeObsSeq
+	m.changeObs = append(m.changeObs, changeObserver{id: id, fn: fn})
+	m.onChangeMu.Unlock()
+
+	return func() {
+		m.onChangeMu.Lock()
+		defer m.onChangeMu.Unlock()
+		for i, o := range m.changeObs {
+			if o.id == id {
+				m.changeObs = append(m.changeObs[:i], m.changeObs[i+1:]...)
+				return
+			}
+		}
+	}
+}
+
+// changeListeners snapshots the registered callbacks under the read lock so
+// the notification itself runs unlocked (an observer that re-enters the
+// Manager would otherwise deadlock against a concurrent register/remove, and
+// one that takes m.mu must not be called while the emit path holds anything).
+func (m *Manager) changeListeners() []func(Task) {
+	m.onChangeMu.RLock()
+	defer m.onChangeMu.RUnlock()
+	out := make([]func(Task), 0, len(m.changeObs)+1)
+	if m.onChange != nil {
+		out = append(out, m.onChange)
+	}
+	for _, o := range m.changeObs {
+		out = append(out, o.fn)
+	}
+	return out
+}
+
 // emit hands the change frames to the broadcast goroutine. Called outside
 // m.mu, and — the point of the indirection — it never blocks: see emitCh.
 func (m *Manager) emit(tasks []Task) {
-	if len(tasks) == 0 || !m.hasOnChange() {
+	if len(tasks) == 0 || !m.hasChangeListener() {
 		return
 	}
 	m.emitOnce.Do(func() { go m.emitLoop() })
@@ -213,16 +281,19 @@ func (m *Manager) emit(tasks []Task) {
 	}
 }
 
-// hasOnChange reports whether a change callback is registered.
-func (m *Manager) hasOnChange() bool {
+// hasChangeListener reports whether any change callback is registered —
+// the OnChange hook or an observer.
+func (m *Manager) hasChangeListener() bool {
 	m.onChangeMu.RLock()
 	defer m.onChangeMu.RUnlock()
-	return m.onChange != nil
+	return m.onChange != nil || len(m.changeObs) > 0
 }
 
-// emitLoop drains emitCh into the change callback. One goroutine, so frames
-// reach the consumer in the order emit produced them. The hook is re-read
-// per frame because OnChange may replace it at any time.
+// emitLoop drains emitCh into the change callbacks. One goroutine, so frames
+// reach the consumers in the order emit produced them. The listener set is
+// re-read per frame because OnChange may replace its hook and
+// AddChangeObserver may add one at any time. Every listener gets the same
+// Task value, and none of them is called with a lock held.
 func (m *Manager) emitLoop() {
 	for {
 		select {
@@ -230,10 +301,7 @@ func (m *Manager) emitLoop() {
 			return
 		case t := <-m.emitCh:
 			m.emitDropping.Store(false)
-			m.onChangeMu.RLock()
-			fn := m.onChange
-			m.onChangeMu.RUnlock()
-			if fn != nil {
+			for _, fn := range m.changeListeners() {
 				fn(t)
 			}
 		}
