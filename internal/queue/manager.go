@@ -72,10 +72,10 @@ type AgentRunner interface {
 	// Soft-close semantics — end the turn, keep the process addressable —
 	// are deliberately not enough here. The queue calls this when the work
 	// itself is over (cancelled, queue aborted, or spawned for a claim that
-	// is no longer ours), and an agent whose process outlives the call is
-	// invisible to Capacity and WorkDirBusy while it is still editing
-	// files, which is exactly how a second agent gets dispatched into an
-	// occupied directory.
+	// is no longer ours), and an agent whose process outlives the call
+	// stops counting toward Capacity immediately but keeps WorkDirBusy true
+	// for as long as it runs, which is exactly how a directory gets stuck
+	// busy forever with nothing left to end the process holding it.
 	TerminateAgent(agentID string) error
 }
 

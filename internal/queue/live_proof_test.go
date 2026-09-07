@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gitlab.com/tanevanwifferen1/singularity/internal/engine"
 )
 
 // TestLiveProofKillDoesNotLetASecondAgentIntoTheDirectory is the end-to-end
@@ -91,10 +93,7 @@ func TestLiveProofKillDoesNotLetASecondAgentIntoTheDirectory(t *testing.T) {
 		t.Fatalf("t2 state = %s, want running once t1's agent was genuinely terminated", task2.State)
 	}
 
-	pid2 := readPid(t, pidFile)
-	if pid2 == pid1 {
-		t.Fatalf("pid2 == pid1 (%d): t2 did not actually get a new process", pid1)
-	}
+	pid2 := readPidExcluding(t, pidFile, pid1)
 	if !processAlive(pid2) {
 		t.Fatalf("pid2 %d (t2's agent) is not alive", pid2)
 	}
@@ -199,10 +198,7 @@ func TestLiveProofCompleteDoesNotLetASecondAgentIntoTheDirectory(t *testing.T) {
 		t.Fatalf("t2 state = %s, want running once t1's agent was genuinely terminated", task2.State)
 	}
 
-	pid2 := readPid(t, pidFile)
-	if pid2 == pid1 {
-		t.Fatalf("pid2 == pid1 (%d): t2 did not actually get a new process", pid1)
-	}
+	pid2 := readPidExcluding(t, pidFile, pid1)
 	if !processAlive(pid2) {
 		t.Fatalf("pid2 %d (t2's agent) is not alive", pid2)
 	}
@@ -217,6 +213,89 @@ func TestLiveProofCompleteDoesNotLetASecondAgentIntoTheDirectory(t *testing.T) {
 	t.Logf("pgrep -x cat (only pid2=%d should be listed, pid1=%d must be absent):\n%s", pid2, pid1, pg)
 }
 
+// TestLiveProofForeignAgentBlocksDispatch is review cycle 7 finding 1's own
+// live proof, answering the question that cycle asked: the one-agent-per-
+// directory invariant binds an agent the queue did not start too. A real
+// engine.Engine, a real EngineRunner, a real Manager — and a foreign agent
+// started directly on the engine, bypassing the queue entirely, exactly the
+// shape a bare `agents spawn`, a TUI-killed agent, or a Jira AI agent has.
+// It soft-closes that foreign agent (the record says killed, the process —
+// deliberately, per engine.KillAgent's contract — does not), then shows a
+// queued task for the same directory sits held back for as long as that pid
+// is alive, and only dispatches once the process is genuinely gone.
+func TestLiveProofForeignAgentBlocksDispatch(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "pid")
+	eng := newStubEngine(t, pidFile)
+	runner := NewEngineRunner(eng)
+	store, err := NewStore("")
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	m := NewManager(runner, store)
+
+	// The foreign agent: started directly on the engine, exactly like a bare
+	// `agents spawn` the queue has no record of and never dispatched.
+	foreignID, err := eng.StartAgent(dir, "p", engine.AgentOptions{})
+	if err != nil {
+		t.Fatalf("StartAgent (foreign): %v", err)
+	}
+	foreignPid := readPid(t, pidFile)
+	t.Logf("foreign agent %s started outside the queue, pid=%d (alive=%v)", foreignID, foreignPid, processAlive(foreignPid))
+
+	// Equivalent of `singl agents kill --id <foreignID>`: engine.KillAgent
+	// soft-closes. The label goes terminal; the process, deliberately, does
+	// not.
+	if err := eng.KillAgent(foreignID); err != nil {
+		t.Fatalf("KillAgent: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if !processAlive(foreignPid) {
+		t.Fatalf("foreign pid %d died from KillAgent alone; KillAgent is documented to soft-close", foreignPid)
+	}
+	if got := eng.GetAgent(foreignID).Snapshot().State; got != engine.AgentKilled {
+		t.Fatalf("foreign agent state = %s, want killed", got)
+	}
+	t.Logf("foreign agent soft-closed: state=killed, pid=%d alive=%v", foreignPid, processAlive(foreignPid))
+
+	tasks, err := m.Add([]TaskSpec{{Name: "t", Prompt: "p", WorkDir: dir}})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	m.tick()
+	task, _ := m.Get(tasks[0].ID)
+	t.Logf("after one tick, foreign pid=%d (label=killed) still alive: queued task state=%s", foreignPid, task.State)
+	if task.State == StateRunning {
+		t.Fatalf("task dispatched into %s while foreign pid %d is still alive — the one-agent-per-directory invariant did not hold for an agent the queue never started", dir, foreignPid)
+	}
+
+	pg, _ := exec.Command("pgrep", "-x", "cat").CombinedOutput()
+	t.Logf("pgrep -x cat while the queue task is held back (foreign pid=%d must be the only one listed):\n%s", foreignPid, pg)
+
+	// Only once the foreign process is genuinely gone — an operator running
+	// `agents remove`, in this test TerminateAgent standing in for it — is
+	// the directory free.
+	if err := eng.TerminateAgent(foreignID); err != nil {
+		t.Fatalf("TerminateAgent (foreign): %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for processAlive(foreignPid) {
+		if time.Now().After(deadline) {
+			t.Fatalf("foreign pid %d still alive after TerminateAgent", foreignPid)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Logf("foreign pid=%d confirmed dead", foreignPid)
+
+	m.tick()
+	task, _ = m.Get(tasks[0].ID)
+	if task.State != StateRunning {
+		t.Fatalf("task state = %s, want running once the foreign agent's process was gone", task.State)
+	}
+	t.Logf("queued task dispatched once foreign pid=%d was confirmed dead: state=%s", foreignPid, task.State)
+}
+
 func readPid(t *testing.T, pidFile string) int {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -229,6 +308,35 @@ func readPid(t *testing.T, pidFile string) int {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("pid file %s never appeared", pidFile)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// readPidExcluding polls pidFile until it holds a pid other than exclude.
+// review cycle 7 finding 2: both live-proof tests dispatch a second agent
+// into the same pidFile as the first, and dispatch marks the task running
+// as soon as StartTask returns — before the newly spawned agent's own
+// backend process has actually overwritten the file, since smart routing is
+// on by default for a queued task and the agent sits in AgentRouting for a
+// classifier round trip first. Plain readPid only waits for the file to
+// exist, which it already does (with the first agent's pid), so it can
+// return the first agent's pid as the second's — a false FAILURE ("pid2 ==
+// pid1") today, but the same weakness could just as easily produce a false
+// PASS if the timing ever tipped the other way. Waiting for the content to
+// actually change removes the race outright.
+func readPidExcluding(t *testing.T, pidFile string, exclude int) int {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		data, err := os.ReadFile(pidFile)
+		if err == nil {
+			if pid, convErr := strconv.Atoi(strings.TrimSpace(string(data))); convErr == nil && pid > 0 && pid != exclude {
+				return pid
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pid file %s never held a pid other than %d", pidFile, exclude)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

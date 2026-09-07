@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/engine"
@@ -87,21 +86,20 @@ func (r *EngineRunner) Capacity() (int, int) {
 	return r.eng.ActiveCount(), r.eng.MaxAgents()
 }
 
-// WorkDirBusy reports whether any active agent is working in workDir.
+// WorkDirBusy reports whether any agent's process is still resident in
+// workDir, whatever that agent's state label says and whoever started it.
 //
-// Comparison is on the cleaned path, so "/w/api" and "/w/api/" are the same
-// directory. Worktree-isolated agents never match a repo path here: the
-// engine rewrites their WorkDir to the private worktree it created
-// (setupWorktree), so their directory is unique per agent by construction.
+// This is a question about processes (Engine.WorkDirOccupied), not about
+// which agents the engine currently counts as active: an agent the queue
+// does not own — a bare `agents spawn`, a TUI-killed agent, a Jira AI agent
+// — can sit soft-closed or complete with its process still editing workDir,
+// invisible to ActiveAgents but not to this. Comparison is on the cleaned
+// path, so "/w/api" and "/w/api/" are the same directory. Worktree-isolated
+// agents never match a repo path here: the engine rewrites their WorkDir to
+// the private worktree it created (setupWorktree), so their directory is
+// unique per agent by construction.
 func (r *EngineRunner) WorkDirBusy(workDir string) bool {
-	want := filepath.Clean(workDir)
-	for _, a := range r.eng.ActiveAgents() {
-		snap := a.Snapshot()
-		if filepath.Clean(snap.WorkDir) == want {
-			return true
-		}
-	}
-	return false
+	return r.eng.WorkDirOccupied(workDir)
 }
 
 // SendInput delivers a message to a running agent's stdin.
@@ -116,11 +114,13 @@ func (r *EngineRunner) SendInput(agentID, message string) error {
 // TUI's kill action calls. It soft-closes — State becomes killed while the
 // process keeps running so an operator can carry on talking to the agent —
 // which is right for a human at a terminal and wrong for the queue: the
-// agent stops counting toward ActiveCount and WorkDirBusy the moment it is
-// soft-closed, so the next tick would dispatch a second agent into the
-// directory the first one is still editing. engine.RemoveAgent terminates
-// too but drops the record, which would take the cancelled task's output
-// with it and make reconcile see the agent vanish rather than be killed.
+// agent stops counting toward ActiveCount the moment it is soft-closed, but
+// its process keeps editing its directory (WorkDirOccupied honestly reports
+// that, but nothing else ever ends the process). Leaving it running would
+// hold that directory busy forever, with no future task ever able to
+// dispatch into it. engine.RemoveAgent terminates too but drops the record,
+// which would take the cancelled task's output with it and make reconcile
+// see the agent vanish rather than be killed.
 func (r *EngineRunner) TerminateAgent(agentID string) error {
 	return r.eng.TerminateAgent(agentID)
 }
