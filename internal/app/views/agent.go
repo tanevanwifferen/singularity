@@ -111,7 +111,11 @@ type AgentView struct {
 	approvalView   *ApprovalView
 	approvalAgent  string // agentID of the agent whose approval is shown
 
-	loadMu sync.Mutex // serializes concurrent loadAgents calls
+	// loadMu serializes refreshes and collapses a burst of requests into a
+	// single follow-up pass (see loadAgents).
+	loadMu     sync.Mutex
+	loadActive bool
+	loadAgain  bool
 }
 
 // AgentsReloadedMsg is sent after an async loadAgents completes.
@@ -233,10 +237,42 @@ func (v *AgentView) LoadAgents() {
 	v.loadAgents()
 }
 
-// loadAgents loads the current list of agents from the engine.
+// loadAgents refreshes the agent list, coalescing concurrent requests.
+//
+// One refresh costs two daemon round-trips plus a glamour re-render of the
+// selected agent's output. Every agent event asks for one, so a chatty agent
+// used to queue a dozen of them: each waited for the one before it, and the
+// view ended up rendering a snapshot taken seconds ago — long enough for a
+// just-resumed agent to still show as "done". Requests that arrive while a
+// refresh is running are therefore folded into a single extra pass, which
+// starts after the last of them and so sees at least as fresh a state.
 func (v *AgentView) loadAgents() {
 	v.loadMu.Lock()
-	defer v.loadMu.Unlock()
+	if v.loadActive {
+		v.loadAgain = true
+		v.loadMu.Unlock()
+		return
+	}
+	v.loadActive = true
+	v.loadMu.Unlock()
+
+	for {
+		v.loadAgentsOnce()
+
+		v.loadMu.Lock()
+		if !v.loadAgain {
+			v.loadActive = false
+			v.loadMu.Unlock()
+			return
+		}
+		v.loadAgain = false
+		v.loadMu.Unlock()
+	}
+}
+
+// loadAgentsOnce performs one refresh pass. Only ever called from loadAgents,
+// which guarantees a single pass runs at a time.
+func (v *AgentView) loadAgentsOnce() {
 	v.err = nil
 
 	if v.services == nil {
@@ -579,6 +615,16 @@ func (v *AgentView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case messageSendDoneMsg:
 		if msg.err != nil {
 			v.err = fmt.Errorf("send input: %w", msg.err)
+			return v, nil
+		}
+		// A follow-up puts a finished agent back into AgentRunning. Reload
+		// instead of waiting for the refresh tick: the list (and the cached
+		// v.selectedAgent behind the output header) would otherwise keep
+		// showing the agent as "done" for up to a full tick after the user
+		// has just given it more work.
+		return v, func() tea.Msg {
+			v.loadAgents()
+			return AgentsReloadedMsg{}
 		}
 
 	case approvalExecDoneMsg:
