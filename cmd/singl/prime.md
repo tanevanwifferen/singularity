@@ -189,7 +189,12 @@ timeout for unattended work.
 
 Each task carries the `agent_id` of its most recent attempt, so the transcript
 stays reachable after the task finishes: `singl --json agents output --id
-<agent_id> --offset <n>`.
+<agent_id> --offset <n>`. The agent's process, however, is not: the scheduler
+terminates a queued task's agent the moment the task reaches a terminal state
+(`done`, `failed`, `cancelled`) so its working directory is genuinely free for
+the next task. `agents input`/`agents kill` on that agent_id after the fact
+are no-ops or errors — a correction to a finished queued task is a new queued
+task, not a follow-up message.
 
 Steering a queue in flight:
 
@@ -277,6 +282,9 @@ until the agent stops** — use them only when a human is watching; `queue wait`
 singl agents input  --id <id> --message "..."       # non-blocking follow-up; works even after complete
 singl agents chat   --id <id> --message "..."       # sends, then streams the reply (blocks)
 singl agents kill   --id <id>                       # soft close: ends the turn, process stays alive for follow-ups
+                                                     # (bare spawn only — on a queue-dispatched task the scheduler
+                                                     # reaps this within one tick: process killed, worktree cleaned;
+                                                     # use `queue cancel --id <task>` for a queued task instead)
 singl agents remove --id <id>                       # terminates the process and drops the agent
 singl --json agents resume --id <id> --message "..." # NEW agent seeded with the old one's history (crash recovery)
 ```
@@ -396,6 +404,10 @@ in for that host, and prints the exact `tea logins add` command when it is not.
   and the transcripts from `agents output --id <task's agent_id> --offset <n>`.
 - Review a subagent's diff yourself (`diff workdir`) before committing or pushing it.
 - Never `remove` an agent you still want to talk to — `kill` keeps it addressable.
+  That only holds for a bare `agents spawn`: killing a queue-dispatched task's
+  agent gets it reaped by the scheduler (process terminated, worktree cleaned)
+  within one tick, so it is no more addressable afterwards than `remove` would
+  leave it. Use `queue cancel --id <task>` to stop a queued task.
 - Do not edit source files yourself. Anything that changes a working tree's
   content goes through an agent — including a one-line config flip or a
   mechanical rename across files. "It's only one line" is exactly how an

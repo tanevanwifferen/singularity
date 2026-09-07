@@ -208,3 +208,93 @@ func TestTerminateEndsAnAliveAgentEvenWhenAlreadyLabelledTerminal(t *testing.T) 
 		})
 	}
 }
+
+// TestTerminatePreservesTheWorktreeOnlyForCompleteOrError pins the other half
+// of b03f146's preserveWorktree parameter — the reason it was added in the
+// first place — which TestTerminateIsANoOpOnAnAlreadyTerminalAgent and
+// TestTerminateEndsAnAliveAgentEvenWhenAlreadyLabelledTerminal both leave
+// unpinned: they only assert Snapshot().State (preserved by the separate
+// `if !preserveWorktree { a.State = AgentKilled }` in terminate()) and never
+// touch worktreePath or the cleanup branch. Deleting `&& !preserveWorktree`
+// from kill()'s two guards (agent.go:654 and agent.go:675) leaves the whole
+// suite green without this test: a complete or errored agent's merged
+// worktree must survive termination, exactly like the handleResult comment
+// in worktree.go promises, while a killed agent's worktree must still be
+// force-cleaned as before.
+//
+// cleanupWorktreeFn is swapped for a recorder rather than driving a real git
+// repository: what is under test is kill()'s decision to call it at all, not
+// cleanupWorktree's own git commands (which have no preserveWorktree
+// branching to protect). Exercised against both of kill()'s guards: the
+// nil-cmd path (agent.go:654, a never-started agent) and the live-process
+// path (agent.go:675, startStubAgent's real subprocess).
+func TestTerminatePreservesTheWorktreeOnlyForCompleteOrError(t *testing.T) {
+	orig := cleanupWorktreeFn
+	t.Cleanup(func() { cleanupWorktreeFn = orig })
+
+	cases := []struct {
+		state       AgentState
+		wantCleanup bool
+	}{
+		{AgentComplete, false},
+		{AgentError, false},
+		{AgentKilled, true},
+	}
+
+	for _, tc := range cases {
+		t.Run("live/"+tc.state.String(), func(t *testing.T) {
+			e := New(2)
+			id, pid := startStubAgent(t, e)
+			a := e.GetAgent(id)
+
+			a.mu.Lock()
+			a.State = tc.state
+			a.worktreePath = "/fake/worktree/path"
+			a.worktreeBranch = "agent/fake/branch"
+			a.sourceRepoPath = "/fake/repo"
+			a.mu.Unlock()
+
+			called := false
+			cleanupWorktreeFn = func(string, string, string) { called = true }
+
+			if err := e.TerminateAgent(id); err != nil {
+				t.Fatalf("TerminateAgent: %v", err)
+			}
+
+			deadline := time.Now().Add(2 * time.Second)
+			for processAlive(pid) {
+				if time.Now().After(deadline) {
+					t.Fatalf("pid %d still alive after TerminateAgent", pid)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+
+			if called != tc.wantCleanup {
+				t.Errorf("cleanupWorktree called = %v, want %v for a %s agent whose process was alive", called, tc.wantCleanup, tc.state)
+			}
+		})
+	}
+
+	for _, tc := range cases {
+		t.Run("never-started/"+tc.state.String(), func(t *testing.T) {
+			a := newAgent("a-"+tc.state.String(), t.TempDir(), "task", AgentOptions{}, stubBackend{})
+			a.mu.Lock()
+			a.State = tc.state
+			a.worktreePath = "/fake/worktree/path"
+			a.worktreeBranch = "agent/fake/branch"
+			a.sourceRepoPath = "/fake/repo"
+			a.mu.Unlock()
+
+			called := false
+			cleanupWorktreeFn = func(string, string, string) { called = true }
+
+			if err := a.terminate(); err != nil {
+				t.Fatalf("terminate: %v", err)
+			}
+
+			if called != tc.wantCleanup {
+				t.Errorf("cleanupWorktree called = %v, want %v for a never-started %s agent", called, tc.wantCleanup, tc.state)
+			}
+		})
+	}
+}

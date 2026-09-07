@@ -205,14 +205,17 @@ func (m *Manager) reconcile() []Task {
 	m.mu.Lock()
 	var changed []Task
 	abortQueues := make(map[string]bool)
-	// terminateAgents collects agents the queue is about to stop tracking
-	// because it observed them error or (soft-)killed. Collected under the
-	// lock, acted on after it is released: an agent record saying "killed"
-	// is not proof its process is gone (engine.KillAgent soft-closes, so the
-	// TUI can keep talking to it), so the queue has to end it explicitly
-	// rather than infer the engine already did. TerminateAgent is a no-op on
-	// a process that has genuinely already exited, so calling it here for
-	// `error` too costs nothing.
+	// terminateAgents collects agents the queue is about to stop tracking:
+	// every branch below that moves a task out of State.Active() — done,
+	// failed or killed alike — releases its agent explicitly rather than
+	// inferring the engine already ended it. A terminal state label is not
+	// proof the process is gone: engine.KillAgent soft-closes (so the TUI
+	// can keep talking to a killed agent), and a backend can emit its result
+	// while its process stays resident on stdin waiting for a follow-up
+	// (agent.sendInput), which is what `complete` looks like too. Collected
+	// under the lock, acted on after it is released. TerminateAgent is a
+	// no-op on a process that has genuinely already exited, so calling it
+	// here for every case costs nothing extra.
 	var terminateAgents []string
 	for _, o := range obs {
 		t := m.tasks[o.taskID]
@@ -226,8 +229,12 @@ func (m *Manager) reconcile() []Task {
 			// The agent vanished from the engine (removed, or the engine
 			// was restarted underneath us). Treat as a failure so the retry
 			// policy decides, rather than leaving the task running forever.
+			// Nothing to terminate: the engine has no record of it at all.
 			m.failLocked(t, "agent is no longer known to the engine")
 		case o.state == agentStateComplete:
+			if t.AgentID != "" {
+				terminateAgents = append(terminateAgents, t.AgentID)
+			}
 			t.State = StateDone
 			t.Error = ""
 			now := time.Now()

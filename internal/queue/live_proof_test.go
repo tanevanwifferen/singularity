@@ -109,6 +109,114 @@ func TestLiveProofKillDoesNotLetASecondAgentIntoTheDirectory(t *testing.T) {
 	t.Logf("pgrep -x cat (only pid2=%d should be listed, pid1=%d must be absent):\n%s", pid2, pid1, pg)
 }
 
+// TestLiveProofCompleteDoesNotLetASecondAgentIntoTheDirectory is the
+// end-to-end version of TestReconcileTerminatesACompletedAgentBeforeDispatch
+// (which runs against the fake): a real engine.Engine, a real EngineRunner,
+// and a real Manager, with resultThenCatBackend standing in for a real
+// backend that finishes a turn while its process stays resident on stdin —
+// exactly the shape both real backends have. It dispatches two tasks onto
+// the same work_dir, lets the first one's agent report complete, and shows
+// with real pids that the queue terminates that process itself before the
+// second task is ever dispatched into the same directory.
+func TestLiveProofCompleteDoesNotLetASecondAgentIntoTheDirectory(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "pid")
+	eng := newResultThenCatStubEngine(t, pidFile)
+	runner := NewEngineRunner(eng)
+	store, err := NewStore("")
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	m := NewManager(runner, store)
+
+	tasks, err := m.Add([]TaskSpec{
+		{Name: "t1", Prompt: "p", WorkDir: dir},
+		{Name: "t2", Prompt: "p", WorkDir: dir},
+	})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	t1, t2 := tasks[0].ID, tasks[1].ID
+
+	m.tick()
+	pid1 := readPid(t, pidFile)
+	t.Logf("t1 dispatched, pid1=%d (alive=%v)", pid1, processAlive(pid1))
+	if !processAlive(pid1) {
+		t.Fatalf("pid1 %d is not alive right after dispatch", pid1)
+	}
+	task1, _ := m.Get(t1)
+	if task1.State != StateRunning {
+		t.Fatalf("t1 state = %s, want running", task1.State)
+	}
+	task2, _ := m.Get(t2)
+	if task2.State == StateRunning {
+		t.Fatalf("t2 state = running while t1 (pid %d) still occupies %s — the directory guard did not hold", pid1, dir)
+	}
+	t.Logf("t2 correctly held back: state=%s while pid1=%d is alive in %s", task2.State, pid1, dir)
+
+	// t1's agent finishes its turn: resultThenCatBackend emits RESULT, which
+	// ParseEvent turns into a BackendResult and handleResult turns into
+	// AgentComplete — with pid1 still alive on stdin, exactly like a real
+	// backend left open for a follow-up.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		task1, _ = m.Get(t1)
+		if eng.GetAgent(task1.AgentID).Snapshot().State.String() == "complete" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("t1's agent never reached complete")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Logf("t1's agent reached complete; pid1=%d alive=%v (a completed agent's process does not exit on its own)", pid1, processAlive(pid1))
+	if !processAlive(pid1) {
+		t.Fatalf("pid1 %d died on its own once the agent reported complete", pid1)
+	}
+
+	// One tick: reconcile observes `complete`, marks t1 done, and — this is
+	// the fix — synchronously terminates pid1 before dispatch runs, in the
+	// same tick. Only then does dispatch see the directory genuinely free.
+	m.tick()
+
+	task1, _ = m.Get(t1)
+	task2, _ = m.Get(t2)
+	t.Logf("after the tick that observed `complete`: t1.State=%s t2.State=%s", task1.State, task2.State)
+
+	deadline = time.Now().Add(2 * time.Second)
+	for processAlive(pid1) {
+		if time.Now().After(deadline) {
+			t.Fatalf("pid1 %d is still alive 2s after reconcile observed its agent complete — the queue left it running", pid1)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Logf("pid1=%d confirmed dead (reconcile terminated it once complete, same as it does for killed)", pid1)
+
+	if task1.State != StateDone {
+		t.Fatalf("t1 state = %s, want done", task1.State)
+	}
+	if task2.State != StateRunning {
+		t.Fatalf("t2 state = %s, want running once t1's agent was genuinely terminated", task2.State)
+	}
+
+	pid2 := readPid(t, pidFile)
+	if pid2 == pid1 {
+		t.Fatalf("pid2 == pid1 (%d): t2 did not actually get a new process", pid1)
+	}
+	if !processAlive(pid2) {
+		t.Fatalf("pid2 %d (t2's agent) is not alive", pid2)
+	}
+	t.Logf("t2 dispatched a genuinely new process, pid2=%d (alive=%v), distinct from the terminated pid1=%d", pid2, processAlive(pid2), pid1)
+
+	out1, _ := exec.Command("ps", "-o", "pid,stat,cmd", "-p", strconv.Itoa(pid1)).CombinedOutput()
+	out2, _ := exec.Command("ps", "-o", "pid,stat,cmd", "-p", strconv.Itoa(pid2)).CombinedOutput()
+	t.Logf("ps for pid1 (%d, expect not found — it is dead):\n%s", pid1, out1)
+	t.Logf("ps for pid2 (%d, expect alive):\n%s", pid2, out2)
+
+	pg, _ := exec.Command("pgrep", "-x", "cat").CombinedOutput()
+	t.Logf("pgrep -x cat (only pid2=%d should be listed, pid1=%d must be absent):\n%s", pid2, pid1, pg)
+}
+
 func readPid(t *testing.T, pidFile string) int {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)

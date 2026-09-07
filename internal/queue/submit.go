@@ -183,12 +183,24 @@ func (m *Manager) Add(specs []TaskSpec) ([]Task, error) {
 // not enough: an operator may name a queue "q1" outright (idPattern allows
 // it) without ever touching the counter, and reusing that ID would silently
 // merge an unrelated batch into their queue — where a single `queue cancel`
-// or `queue pause` would then hit both. Caller holds m.mu.
+// or `queue pause` would then hit both. The check has to be case-fold, not
+// exact, for the same reason the explicit-ID path above folds: "Q1" and the
+// auto-minted "q1" are two queues in m.queues but one file on a
+// case-insensitive filesystem (macOS/APFS), so an exact-only match here would
+// let the auto path silently collide with an operator-named queue the
+// explicit path already refuses to create. Caller holds m.mu.
 func (m *Manager) mintQueueIDLocked() string {
 	for {
 		m.queueSeq++
 		id := "q" + strconv.FormatInt(m.queueSeq, 10)
-		if _, exists := m.queues[id]; !exists {
+		taken := false
+		for existing := range m.queues {
+			if strings.EqualFold(existing, id) {
+				taken = true
+				break
+			}
+		}
+		if !taken {
 			return id
 		}
 	}
