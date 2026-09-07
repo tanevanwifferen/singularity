@@ -54,6 +54,7 @@ Stream IDs are opaque UUIDs minted by the daemon. The client may cancel a stream
 | `agent_started`               | S→C       | `api.AgentStartedPayload`  | Fix mismatch: now `{agent_id, task, work_dir}`. |
 | `agent_output`                | S→C       | `api.AgentOutputPayload`   | NEW emission; one frame per new output line. |
 | `agent_complete`              | S→C       | `api.AgentCompletePayload` | NEW emission. |
+| `agent_resumed`               | S→C       | `api.AgentResumedPayload`  | Emitted when an agent already reported terminal goes non-terminal again (follow-up message to a finished agent). |
 | `agent_error`                 | S→C       | `api.AgentErrorPayload`    | NEW emission. |
 | `workflow_updated`            | S→C       | `service.WorkflowEvent`    | NEW; replaces TUI polling tick. |
 | `sync_progress`               | S→C       | `service.SyncProgressEvent`| NEW; piggybacks on `stream:<id>` envelope. |
