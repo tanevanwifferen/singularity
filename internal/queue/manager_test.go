@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -44,7 +45,12 @@ type fakeRunner struct {
 	busyDirs  map[string]bool
 	maxAgents int
 	startErr  error
-	seq       int
+	// startErrAgentID, when set alongside startErr, makes StartTask return
+	// this id together with the error — modelling engine.StartAgent's
+	// worktree-setup failure, which inserts the agent record before
+	// returning an error, unlike every other spawn-failure path.
+	startErrAgentID string
+	seq             int
 	// beforeStart, when set, runs at the top of StartTask without f.mu
 	// held, so a test can act on the manager while a spawn is in flight.
 	beforeStart func(Task)
@@ -96,6 +102,12 @@ func (f *fakeRunner) StartTask(ctx context.Context, t Task) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.startErr != nil {
+		if f.startErrAgentID != "" {
+			f.states[f.startErrAgentID] = "error"
+			f.alive[f.startErrAgentID] = true
+			f.agentDirs[f.startErrAgentID] = filepath.Clean(t.WorkDir)
+			return f.startErrAgentID, f.startErr
+		}
 		return "", f.startErr
 	}
 	// Enforce the cap the way the real engine does, counting the same
@@ -1181,6 +1193,55 @@ func TestPersistenceRoundTripRequeuesInterruptedWork(t *testing.T) {
 	}
 }
 
+// TestFlushRetriesAfterASaveFailure pins the `continue` in flushLocked that
+// keeps a queue dirty when Save fails: deleting it (letting q.dirty = false
+// run unconditionally) leaves the rest of the suite green, but a transient
+// write failure would then never be retried, silently losing the queue's
+// state on disk. Save is forced to fail without relying on permission bits
+// (which root would ignore): pointing Store.Dir at a path that is a regular
+// file makes os.CreateTemp fail with ENOTDIR regardless of who runs the test.
+func TestFlushRetriesAfterASaveFailure(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	runner := newFakeRunner(4)
+	m := NewManager(runner, store)
+	mustAdd(t, m, []TaskSpec{{QueueID: "q", Name: "a", Prompt: "p", WorkDir: "/w"}})
+
+	notADir := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(notADir, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	m.mu.Lock()
+	q := m.queues["q"]
+	q.dirty = true
+	goodDir := store.Dir
+	store.Dir = notADir
+	m.flushLocked()
+	if !q.dirty {
+		m.mu.Unlock()
+		t.Fatal("flushLocked cleared dirty despite a failed Save — a transient write failure would be silently swallowed")
+	}
+	store.Dir = goodDir
+	m.flushLocked()
+	stillDirty := q.dirty
+	m.mu.Unlock()
+	if stillDirty {
+		t.Error("flushLocked did not retry once Save started succeeding again")
+	}
+
+	data, err := os.ReadFile(store.path("q"))
+	if err != nil {
+		t.Fatalf("read persisted queue: %v", err)
+	}
+	if !strings.Contains(string(data), `"id": "q"`) {
+		t.Errorf("persisted file missing the recovered queue's content: %s", data)
+	}
+}
+
 func TestSchedulerGoroutineDrainsAChain(t *testing.T) {
 	runner := newFakeRunner(4)
 	m := newTestManager(runner)
@@ -1332,6 +1393,38 @@ func TestSpawnFailureDuringCancelDoesNotResurrectTask(t *testing.T) {
 	m.tick()
 	if got := stateOf(t, m, id); got != StateCancelled {
 		t.Fatalf("state = %s, want cancelled", got)
+	}
+}
+
+// TestFailedSpawnWithAgentIDTerminatesTheOrphan is review cycle 8 finding 1's
+// other half: engine.StartAgent can return a non-empty agent id alongside an
+// error (worktree setup failing after the record is inserted). The task
+// never receives that id — only the `default:` branch sets t.AgentID — so
+// without this fix nothing in the queue could ever name the agent to clean
+// it up, leaking it (and, before the engine-side fix, its directory) for
+// good.
+func TestFailedSpawnWithAgentIDTerminatesTheOrphan(t *testing.T) {
+	runner := newFakeRunner(4)
+	runner.startErr = errors.New("worktree setup: not a git repository")
+	runner.startErrAgentID = "orphan-1"
+	m := newTestManager(runner)
+	tasks := mustAdd(t, m, []TaskSpec{{Name: "a", Prompt: "p", WorkDir: "/w"}})
+	id := tasks[0].ID
+
+	m.tick()
+
+	task, _ := m.Get(id)
+	if task.State != StateFailed {
+		t.Fatalf("state = %s, want failed", task.State)
+	}
+	if task.AgentID != "" {
+		t.Errorf("AgentID = %q, want empty — the task never received this id", task.AgentID)
+	}
+	runner.mu.Lock()
+	killed := append([]string(nil), runner.killed...)
+	runner.mu.Unlock()
+	if len(killed) != 1 || killed[0] != "orphan-1" {
+		t.Fatalf("killed = %v, want exactly [orphan-1] — the id returned alongside the spawn error must be terminated", killed)
 	}
 }
 

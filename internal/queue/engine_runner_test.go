@@ -85,6 +85,39 @@ func (resultThenCatBackend) UnattendedSessionCommand(string) (string, []string, 
 	return "true", nil, nil
 }
 
+// missingBinaryBackend names a binary that does not exist, so cmd.Start()
+// fails inside Agent.start() — the shape review cycle 8 finding 1 needs:
+// a spawn that fails synchronously, after the engine has already inserted
+// the agent record, with no subprocess ever created.
+type missingBinaryBackend struct{}
+
+func (missingBinaryBackend) Name() string   { return "missing-binary-stub" }
+func (missingBinaryBackend) Binary() string { return "/nonexistent/singularity-test-binary-xyz" }
+func (missingBinaryBackend) Args(string, string, int, []string) []string {
+	return nil
+}
+func (missingBinaryBackend) Env() []string { return nil }
+func (missingBinaryBackend) InitialInput(task, _ string) ([]byte, error) {
+	return []byte(task + "\n"), nil
+}
+func (missingBinaryBackend) FollowUpInput(message, _ string, _ bool) ([]byte, error) {
+	return []byte(message + "\n"), nil
+}
+func (missingBinaryBackend) PostStartCommands(string) [][]byte { return nil }
+func (missingBinaryBackend) ParseEvent([]byte) ([]*engine.BackendEvent, error) {
+	return []*engine.BackendEvent{}, nil
+}
+func (missingBinaryBackend) OneShotCommand(string) (string, []string) { return "true", nil }
+func (missingBinaryBackend) UnattendedSessionCommand(string) (string, []string, error) {
+	return "true", nil, nil
+}
+
+func newMissingBinaryStubEngine() *engine.Engine {
+	eng := engine.New(4)
+	eng.SetDefaultBackend(missingBinaryBackend{})
+	return eng
+}
+
 func newResultThenCatStubEngine(t *testing.T, pidFile string) *engine.Engine {
 	t.Helper()
 	if _, err := exec.LookPath("sh"); err != nil {
