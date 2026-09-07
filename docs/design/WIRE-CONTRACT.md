@@ -1,6 +1,6 @@
 # Wire Contract — daemon ↔ TUI
 
-Phase B deliverable. One row per service-interface method (across all 15 interfaces in `internal/service`), specifying its HTTP endpoint (or WS stream subscription topic), the request / response Go types in `internal/api`, and the sentinel error code(s) the operation may return.
+Phase B deliverable. One row per service-interface method (across all 16 interfaces in `internal/service`), specifying its HTTP endpoint (or WS stream subscription topic), the request / response Go types in `internal/api`, and the sentinel error code(s) the operation may return.
 
 Every JSON payload uses snake_case keys. Every `POST` request body is `application/json`. Every JSON response is wrapped in `api.APIResponse{success, data, error, code}` — the "Response type" column below is the Go type that lives inside `data`. Every reachable HTTP error includes a stable string `code` from §1 mapped to the HTTP status code listed there.
 
@@ -60,6 +60,7 @@ Stream IDs are opaque UUIDs minted by the daemon. The client may cancel a stream
 | `sync_progress`               | S→C       | `service.SyncProgressEvent`| NEW; piggybacks on `stream:<id>` envelope. |
 | `discovery_progress`          | S→C       | `service.DiscoveryProgressEvent` | NEW; same envelope. |
 | `queue_task_changed`          | S→C       | `api.QueueTaskChangedPayload` | NEW; one frame per task state change, broadcast to every client (the daemon wires it to `queue.Manager.OnChange`). Carries the whole task, so a view needs no follow-up fetch. |
+| `flow_updated`                | S→C       | `api.FlowUpdatedPayload`      | NEW; one frame per flow state change, broadcast to every client (the daemon wires `Server.FlowChangeHook` to `flow.Manager.OnFlowChange`). Carries the whole flow, rounds and verdicts included, so a view needs no follow-up fetch. The flow's tasks keep producing `queue_task_changed` frames unchanged. |
 | `error`                       | S→C       | `api.ErrorPayload`         | Existing — `{error, code?}`. |
 | `subscribed`                  | S→C       | `api.SubscribedPayload`    | Ack reply. |
 | `stream:<id>`                 | S→C       | dynamic                    | Generic stream frame; one envelope per active stream. |
@@ -222,8 +223,15 @@ All endpoints live under `/api`. Streaming operations are marked **stream**: res
 |123 | `Jira.CreateStories`     | `POST /api/jira/ai/stories`                        | `api.JiraCreateStoriesRequest`          | `api.AgentStartResponse`                    | `AGENT_LIMIT`, `UNAVAILABLE` |
 |124 | `Jira.RefineProposalWithContext` | `POST /api/jira/ai/refine_proposal`        | `api.JiraRefineProposalRequest`         | `api.AgentStartResponse`                    | `AGENT_LIMIT`, `UNAVAILABLE` |
 |125 | `Jira.ReviewTickets`     | `POST /api/jira/ai/review`                         | `api.JiraReviewTicketsRequest`          | `api.AgentStartResponse`                    | `AGENT_LIMIT`, `UNAVAILABLE` |
+| **Flow** ||||||
+|126 | `Flow.Start`             | `POST /api/flow/start`                             | `api.FlowStartRequest`                  | `api.FlowStartResponse`                     | `BAD_REQUEST`, `UNAVAILABLE` |
+|127 | `Flow.List`              | `GET  /api/flow/list?state=`                       | —                                       | `api.FlowListResponse`                      | `BAD_REQUEST`, `UNAVAILABLE` |
+|128 | `Flow.Get`               | `GET  /api/flow/get?flow_id=`                      | —                                       | `*api.Flow`                                 | `NOT_FOUND`, `BAD_REQUEST`, `UNAVAILABLE` |
+|129 | `Flow.Tree`              | `GET  /api/flow/tree?flow_id=`                     | —                                       | `api.FlowTreeResponse`                      | `NOT_FOUND`, `BAD_REQUEST`, `UNAVAILABLE` |
+|130 | `Flow.Cancel`            | `POST /api/flow/cancel`                            | `api.FlowIDRequest`                     | —                                           | `NOT_FOUND`, `BAD_REQUEST`, `UNAVAILABLE` |
+|131 | `Flow.Remove`            | `POST /api/flow/remove`                            | `api.FlowIDRequest`                     | —                                           | `NOT_FOUND`, `CONFLICT`, `BAD_REQUEST`, `UNAVAILABLE` |
 
-**Total: 125 service methods over 124 endpoints — one each, except `Queue.QueueInfo`: the per-queue tallies are computed in memory and shipped for every queue at once, so the client selects from `/api/queue/queues` instead of the daemon serving a route that would repeat it.**
+**Total: 131 service methods over 130 endpoints — one each, except `Queue.QueueInfo`: the per-queue tallies are computed in memory and shipped for every queue at once, so the client selects from `/api/queue/queues` instead of the daemon serving a route that would repeat it.**
 
 ---
 
@@ -235,6 +243,10 @@ All endpoints live under `/api`. Streaming operations are marked **stream**: res
 - Empty/204-ish endpoints still return `200 OK` + `api.APIResponse{success:true}` (no `data` field). Consumers ignore `data` when the response Go type column is `—`.
 - Queue paths carry the task or queue identifier in the body (`task_id` / `queue_id`) for mutations and as a query param (`task_id` / `queue`) for reads. The `state` list filter on `/api/queue/list` accepts both spellings: repeated (`?state=ready&state=running`) and comma-separated (`?state=ready,running`).
 - The queue's domain types already carry snake_case JSON tags, so `internal/api` aliases them (`api.Task = service.Task = queue.Task`) rather than re-projecting. A tag change therefore cannot land on one side only.
+- Flow paths carry the flow identifier in the body (`flow_id`, via `api.FlowIDRequest`) for mutations and as a query param (`flow_id`) for reads. The `state` list filter on `/api/flow/list` accepts both spellings, exactly as the queue's does: repeated (`?state=running&state=accepted`) and comma-separated (`?state=running,accepted`); an unknown state is `BAD_REQUEST`, not an empty result.
+- The flow domain types carry snake_case tags too, so `internal/api` aliases them all the way down (`api.Flow = service.Flow = flow.Flow`, and `api.FlowStartRequest = service.FlowStartRequest = flow.StartRequest`) rather than re-projecting. Only the three response envelopes (`FlowStartResponse`, `FlowListResponse`, `FlowTreeResponse`) and `FlowIDRequest` are declared in `internal/api`.
+- Every `/api/flow/*` route answers `UNAVAILABLE` when the daemon has no flow manager (`Server.requireFlow`), mirroring the queue's nil-manager degradation. `Flow.Start` cleans `work_dir` through `Server.validateRepoPath` before the service sees it, exactly as `handleQueueAdd` does; an empty `work_dir` is passed through unchanged so the flow manager reports it missing rather than the server substituting the daemon's cwd.
+- `Flow.Start` returns `BAD_REQUEST` for an empty goal, a `work_dir` that is not an existing directory, a `max_rounds` outside 1..20, and for `opts.use_worktree`/`review_opts.use_worktree` — which a flow refuses rather than silently clears, because every round must see the same tree. `Flow.Remove` returns `CONFLICT` while the flow is non-terminal.
 - `Queue.Add` is atomic: the whole batch is accepted or refused. `BAD_REQUEST` (`service.ErrInvalidRequest`) covers an unknown dependency, a cycle, a missing prompt/work dir, and a `RemoveQueue` refused because a task is still active.
 - Legacy paths kept exactly (no breaking renames during this phase): `/api/status`, `/api/repo/open`, `/api/repo/info`, `/api/repo`, `/api/branch/compare`, `/api/branch/diff`, `/api/commit/message`, `/api/mr/create`, `/api/forge/auth`, `/api/project/list`, `/api/project/load`, `/api/project/status`, `/api/project/refresh`, `/api/project/branch/check`, `/api/project/branch/compare`, `/api/project/context`, `/api/agent/start`, `/api/agent/status`, `/api/agent/output`, `/api/agent/kill`, `/api/agent/input`, `/api/agent/list`, `/api/agent/stats`, `/ws`, `/health`.
 - The legacy `/api/branch/diff` is kept as an alias of `/api/diff/branch`. `/api/agent/status` is kept as an alias of `/api/agent/get`. `/api/project/branch/compare` is kept (one-off cross-repo helper — no service method, no client coverage, intentionally untouched).

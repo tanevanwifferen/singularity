@@ -15,6 +15,7 @@ import (
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/config"
 	"gitlab.com/tanevanwifferen1/singularity/internal/engine"
+	"gitlab.com/tanevanwifferen1/singularity/internal/flow"
 	"gitlab.com/tanevanwifferen1/singularity/internal/oneshot"
 	"gitlab.com/tanevanwifferen1/singularity/internal/project"
 	"gitlab.com/tanevanwifferen1/singularity/internal/queue"
@@ -198,7 +199,33 @@ func Run(opts RunOptions) error {
 	taskQueue.Restore()
 	taskQueue.Start()
 
-	srv.SetServices(local.New(srv.Engine(), loader, jiraCfg, taskQueue))
+	// Flow store + manager, on the queue's terms above: a store that cannot
+	// open its directory is not fatal either (flow.NewStore("") is a valid
+	// no-op store), the daemon keeps serving and flows just run in memory
+	// for this lifetime.
+	flowStore, fserr := flow.NewStore(paths.Flows)
+	if fserr != nil {
+		log.Printf("flow: persistence disabled: %v", fserr)
+		flowStore, _ = flow.NewStore("")
+	}
+	flowMgr := flow.NewManager(taskQueue, flowStore)
+	flowMgr.OnFlowChange(srv.FlowChangeHook())
+	// AddChangeObserver, not OnChange: the single OnChange slot belongs to
+	// the WS broadcast wired above, and the two would starve each other.
+	// This only wakes the reconciler sooner than its own tick would; losing
+	// a frame costs latency, never a transition.
+	taskQueue.AddChangeObserver(flowMgr.Notify)
+	// Restore strictly before StartReconciler. Nothing orders this against
+	// taskQueue.Start() — a pass re-derives every flow's position from its
+	// tasks, so it is correct whenever the queue catches up (§5) — but a
+	// reconciler running over a manager that has not adopted its records yet
+	// would see no flows at all, and each record adopted afterwards would
+	// look like a fresh flow with no rounds and get round 1 submitted a
+	// second time.
+	flowMgr.Restore()
+	flowMgr.StartReconciler()
+
+	srv.SetServices(local.New(srv.Engine(), loader, jiraCfg, taskQueue, flowMgr))
 
 	log.Printf("singularity daemon listening at %s (pid %d)", listenURL, os.Getpid())
 
@@ -224,7 +251,8 @@ func Run(opts RunOptions) error {
 	}
 
 	// Graceful shutdown: HTTP first (3s) so in-flight requests drain, then
-	// the scheduler (stopDrainTimeout, see queue.Manager.Stop), then the
+	// the flow reconciler, then the scheduler (stopDrainTimeout, see
+	// queue.Manager.Stop and flow.Manager.StopReconciler), then the
 	// engine (which kills every agent and, for worktree-isolated ones, runs
 	// git cleanup synchronously — not free), then socket file, then pidfile
 	// (via the deferred release closure).
@@ -232,7 +260,8 @@ func Run(opts RunOptions) error {
 	// `singularity daemon stop` SIGTERMs and SIGKILLs 10s later (see
 	// cmd/singularity's Stop). This drain and the scheduler's stopDrainTimeout
 	// are what is actually subtracted from that budget before eng.Shutdown
-	// gets to run: 3s here plus stopDrainTimeout leaves eng.Shutdown the
+	// gets to run: 3s here plus the reconciler's and the scheduler's drains
+	// (both bounded, and in practice both immediate) leaves eng.Shutdown the
 	// remainder, currently a few seconds — sized for tearing down an
 	// ordinary number of agents, not a guarantee under an unbounded number
 	// of worktree-isolated ones. The listener wait below runs after
@@ -242,6 +271,16 @@ func Run(opts RunOptions) error {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
 		log.Printf("http shutdown: %v", err)
+	}
+	// The reconciler stops before the scheduler, one level up from the same
+	// rule: a pass that ran after Stop could Add round N+1 into a scheduler
+	// that will never dispatch it. It is bounded by the queue's own budget
+	// (flow.stopDrainTimeout, 3s) and a pass only does file reads and queue
+	// calls, so the wait is short; when it does not complete we carry on
+	// deliberately, because the record of every transition is already on
+	// disk and the next startup re-derives the rest.
+	if !flowMgr.StopReconciler() {
+		log.Printf("flow: reconciler did not drain in time; continuing shutdown")
 	}
 	// The scheduler stops before the engine so it cannot dispatch a task
 	// into an engine that is already tearing its agents down. Stop normally

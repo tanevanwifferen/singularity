@@ -173,6 +173,32 @@ func (m *Model) getAgentView() *views.AgentView {
 	return nil
 }
 
+// getFlowsView returns the FlowsView from the router if it exists
+func (m *Model) getFlowsView() *views.FlowsView {
+	if m.router == nil {
+		return nil
+	}
+	view := m.router.GetView("Flows")
+	if fv, ok := view.(*views.FlowsView); ok {
+		return fv
+	}
+	return nil
+}
+
+// flowRefreshCmd refreshes the flows view on the same two signals the agent
+// view uses — the stream tick and agent events — but only while it is the
+// view on screen: off-screen it would cost the daemon two round trips a
+// tick, and switching to it runs Init, which loads.
+func (m Model) flowRefreshCmd() tea.Cmd {
+	if m.router == nil || m.router.ActiveName() != "Flows" {
+		return nil
+	}
+	if fv := m.getFlowsView(); fv != nil {
+		return fv.RefreshCmd()
+	}
+	return nil
+}
+
 // loadRepo loads the repository
 func (m *Model) loadRepo() {
 	if m.repoPath == "" {
@@ -215,8 +241,8 @@ func (m *Model) loadRepo() {
 }
 
 // registerCommonViews registers views shared between single-repo and project modes.
-// It registers: Branches, Commit, Log, Agents, Config, and the git operations submenu
-// views (Sync, BranchCompare, Stashes, Rebase, Worktrees, Pipeline, CreatePR).
+// It registers: Branches, Commit, Log, Agents, Flows, Config, and the git operations
+// submenu views (Sync, BranchCompare, Stashes, Rebase, Worktrees, Pipeline, CreatePR).
 // Returns the AgentView for post-init wiring.
 func (m *Model) registerCommonViews(router *Router, repoPath string, startFKey int) *views.AgentView {
 	fkey := func(n int) string { return fmt.Sprintf("f%d", n) }
@@ -263,10 +289,20 @@ func (m *Model) registerCommonViews(router *Router, repoPath string, startFKey i
 		agentView.SetJiraConfig(m.cfg.Jira)
 	}
 
+	// Adversarial review flows, immediately after Agents in both modes.
+	flowsView := views.NewFlowsView(repoPath)
+	router.Register("Flows", flowsView, fkey(startFKey+4))
+	// In project mode the start modal defaults a flow's work dir to the
+	// selected workflow's worktree; in repo mode there is no Workflows view
+	// and it falls back to the repo path.
+	if wv, ok := router.GetView("Workflows").(*views.WorkflowsView); ok {
+		flowsView.SetWorkflowsView(wv)
+	}
+
 	// Config / settings view
 	if m.cfg != nil {
 		configView := views.NewConfigView(m.cfg)
-		router.Register("Config", configView, fkey(startFKey+4))
+		router.Register("Config", configView, fkey(startFKey+5))
 	}
 
 	// Git operations submenu views (no F-key shortcut)
@@ -413,7 +449,7 @@ func (m *Model) initProjectRouter() {
 		}
 	}
 
-	// Register shared single-repo views (F3-F7, after Workflows at F2)
+	// Register shared single-repo views (F3-F8, after Workflows at F2)
 	m.registerCommonViews(router, defaultRepoPath, 3)
 
 	// Project-specific submenu views
@@ -554,7 +590,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case views.StreamTickMsg:
 		// Handle at the app level so the tick chain survives view switches.
 		if av := m.getAgentView(); av != nil {
-			return m, av.AgentTickCmd()
+			return m, tea.Batch(av.AgentTickCmd(), m.flowRefreshCmd())
 		}
 		return m, nil
 	case views.AgentUpdateMsg:
@@ -563,6 +599,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleConnectionStatusMsg(msg)
 	case views.OpenPRForBranchMsg:
 		return m.handleOpenPRForBranchMsg(msg)
+	case views.OpenAgentMsg:
+		return m.handleOpenAgentMsg(msg)
 	case views.RefreshMsg:
 		return m.handleRefreshMsg(msg)
 	case views.ConfigSavedMsg:
@@ -577,15 +615,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // handleAgentUpdateMsg handles a notification from the AgentService that an
-// agent's state or output changed, refreshing the AgentView if present.
+// agent's state or output changed, refreshing the AgentView if present. The
+// flows view refreshes off the same event: every flow transition is caused
+// by an agent event, so this is the flow stream the TUI does not have.
 func (m Model) handleAgentUpdateMsg(msg views.AgentUpdateMsg) (tea.Model, tea.Cmd) {
+	flowCmd := m.flowRefreshCmd()
 	if av := m.getAgentView(); av != nil {
-		return m, func() tea.Msg {
+		return m, tea.Batch(func() tea.Msg {
 			av.LoadAgents()
 			return views.RefreshDoneMsg{}
-		}
+		}, flowCmd)
 	}
-	return m, nil
+	return m, flowCmd
+}
+
+// handleOpenAgentMsg switches to the Agents view with the requested agent
+// selected — the flow tree's 'a' key, which jumps from a step to the
+// transcript of the agent that ran it.
+func (m Model) handleOpenAgentMsg(msg views.OpenAgentMsg) (tea.Model, tea.Cmd) {
+	av := m.getAgentView()
+	if av == nil {
+		return m, nil
+	}
+	m.router.SwitchTo("Agents")
+	agentID := msg.AgentID
+	return m, func() tea.Msg {
+		av.LoadAgents()
+		if agentID != "" {
+			av.SelectAgentByID(agentID)
+		}
+		return views.RefreshDoneMsg{}
+	}
 }
 
 // handleConnectionStatusMsg updates connection status/state and any resulting

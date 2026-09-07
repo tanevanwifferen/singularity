@@ -2,6 +2,7 @@ package service
 
 import (
 	"gitlab.com/tanevanwifferen1/singularity/internal/engine"
+	"gitlab.com/tanevanwifferen1/singularity/internal/flow"
 	"gitlab.com/tanevanwifferen1/singularity/internal/git"
 	"gitlab.com/tanevanwifferen1/singularity/internal/jira"
 	"gitlab.com/tanevanwifferen1/singularity/internal/project"
@@ -158,6 +159,57 @@ type (
 	GraphEdge = queue.GraphEdge
 )
 
+// --- from internal/flow ---
+//
+// Aliased rather than re-projected: internal/flow's types are wire-first,
+// carrying snake_case tags already, so an alias keeps one truth about the
+// shape all the way from the reconciler to internal/api. The names are
+// prefixed Flow* because the service package is flat and "Round", "Verdict"
+// and "Finding" on their own would say nothing about what they belong to.
+
+type (
+	// Flow is one adversarial review run over a single working directory:
+	// its goal, its round cap, its rounds and their verdicts.
+	Flow = flow.Flow
+
+	// FlowStartRequest is everything needed to create a flow, and the wire
+	// request shape too.
+	FlowStartRequest = flow.StartRequest
+
+	// FlowRound is one implement/fix → review cycle. It stores no step
+	// state of its own — a step's state is its Task's, read on demand.
+	FlowRound = flow.Round
+
+	// FlowVerdict is the reviewer's structured decision, the sole accept
+	// path: a flow never infers an accept from a task exiting cleanly.
+	FlowVerdict = flow.Verdict
+
+	// FlowFinding is one item a reviewer raised.
+	FlowFinding = flow.Finding
+
+	// FlowState enum value (pending/running/accepted/rejected/errored/
+	// cancelled).
+	FlowState = flow.State
+
+	// FlowRoundState enum value (running/accepted/rejected/errored).
+	FlowRoundState = flow.RoundState
+
+	// FlowDecision enum value (accept/reject).
+	FlowDecision = flow.Decision
+
+	// FlowSeverity enum value (blocker/major/minor).
+	FlowSeverity = flow.Severity
+
+	// FlowTree is a flow's flat, parent-linked node list.
+	FlowTree = flow.Tree
+
+	// FlowTreeNode is one node of a FlowTree (flow, round or step).
+	FlowTreeNode = flow.TreeNode
+
+	// FlowNodeKind enum value (flow/round/step).
+	FlowNodeKind = flow.NodeKind
+)
+
 // --- from internal/project ---
 
 type (
@@ -270,6 +322,44 @@ const (
 	TaskFailed       = queue.StateFailed
 	TaskCancelled    = queue.StateCancelled
 	TaskSkipped      = queue.StateSkipped
+)
+
+// FlowState values mirroring internal/flow.
+const (
+	FlowPending   = flow.StatePending
+	FlowRunning   = flow.StateRunning
+	FlowAccepted  = flow.StateAccepted
+	FlowRejected  = flow.StateRejected
+	FlowErrored   = flow.StateErrored
+	FlowCancelled = flow.StateCancelled
+)
+
+// FlowRoundState values mirroring internal/flow.
+const (
+	FlowRoundRunning  = flow.RoundRunning
+	FlowRoundAccepted = flow.RoundAccepted
+	FlowRoundRejected = flow.RoundRejected
+	FlowRoundErrored  = flow.RoundErrored
+)
+
+// FlowDecision values mirroring internal/flow.
+const (
+	FlowAccept = flow.DecisionAccept
+	FlowReject = flow.DecisionReject
+)
+
+// FlowSeverity values mirroring internal/flow.
+const (
+	FlowSeverityBlocker = flow.SeverityBlocker
+	FlowSeverityMajor   = flow.SeverityMajor
+	FlowSeverityMinor   = flow.SeverityMinor
+)
+
+// FlowNodeKind values mirroring internal/flow.
+const (
+	FlowNodeFlow  = flow.NodeFlow
+	FlowNodeRound = flow.NodeRound
+	FlowNodeStep  = flow.NodeStep
 )
 
 // FailurePolicy values mirroring internal/queue.

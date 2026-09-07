@@ -15,6 +15,7 @@ import (
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/config"
 	"gitlab.com/tanevanwifferen1/singularity/internal/engine"
+	"gitlab.com/tanevanwifferen1/singularity/internal/flow"
 	"gitlab.com/tanevanwifferen1/singularity/internal/git"
 	"gitlab.com/tanevanwifferen1/singularity/internal/project"
 	"gitlab.com/tanevanwifferen1/singularity/internal/queue"
@@ -29,8 +30,10 @@ import (
 // the resulting JiraService returns ErrUnavailable for every call. taskQueue
 // may be nil (QueueService then returns ErrUnavailable); the daemon owns the
 // manager's lifecycle — starting the scheduler and stopping it on shutdown —
-// because those are process concerns, not service ones.
-func New(eng *engine.Engine, projectLoader *project.Loader, jiraCfg config.JiraConfig, taskQueue *queue.Manager) *service.Services {
+// because those are process concerns, not service ones. flowMgr may be nil on
+// the same terms, and for the same reason: a daemon without one still serves
+// everything else, with FlowService answering ErrUnavailable.
+func New(eng *engine.Engine, projectLoader *project.Loader, jiraCfg config.JiraConfig, taskQueue *queue.Manager, flowMgr *flow.Manager) *service.Services {
 	projSvc := newProjectService(projectLoader)
 	return &service.Services{
 		Repo:     &localRepoService{},
@@ -47,6 +50,7 @@ func New(eng *engine.Engine, projectLoader *project.Loader, jiraCfg config.JiraC
 		Project:  projSvc,
 		Agent:    &localAgentService{eng: eng},
 		Queue:    &localQueueService{mgr: taskQueue},
+		Flow:     &localFlowService{mgr: flowMgr, eng: eng},
 		Jira:     newJiraService(eng, jiraCfg),
 	}
 }

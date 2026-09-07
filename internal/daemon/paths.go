@@ -19,6 +19,7 @@ type Paths struct {
 	Log     string // <Dir>/daemon.log
 	Config  string // <Dir>/daemon.json (optional)
 	Queues  string // <Dir>/queues (one JSON file per task queue)
+	Flows   string // <Dir>/flows (one JSON file per flow, plus a verdict dir each)
 }
 
 // envHome is the override env var documented in DAEMON-LIFECYCLE §1.
@@ -61,5 +62,6 @@ func PathsFor(dir string) Paths {
 		Log:     filepath.Join(dir, "daemon.log"),
 		Config:  filepath.Join(dir, "daemon.json"),
 		Queues:  filepath.Join(dir, "queues"),
+		Flows:   filepath.Join(dir, "flows"),
 	}
 }

@@ -42,6 +42,7 @@ func New(c *client.Client) *service.Services {
 		Project:  &remoteProjectService{c: c},
 		Agent:    &remoteAgentService{c: c},
 		Queue:    &remoteQueueService{c: c},
+		Flow:     &remoteFlowService{c: c},
 		Jira:     &remoteJiraService{c: c},
 	}
 }

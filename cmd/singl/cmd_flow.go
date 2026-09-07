@@ -1,0 +1,227 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+
+	"gitlab.com/tanevanwifferen1/singularity/internal/api"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
+)
+
+// The `flow` noun: adversarial review flows, driven daemon-side through
+// repeated implement → review → fix rounds until a reviewer accepts the work
+// or the round cap is hit. Split the way `queue` is — dispatch and the
+// mutating verbs here, the renderers in cmd_flow_view.go, the poll loop in
+// cmd_flow_wait.go — because it is deliberately the same shape for a new
+// noun and the seams are what makes each half testable on its own.
+func cmdFlow(ctx context.Context, verb string, args []string) int {
+	switch verb {
+	case "start":
+		return runFlowStart(ctx, args)
+	case "list":
+		return runFlowList(ctx, args)
+	case "show":
+		return runFlowShow(ctx, args)
+	case "tree":
+		return runFlowTree(ctx, args)
+	case "wait":
+		return runFlowWait(ctx, args)
+	case "cancel":
+		return runFlowCancel(ctx, args)
+	case "remove":
+		return runFlowRemove(ctx, args)
+	default:
+		return nounHelp("flow", verb)
+	}
+}
+
+func runFlowStart(ctx context.Context, args []string) int {
+	fs := flag.NewFlagSet("flow-start", flag.ContinueOnError)
+	workdir := fs.String("workdir", "", "working directory every round runs in (required)")
+	prompt := fs.String("prompt", "", "the implementer's goal, repeated verbatim to every fixer (required)")
+	reviewPrompt := fs.String("review-prompt", "", "extra instructions for the reviewer")
+	maxRounds := fs.Int("max-rounds", 0, "give up after N rejected rounds, 1..20 (0 = daemon default of 3)")
+	title := fs.String("title", "", "short label for the flow")
+	model := fs.String("model", "", "model override for every step")
+	effort := fs.String("effort", "", "effort level: low|medium|high")
+	// Shared with `queue add` and `agents spawn` on purpose. A flow's tasks
+	// have to route exactly as the same prompt would from either of those,
+	// and the precedence lives in one helper so the TaskOptions.RouteEnabled
+	// bug — an effort pinned without a word about routing being routed
+	// anyway — cannot be reintroduced at a third call site.
+	smartRoute := smartRouteFlags(fs)
+	timeout := fs.Int("timeout", 0, "agent timeout in seconds (0 = daemon default)")
+	backend := fs.String("backend", "", "agent backend: claude or pi (default: daemon default)")
+	var contextFiles pathListFlag
+	fs.Var(&contextFiles, "context-file", "file to inject into every step's context (repeatable)")
+	var allowedTools idListFlag
+	fs.Var(&allowedTools, "allowed-tools", "restrict every step's agent to these tools (repeatable, or comma-separated)")
+	maxRetries := fs.Int("max-retries", 0, "unsupported: the flow wire contract carries no per-task retry count")
+	reviewerModel := fs.String("reviewer-model", "", "model for the review step only (default: --model)")
+	reviewerEffort := fs.String("reviewer-effort", "", "effort for the review step only (default: --effort)")
+	if code, done := parseArgs(fs, args); done {
+		return code
+	}
+	if *workdir == "" || *prompt == "" {
+		fmt.Fprintln(os.Stderr, "error: --workdir and --prompt are required")
+		return 2
+	}
+	// Rejected rather than ignored, the rule `queue add --file` established:
+	// an operator who passed --max-retries believed a flaky step would be
+	// retried. It would not be. api.FlowStartRequest has no field for it and
+	// queue.TaskOptions has none either, so there is nowhere on the wire for
+	// the number to go — a flow's liveness bound is --timeout and its round
+	// bound is --max-rounds. Kept registered so `flow start --max-retries 2`
+	// says that instead of "flag provided but not defined".
+	if flagTyped(fs, "max-retries") {
+		fmt.Fprintf(os.Stderr, "error: --max-retries (%d) is not supported by flows: no per-task retry count reaches the daemon\n", *maxRetries)
+		fmt.Fprintln(os.Stderr, "hint: bound a step with --timeout and the flow with --max-rounds")
+		return 2
+	}
+
+	work, review := composeFlowOpts(api.TaskOptions{
+		Model:        *model,
+		Effort:       *effort,
+		Backend:      *backend,
+		TimeoutSecs:  *timeout,
+		ContextFiles: contextFiles,
+		AllowedTools: allowedTools,
+	}, *reviewerModel, *reviewerEffort, smartRoute)
+
+	c, err := newClient()
+	if err != nil {
+		return die(err)
+	}
+	tctx, cancel := withTimeout(ctx)
+	defer cancel()
+	f, err := c.FlowStart(tctx, api.FlowStartRequest{
+		Title:      *title,
+		Goal:       *prompt,
+		ReviewGoal: *reviewPrompt,
+		WorkDir:    *workdir,
+		MaxRounds:  *maxRounds,
+		Opts:       work,
+		ReviewOpts: review,
+	})
+	if err != nil {
+		return die(err)
+	}
+	if globals.json {
+		return printJSON(f)
+	}
+	md := fmt.Sprintf("## Flow `%s` started\n\n", f.ID)
+	if f.Title != "" {
+		md += fmt.Sprintf("Title: %s  \n", f.Title)
+	}
+	md += fmt.Sprintf("State: `%s`  \nQueue: `%s`  \nWorkdir: `%s`  \nMax rounds: %d  \n",
+		f.State, f.QueueID, f.WorkDir, f.MaxRounds)
+	md += fmt.Sprintf("\nWait for it: `singl flow wait --id %s`  \n", f.ID)
+	md += fmt.Sprintf("Watch its tasks: `singl queue list --queue %s`\n", f.QueueID)
+	return renderMarkdown(md)
+}
+
+// composeFlowOpts builds the work and reviewer option blocks from the shared
+// flags plus the --reviewer-* overrides.
+//
+// The reviewer's block starts as a copy of the work block, so a reviewer
+// inherits the backend, timeout, context files and tool restriction it was
+// not asked to differ on; --reviewer-model and --reviewer-effort override
+// only what they name. It is composed here rather than left empty for the
+// daemon to default because flow.Start only substitutes Opts for an
+// *entirely* zero ReviewOpts, and a resolved SmartRoute is never zero.
+//
+// resolve is smartRouteFlags' resolver, called once per block with that
+// block's effective model and effort: the reviewer routes on its own pins,
+// so `--reviewer-model opus` leaves the classifier deciding the reviewer's
+// effort exactly as `--model opus` does the implementer's.
+func composeFlowOpts(base api.TaskOptions, reviewerModel, reviewerEffort string, resolve func(model, effort string) bool) (work, review api.TaskOptions) {
+	work = base
+	workRoute := resolve(base.Model, base.Effort)
+	work.SmartRoute = &workRoute
+
+	review = base
+	if reviewerModel != "" {
+		review.Model = reviewerModel
+	}
+	if reviewerEffort != "" {
+		review.Effort = reviewerEffort
+	}
+	reviewRoute := resolve(review.Model, review.Effort)
+	review.SmartRoute = &reviewRoute
+	return work, review
+}
+
+// flagTyped reports whether the user actually passed the named flag.
+// flag.Visit is what makes it possible: it reports only flags that were set,
+// so an explicit --max-retries 0 is distinguishable from an unset one.
+func flagTyped(fs *flag.FlagSet, name string) bool {
+	typed := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			typed = true
+		}
+	})
+	return typed
+}
+
+func runFlowCancel(ctx context.Context, args []string) int {
+	id, code := flowIDArg("flow-cancel", args)
+	if id == "" {
+		return code
+	}
+	c, err := newClient()
+	if err != nil {
+		return die(err)
+	}
+	tctx, cancel := withTimeout(ctx)
+	defer cancel()
+	if err := c.FlowCancel(tctx, id); err != nil {
+		return die(err)
+	}
+	return reportQueueAction("flow", id, "cancelled")
+}
+
+// runFlowRemove is spelled out rather than sharing a body with cancel
+// because its one interesting failure needs a way out: the daemon refuses to
+// forget a flow that is still running, and "conflict" alone does not tell
+// the operator what to do about it.
+func runFlowRemove(ctx context.Context, args []string) int {
+	id, code := flowIDArg("flow-remove", args)
+	if id == "" {
+		return code
+	}
+	c, err := newClient()
+	if err != nil {
+		return die(err)
+	}
+	tctx, cancel := withTimeout(ctx)
+	defer cancel()
+	if err := c.FlowRemove(tctx, id); err != nil {
+		if errors.Is(err, service.ErrConflict) {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "hint: cancel it (`singl flow cancel --id %s`) or wait for it (`singl flow wait --id %s`) first\n", id, id)
+			return 1
+		}
+		return die(err)
+	}
+	return reportQueueAction("flow", id, "removed")
+}
+
+// flowIDArg parses the single --id flag the per-flow verbs share. An empty
+// id means the caller must return code: 0 when the user asked for help, 2
+// when --id was missing.
+func flowIDArg(name string, args []string) (string, int) {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	id := fs.String("id", "", "flow ID (required)")
+	if code, done := parseArgs(fs, args); done {
+		return "", code
+	}
+	if *id == "" {
+		fmt.Fprintln(os.Stderr, "error: --id is required")
+		return "", 2
+	}
+	return *id, 0
+}
