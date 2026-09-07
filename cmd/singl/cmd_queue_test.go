@@ -239,3 +239,54 @@ func TestRenderGraphTreeOrphans(t *testing.T) {
 		t.Errorf("cyclic graph lost its nodes:\n%s", out)
 	}
 }
+
+// TestTypedFlagsOtherThan pins the --file mutual exclusion. The failure it
+// prevents is silent: per-task flags are ignored in file mode, so
+// `--file tasks.json --use-worktree --max-retries 2` used to exit 0 with
+// neither applied.
+func TestTypedFlagsOtherThan(t *testing.T) {
+	newFS := func() *flag.FlagSet {
+		fs := flag.NewFlagSet("queue-add", flag.ContinueOnError)
+		fs.String("file", "", "")
+		fs.String("queue", "", "")
+		fs.String("workdir", "", "")
+		fs.Bool("use-worktree", false, "")
+		fs.Int("max-retries", 0, "")
+		fs.Int("priority", 0, "")
+		return fs
+	}
+
+	fs := newFS()
+	if err := fs.Parse([]string{"--file", "t.json", "--queue", "q", "--use-worktree", "--max-retries", "2"}); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	got := typedFlagsOtherThan(fs, "file", "queue")
+	want := []string{"max-retries", "use-worktree"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+
+	// An explicitly passed zero value still counts as typed: that is the
+	// whole reason this uses flag.Visit rather than comparing to defaults.
+	fs = newFS()
+	if err := fs.Parse([]string{"--file", "t.json", "--priority", "0"}); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := typedFlagsOtherThan(fs, "file", "queue"); len(got) != 1 || got[0] != "priority" {
+		t.Fatalf("got %v, want [priority]", got)
+	}
+
+	// --file plus only --queue is the supported combination.
+	fs = newFS()
+	if err := fs.Parse([]string{"--file", "t.json", "--queue", "q1"}); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := typedFlagsOtherThan(fs, "file", "queue"); len(got) != 0 {
+		t.Fatalf("got %v, want none", got)
+	}
+}

@@ -52,7 +52,7 @@ func TestPrimeGuideTeachesQueueFirst(t *testing.T) {
 		"queue add --file",       // the recommended submit path
 		"queue wait --queue",     // the recommended block path
 		"backpressure",           // capacity no longer errors
-		"waiting_human",          // the actionable early return
+		"waiting_human",          // ...documented as a gap, not as live behaviour
 		"use_worktree",           // the one-agent-per-directory exemption
 		"scheduler enforces",     // ...which the scheduler now polices
 		"escape hatch",           // agents spawn is still documented
@@ -67,6 +67,17 @@ func TestPrimeGuideTeachesQueueFirst(t *testing.T) {
 	// documented way to block on unattended work any more.
 	if strings.Contains(primeGuide, "observe by polling, not streaming") {
 		t.Error("primer still frames spawn-then-poll as the main observation step")
+	}
+
+	// waiting_human must be described as a gap, not as a branch to write.
+	// The engine cannot report a stalled agent in this build, so an agent
+	// primed to answer one writes a path it can never take and reaches for
+	// a verb that always returns CONFLICT.
+	if !strings.Contains(primeGuide, "Human escalation is not implemented") {
+		t.Error("primer does not disclose that waiting_human is unreachable in this build")
+	}
+	if strings.Contains(primeGuide, "it returns **early** with a notice naming the task ID") {
+		t.Error("primer still documents the waiting_human early return as live queue wait behaviour")
 	}
 }
 

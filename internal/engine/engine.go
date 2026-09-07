@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -11,6 +12,13 @@ import (
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/config"
 )
+
+// ErrAgentLimit is returned by StartAgent when the concurrent-agent cap is
+// already reached. It is a sentinel rather than a bare message because
+// callers have to tell it apart from a genuine spawn failure: the task
+// queue treats a cap refusal as backpressure (the task waits for a slot)
+// and anything else as a failed attempt.
+var ErrAgentLimit = errors.New("agent limit reached")
 
 // AgentOptions configures an agent's behavior
 type AgentOptions struct {
@@ -131,7 +139,7 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 	}
 	if activeCount >= e.maxAgents {
 		e.mu.Unlock()
-		return "", fmt.Errorf("agent limit reached (%d/%d active)", activeCount, e.maxAgents)
+		return "", fmt.Errorf("%w (%d/%d active)", ErrAgentLimit, activeCount, e.maxAgents)
 	}
 
 	id := e.generateID()
@@ -362,6 +370,26 @@ func (e *Engine) ActiveAgents() []*Agent {
 	return active
 }
 
+// ActiveCount returns the number of agents StartAgent's capacity check
+// counts, i.e. agents for which IsActive reports true.
+//
+// This is deliberately NOT EngineStats.Active, which omits AgentRouting: a
+// scheduler that sizes its dispatch on the stats number over-dispatches for
+// the whole duration of a smart-route classifier round trip and then has
+// its spawn refused. Anything gating on capacity must use this.
+func (e *Engine) ActiveCount() int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	n := 0
+	for _, a := range e.agents {
+		if a.IsActive() {
+			n++
+		}
+	}
+	return n
+}
+
 // WaitFor blocks until the given agent completes or the timeout expires
 func (e *Engine) WaitFor(sessionID string, timeout time.Duration) (AgentState, error) {
 	agent := e.getAgent(sessionID)
@@ -443,7 +471,10 @@ func (e *Engine) Stats() EngineStats {
 
 // EngineStats holds summary statistics about the engine
 type EngineStats struct {
-	Total     int `json:"total"`
+	Total int `json:"total"`
+	// Active counts running/starting agents only, for display. It is not
+	// the capacity number: use ActiveCount for anything that gates on the
+	// cap, which also counts agents still being routed.
 	Active    int `json:"active"`
 	Completed int `json:"completed"`
 	Errored   int `json:"errored"`

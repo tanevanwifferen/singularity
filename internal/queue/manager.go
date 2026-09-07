@@ -26,6 +26,11 @@ var (
 	// ErrNotWaiting means Answer was called on a task that is not waiting
 	// for a human.
 	ErrNotWaiting = errors.New("task is not waiting for input")
+	// ErrNoCapacity is what a runner returns from StartTask when the agent
+	// cap refused the spawn. It is never a task failure: capacity is
+	// backpressure, so the scheduler puts the task back in line with its
+	// attempt refunded. Runners must wrap it so errors.Is matches.
+	ErrNoCapacity = errors.New("no agent capacity")
 )
 
 // AgentRunner is the queue's view of the agent engine. Keeping it an
@@ -33,6 +38,10 @@ var (
 // subprocesses; engine_runner.go holds the production adapter.
 type AgentRunner interface {
 	// StartTask dispatches a task and returns the new agent's ID.
+	//
+	// A refusal caused by the agent cap must be reported as an error
+	// wrapping ErrNoCapacity: the scheduler distinguishes that from a
+	// genuine spawn failure and does not consume an attempt for it.
 	StartTask(t Task) (agentID string, err error)
 
 	// AgentState returns the agent's current state name (the same strings
@@ -274,8 +283,7 @@ func (m *Manager) Add(specs []TaskSpec) ([]Task, error) {
 		}
 		if s.QueueID == "" {
 			if autoQueue == "" {
-				m.queueSeq++
-				autoQueue = "q" + strconv.FormatInt(m.queueSeq, 10)
+				autoQueue = m.mintQueueIDLocked()
 			}
 			s.QueueID = autoQueue
 		}
@@ -358,6 +366,21 @@ func (m *Manager) Add(specs []TaskSpec) ([]Task, error) {
 
 	m.Wake()
 	return out, nil
+}
+
+// mintQueueIDLocked allocates an unused auto queue ID. The sequence alone is
+// not enough: an operator may name a queue "q1" outright (idPattern allows
+// it) without ever touching the counter, and reusing that ID would silently
+// merge an unrelated batch into their queue — where a single `queue cancel`
+// or `queue pause` would then hit both. Caller holds m.mu.
+func (m *Manager) mintQueueIDLocked() string {
+	for {
+		m.queueSeq++
+		id := "q" + strconv.FormatInt(m.queueSeq, 10)
+		if _, exists := m.queues[id]; !exists {
+			return id
+		}
+	}
 }
 
 // Get returns one task by ID.
@@ -663,11 +686,19 @@ func (m *Manager) RemoveQueue(queueID string) error {
 		delete(m.tasks, t.ID)
 	}
 	delete(m.queues, queueID)
+	// Tasks in other queues may have depended on the ones just deleted. A
+	// missing dependency counts as satisfied, so they can run now; settling
+	// here rather than waiting for the next scheduler pass keeps the state
+	// an operator reads back immediately after the removal honest.
+	changed := m.refreshBlockedLocked()
+	m.flushLocked()
 	m.mu.Unlock()
 
 	if err := m.store.Delete(queueID); err != nil {
 		log.Printf("queue: delete state for %s: %v", queueID, err)
 	}
+	m.emit(changed)
+	m.Wake()
 	return nil
 }
 

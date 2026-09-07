@@ -21,8 +21,15 @@ type fakeRunner struct {
 	maxAgents int
 	startErr  error
 	seq       int
-	inputs    []string
-	killed    []string
+	// beforeStart, when set, runs at the top of StartTask without f.mu
+	// held, so a test can act on the manager while a spawn is in flight.
+	beforeStart func(Task)
+	// capacityActive, when non-nil, overrides what Capacity reports while
+	// leaving StartTask's own cap check on the honest count. That is the
+	// engine's real bug shape: it gates on one number and reports another.
+	capacityActive *int
+	inputs         []string
+	killed         []string
 }
 
 func newFakeRunner(max int) *fakeRunner {
@@ -36,10 +43,20 @@ func newFakeRunner(max int) *fakeRunner {
 }
 
 func (f *fakeRunner) StartTask(t Task) (string, error) {
+	if f.beforeStart != nil {
+		f.beforeStart(t)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.startErr != nil {
 		return "", f.startErr
+	}
+	// Enforce the cap the way the real engine does, counting the same
+	// agents Capacity reports. Without this the fake is more permissive
+	// than the engine and the whole class of "the scheduler claimed a slot
+	// the engine then refused" defects cannot be reproduced.
+	if f.maxAgents > 0 && f.activeLocked() >= f.maxAgents {
+		return "", fmt.Errorf("%w: agent limit reached (%d/%d active)", ErrNoCapacity, f.activeLocked(), f.maxAgents)
 	}
 	f.seq++
 	id := fmt.Sprintf("a%d", f.seq)
@@ -62,6 +79,16 @@ func (f *fakeRunner) AgentState(agentID string) (string, string, bool) {
 func (f *fakeRunner) Capacity() (int, int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.capacityActive != nil {
+		return *f.capacityActive, f.maxAgents
+	}
+	return f.activeLocked(), f.maxAgents
+}
+
+// activeLocked is the one active-agent count the fake has, shared by
+// Capacity and StartTask's cap check. The real engine's divergence between
+// those two counts is finding 1; the fake must not be able to hide it.
+func (f *fakeRunner) activeLocked() int {
 	active := 0
 	for _, st := range f.states {
 		switch st {
@@ -70,7 +97,7 @@ func (f *fakeRunner) Capacity() (int, int) {
 			active++
 		}
 	}
-	return active, f.maxAgents
+	return active
 }
 
 func (f *fakeRunner) WorkDirBusy(dir string) bool {
@@ -816,4 +843,288 @@ func TestRequeueNoteSurvivesTheBlockedToReadyPass(t *testing.T) {
 	if restored.Error == "" {
 		t.Error("requeue note was cleared by the blocked->ready transition")
 	}
+}
+
+// TestAgentLimitFromRunnerReturnsTaskToReady pins the invariant the queue
+// exists for: the cap is backpressure. Even when the scheduler's capacity
+// read is stale — the engine reports fewer active agents than it gates on,
+// which is exactly what a smart-route agent stuck in routing does — the
+// refused task must go back in line, not fail.
+func TestAgentLimitFromRunnerReturnsTaskToReady(t *testing.T) {
+	runner := newFakeRunner(1)
+	// An agent the queue did not start already holds the only slot, but
+	// Capacity under-reports it.
+	runner.states["outsider"] = "routing"
+	stale := 0
+	runner.capacityActive = &stale
+
+	m := newTestManager(runner)
+	tasks := mustAdd(t, m, []TaskSpec{{Name: "a", Prompt: "p", WorkDir: "/w"}})
+	id := tasks[0].ID
+
+	m.tick()
+	task, _ := m.Get(id)
+	if task.State != StateReady {
+		t.Fatalf("state = %s, want ready — an agent-limit refusal is backpressure, not a failure", task.State)
+	}
+	if task.Attempts != 0 {
+		t.Errorf("attempts = %d, want 0 — a refused spawn must not spend a retry", task.Attempts)
+	}
+	if task.Error != "" {
+		t.Errorf("error = %q, want empty", task.Error)
+	}
+
+	// The slot frees up: the same task now starts, with its full budget.
+	runner.mu.Lock()
+	runner.states["outsider"] = "complete"
+	runner.capacityActive = nil
+	runner.mu.Unlock()
+
+	m.tick()
+	if got := stateOf(t, m, id); got != StateRunning {
+		t.Fatalf("state = %s, want running once the slot freed", got)
+	}
+}
+
+// TestCancelDuringSpawnKillsTheAgentAndStaysCancelled covers the unlocked
+// StartTask window: a cancel that lands there used to leave the spawned
+// agent live and untracked (nothing probes a cancelled task), holding an
+// engine slot and a working directory forever.
+func TestCancelDuringSpawnKillsTheAgentAndStaysCancelled(t *testing.T) {
+	runner := newFakeRunner(4)
+	m := newTestManager(runner)
+	tasks := mustAdd(t, m, []TaskSpec{{Name: "a", Prompt: "p", WorkDir: "/w"}})
+	id := tasks[0].ID
+
+	runner.beforeStart = func(Task) {
+		if err := m.Cancel(id); err != nil {
+			t.Errorf("Cancel: %v", err)
+		}
+	}
+
+	m.tick()
+	if got := stateOf(t, m, id); got != StateCancelled {
+		t.Fatalf("state = %s, want cancelled — dispatch must not overwrite an operator cancel", got)
+	}
+	runner.mu.Lock()
+	killed := append([]string(nil), runner.killed...)
+	runner.mu.Unlock()
+	if len(killed) != 1 {
+		t.Fatalf("killed = %v, want exactly the orphaned agent", killed)
+	}
+}
+
+// TestSpawnFailureDuringCancelDoesNotResurrectTask is the other half of the
+// same window: a failing spawn must not drag a cancelled task back into
+// blocked, where the next tick would re-dispatch work the operator stopped.
+func TestSpawnFailureDuringCancelDoesNotResurrectTask(t *testing.T) {
+	runner := newFakeRunner(4)
+	runner.startErr = errors.New("workdir gone")
+	m := newTestManager(runner)
+	tasks := mustAdd(t, m, []TaskSpec{{Name: "a", Prompt: "p", WorkDir: "/w"}})
+	id := tasks[0].ID
+
+	runner.beforeStart = func(Task) {
+		if err := m.Cancel(id); err != nil {
+			t.Errorf("Cancel: %v", err)
+		}
+	}
+
+	m.tick()
+	m.tick()
+	if got := stateOf(t, m, id); got != StateCancelled {
+		t.Fatalf("state = %s, want cancelled", got)
+	}
+}
+
+// TestRemoveQueueSettlesDependentsInOtherQueues: a missing dependency counts
+// as satisfied, so dropping the queue that held it has to release its
+// dependents right away rather than at whatever unrelated operator action
+// next happens to recompute the graph.
+func TestRemoveQueueSettlesDependentsInOtherQueues(t *testing.T) {
+	runner := newFakeRunner(4)
+	m := newTestManager(runner)
+	first := mustAdd(t, m, []TaskSpec{{QueueID: "a", Name: "a", Prompt: "p", WorkDir: "/w1"}})
+	second := mustAdd(t, m, []TaskSpec{{QueueID: "b", Name: "b", Prompt: "p", WorkDir: "/w2", After: []string{first[0].ID}}})
+
+	if err := m.Cancel(first[0].ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if got := stateOf(t, m, second[0].ID); got != StateSkipped {
+		t.Fatalf("dependent state = %s, want skipped", got)
+	}
+
+	if err := m.RemoveQueue("a"); err != nil {
+		t.Fatalf("RemoveQueue: %v", err)
+	}
+	if got := stateOf(t, m, second[0].ID); got != StateReady {
+		t.Fatalf("dependent state = %s, want ready immediately after the dependency was removed", got)
+	}
+}
+
+// TestIdleTickSettlesDerivedState pins the unconditional settle pass. Both
+// reconcile and dispatch bail out early on an idle daemon, so a graph that
+// changed without any task transition has to be recomputed by the tick
+// itself or it stays wedged indefinitely.
+func TestIdleTickSettlesDerivedState(t *testing.T) {
+	runner := newFakeRunner(4)
+	m := newTestManager(runner)
+	tasks := mustAdd(t, m, []TaskSpec{
+		{Name: "a", Prompt: "p", WorkDir: "/w1"},
+		{Name: "b", Prompt: "p", WorkDir: "/w2", After: []string{"a"}},
+	})
+
+	// The queue is paused so dispatch cannot mask the result by starting
+	// the task in the same tick; ready is the state under test.
+	if err := m.Pause(tasks[1].QueueID); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+
+	// Wedge the dependent: its dependency is skipped-out and then vanishes
+	// from the index without anything recomputing the graph.
+	m.mu.Lock()
+	dep := m.tasks[tasks[0].ID]
+	dep.State = StateCancelled
+	m.tasks[tasks[1].ID].State = StateBlocked
+	delete(m.tasks, dep.ID)
+	m.mu.Unlock()
+
+	// Nothing is active and nothing is ready, so reconcile and dispatch
+	// both return early — only the settle pass can move this task.
+	m.tick()
+	if got := stateOf(t, m, tasks[1].ID); got != StateReady {
+		t.Fatalf("state = %s, want ready — an idle tick must still settle derived state", got)
+	}
+}
+
+// TestStopDuringDispatchReleasesUnspawnedClaims: Stop used to wait on the
+// whole claimed batch, one subprocess spawn at a time, and then time out
+// while the daemon tore the engine down underneath the dispatch goroutine.
+func TestStopDuringDispatchReleasesUnspawnedClaims(t *testing.T) {
+	runner := newFakeRunner(4)
+	m := newTestManager(runner)
+	tasks := mustAdd(t, m, []TaskSpec{
+		{Name: "a", Prompt: "p", WorkDir: "/w1"},
+		{Name: "b", Prompt: "p", WorkDir: "/w2"},
+		{Name: "c", Prompt: "p", WorkDir: "/w3"},
+	})
+
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var once sync.Once
+	runner.beforeStart = func(Task) {
+		once.Do(func() {
+			entered <- struct{}{}
+			<-release
+		})
+	}
+
+	m.Start()
+	m.Wake()
+	<-entered
+
+	stopped := make(chan struct{})
+	go func() {
+		m.Stop()
+		close(stopped)
+	}()
+	<-m.stop // Stop has signalled; the dispatch loop can now observe it.
+	close(release)
+
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Stop did not return while dispatch was mid-spawn")
+	}
+
+	started := runner.startedIDs()
+	if len(started) != 1 {
+		t.Fatalf("started = %v, want only the in-flight spawn", started)
+	}
+	for _, task := range tasks {
+		if task.ID == started[0] {
+			continue
+		}
+		got, _ := m.Get(task.ID)
+		if got.State != StateReady {
+			t.Errorf("task %s state = %s, want ready — an unspawned claim must be released on stop", task.ID, got.State)
+		}
+		if got.Attempts != 0 {
+			t.Errorf("task %s attempts = %d, want 0", task.ID, got.Attempts)
+		}
+	}
+}
+
+// TestAutoQueueIDSkipsAnOperatorNamedQueue: idPattern accepts "q1" as a
+// queue name, and naming a queue never touches the auto-ID counter. Minting
+// straight from the counter therefore merged an unrelated batch into the
+// operator's queue, where one `queue cancel --queue q1` or `queue pause`
+// would then hit both.
+func TestAutoQueueIDSkipsAnOperatorNamedQueue(t *testing.T) {
+	m := newTestManager(newFakeRunner(4))
+	named := mustAdd(t, m, []TaskSpec{{QueueID: "q1", Name: "a", Prompt: "p", WorkDir: "/w1"}})
+
+	auto := mustAdd(t, m, []TaskSpec{{Name: "b", Prompt: "p", WorkDir: "/w2"}})
+	if auto[0].QueueID == "q1" {
+		t.Fatalf("auto-minted queue = q1, want a free ID — the operator already owns that name")
+	}
+
+	// The two queues stay separate: each holds exactly its own task.
+	for _, tc := range []struct {
+		queueID string
+		wantID  string
+	}{
+		{"q1", named[0].ID},
+		{auto[0].QueueID, auto[0].ID},
+	} {
+		got, err := m.List(tc.queueID, nil)
+		if err != nil {
+			t.Fatalf("List(%s): %v", tc.queueID, err)
+		}
+		if len(got) != 1 || got[0].ID != tc.wantID {
+			t.Errorf("queue %s holds %v, want just %s", tc.queueID, taskIDsOf(got), tc.wantID)
+		}
+	}
+}
+
+// TestAutoQueueIDSkipsARestoredOperatorNamedQueue is the same collision
+// across a daemon restart. This one already passed before the mint loop
+// existed, and pinning that is the point: autoQueueSeq parses any "q<n>",
+// so an operator-named "q1" happens to advance the counter on Restore and
+// the restart path was protected by accident rather than by design. It is
+// the only path that was — a queue named during this daemon's lifetime
+// never touches the counter, which is the case above.
+func TestAutoQueueIDSkipsARestoredOperatorNamedQueue(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	m := NewManager(newFakeRunner(4), store)
+	named := mustAdd(t, m, []TaskSpec{{QueueID: "q1", Name: "a", Prompt: "p", WorkDir: "/w1"}})
+
+	m2 := NewManager(newFakeRunner(4), store)
+	m2.Restore()
+
+	auto := mustAdd(t, m2, []TaskSpec{{Name: "b", Prompt: "p", WorkDir: "/w2"}})
+	if auto[0].QueueID == "q1" {
+		t.Fatalf("auto-minted queue = q1 after restore, want a free ID")
+	}
+	got, err := m2.List("q1", nil)
+	if err != nil {
+		t.Fatalf("List(q1): %v", err)
+	}
+	if len(got) != 1 || got[0].ID != named[0].ID {
+		t.Errorf("restored queue q1 holds %v, want just %s", taskIDsOf(got), named[0].ID)
+	}
+}
+
+// taskIDsOf is a readable form for assertion failures.
+func taskIDsOf(tasks []Task) []string {
+	out := make([]string, 0, len(tasks))
+	for _, t := range tasks {
+		out = append(out, t.ID)
+	}
+	return out
 }
