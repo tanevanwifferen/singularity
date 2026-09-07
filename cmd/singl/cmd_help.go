@@ -97,6 +97,37 @@ Verbs:
   queues                                               every queue with its state tallies
   remove    --queue <id>                               forget a drained queue and its state file
 `,
+	"flow": `Usage: singl flow <verb> [flags]
+
+An adversarial review flow drives implement -> review -> fix rounds over one
+working directory until a reviewer accepts the work or --max-rounds is hit.
+It owns the queue "flow-<id>", so "queue list --queue flow-<id>" shows its
+tasks and "agents output --id <agent>" shows a step's transcript.
+
+Verbs:
+  start   --workdir <dir> --prompt <goal> [--review-prompt <text>] [--max-rounds N] [--title T]
+          [--model M] [--effort low|medium|high] [--timeout SECS] [--backend claude|pi]
+          [--context-file P ...] [--allowed-tools a,b]
+          [--reviewer-model M] [--reviewer-effort low|medium|high]
+          [--smart-route[=bool]] [--no-smart-route]
+          Reviewer options default to the work options; --reviewer-* overrides
+          only what it names. Smart routing is on by default, same as queue add,
+          and is resolved separately for the work and the review step.
+          There is no --use-worktree: every round must see the same tree, so
+          create the worktree first and pass it as --workdir.
+          --max-retries is rejected: no per-task retry count reaches the daemon.
+  list    [--state s1,s2 ...]                      flows with their round progress
+  show    --id <flow-id>                           rounds, verdicts, findings and agent IDs
+  tree    --id <flow-id>                           flow/round/step tree (ascii, or --json)
+  wait    --id <flow-id> [--timeout SECS] [--interval SECS]
+                                                   block until the flow settles
+                                                   (exit 0 accepted, 1 rejected/errored/
+                                                   cancelled/timeout)
+  cancel  --id <flow-id>                           stop the flow and its unfinished tasks
+  remove  --id <flow-id>                           forget a terminal flow (refused while live)
+
+Every verb accepts --json. Exit codes: 0 ok, 1 error, 2 usage error.
+`,
 	"workflows": `Usage: singl workflows <verb> [flags]
 
 Verbs:

@@ -167,6 +167,81 @@ Two things the queue now guarantees, which you used to have to remember:
   `git worktree prune` by hand. A large `use_worktree` DAG accumulates one
   checkout and one branch per task — plan to sweep them afterwards.
 
+**2b — when acceptance is uncertain, use a flow.** The rule that chooses
+between the two: **a DAG is for work whose *shape* is known; a flow is for work
+whose *acceptance* is not.** If you can write down the steps and their edges up
+front, `queue add --file` is right. If the number of steps depends on whether a
+reviewer is satisfied — "make this correct", "harden this until it holds" — you
+cannot express that as a DAG, because the round count does not exist when you
+submit. A flow is the daemon-side loop for it: implement → review → fix →
+review, one round at a time, until a reviewer accepts or the cap is hit.
+
+Each round is two fresh agents in the *same* work dir: a work task (`implement`
+in round 1, `fix` afterwards) and a `review` task that depends on it. The
+reviewer writes a structured JSON verdict the daemon parses; the task's exit
+state is liveness only, never the accept/reject decision. An unparseable or
+missing verdict is a reject plus exactly one re-review, then `errored` — never
+an accept.
+
+```
+singl --json flow start --workdir ~/.worktrees/<project>/feature-x/api \
+  --title "retry-after handling" \
+  --prompt "Implement retry-after handling in this worktree. Run the tests." \
+  --review-prompt "Focus on error paths and the tests." \
+  --max-rounds 3 --effort medium --timeout 1800
+# → the flow record: {"id":"f3","queue_id":"flow-f3","state":"pending","max_rounds":3,...}
+
+singl --json flow wait --id f3 --timeout 3600 --interval 5
+```
+
+`flow wait` exit codes — the whole point of the verb, same contract as
+`queue wait`:
+
+| Exit | Meaning |
+|---|---|
+| `0` | `accepted` — a reviewer accepted the work in the flow's work dir |
+| `1` | `rejected` — the round cap was reached with the reviewer still rejecting |
+| `1` | `errored` or `cancelled` |
+| `1` | `--timeout` expired with the flow still live (JSON carries `"timed_out": true`, plus `rounds` and `max_rounds`) |
+
+`rejected` is a designed outcome, not a malfunction — but it still exits `1`,
+because the work must not be landed on the strength of it. Read the findings
+(`flow show`) and decide by hand.
+
+Flow states: `pending` → `running`, then one of `accepted`, `rejected`,
+`errored`, `cancelled`. Verbs:
+
+```
+singl --json flow list  [--state running,accepted]
+singl --json flow show  --id f3    # rounds, verdicts, findings, task and agent IDs
+singl flow tree  --id f3           # ascii tree of flow → rounds → steps (--json for the node list)
+singl flow cancel --id f3          # marks the flow cancelled, stops the tasks it created
+singl flow remove --id f3          # refused with CONFLICT while the flow is non-terminal
+```
+
+`flow start` flags: `--workdir` and `--prompt` are required; then
+`--review-prompt`, `--max-rounds N` (1..20, default 3), `--title`, `--model`,
+`--effort low|medium|high`, `--timeout <secs>`, `--backend claude|pi`,
+`--context-file <p>` (repeatable), `--allowed-tools a,b`, `--reviewer-model`,
+`--reviewer-effort`, `--smart-route[=bool]`, `--no-smart-route`. The reviewer
+inherits the work options and `--reviewer-*` overrides only what it names.
+Routing works exactly as it does for `queue add` and `agents spawn`, resolved
+per block — so `--reviewer-model opus` still lets the classifier pick the
+reviewer's effort.
+
+Two flags that are deliberately *not* there:
+
+- **`--use-worktree` does not exist, and `use_worktree` in the opts is
+  refused** (BAD_REQUEST), not silently cleared. An isolated agent gets its
+  own private checkout, so the reviewer would review a different tree than the
+  implementer wrote, and each isolated agent merges back on its own, so a
+  rejected round's work would already be merged. Isolation is *your* job,
+  before the flow starts — create the workflow and point the flow at its
+  worktree.
+- **`--max-retries` is registered but rejected** with exit `2`: no per-task
+  retry count reaches the daemon. A flow's liveness bound is `--timeout` and
+  its round bound is `--max-rounds`.
+
 **3 — wait for the queue, then read the results.** `queue wait` blocks by
 polling the daemon (no streaming) and fully supports `--json`:
 
@@ -352,6 +427,7 @@ idempotent for the repos that already cleaned.
 | `status` | — | — |
 | `queue` | add list show graph wait cancel retry answer pause resume queues remove | `--file` `--workdir` `--prompt` `--title` `--after` `--queue` `--id` `--state` `--message` `--model` `--effort` `--timeout` `--interval` `--backend` `--use-worktree` `--context-file` `--allowed-tools` `--max-retries` `--on-failure` `--priority` `--smart-route` `--no-smart-route` |
 | `agents` | list get spawn resume kill remove output input wait wait-all watch watch-all chat stats | `--id` `--workdir` `--prompt` `--message` `--offset` `--tail` `--last` `--full` `--model` `--effort` `--smart-route` `--max-turns` `--timeout` `--interval` `--any` `--backend` |
+| `flow` | start list show tree wait cancel remove | `--workdir` `--prompt` `--review-prompt` `--max-rounds` `--title` `--id` `--state` `--model` `--effort` `--timeout` `--interval` `--backend` `--context-file` `--allowed-tools` `--reviewer-model` `--reviewer-effort` `--smart-route` `--no-smart-route` (no `--use-worktree`; `--max-retries` is rejected) |
 | `project` | list status load info refresh branch-check context workflows | `--name` (load) `--project` (handle) `--branch` |
 | `workflows` | list create remove discover | `--project` `--branch` `--base-dir` (create makes a worktree per repo; remove tears the whole workflow down) |
 | `branches` | list checkout create delete head compare | `--repo` `--branch` `--start-point` `--base` `--head` `--force` |
@@ -369,9 +445,9 @@ idempotent for the repos that already cleaned.
 
 Streaming (blocking) commands: `agents watch`, `agents watch-all`, `agents chat`,
 `sync fetch|pull|push|pull-rebase|all`, `workflows discover`. They reject `--json`.
-`queue wait`, `agents wait` and `agents wait-all` block too, but poll instead of
-stream and fully support `--json` — they are the scripted counterparts of
-watch/watch-all.
+`queue wait`, `flow wait`, `agents wait` and `agents wait-all` block too, but
+poll instead of stream and fully support `--json` — they are the scripted
+counterparts of watch/watch-all.
 
 <!-- gitea-forge -->
 The forge layer drives **github** (`gh`), **gitlab** (`glab`) and **gitea**/Forgejo (`tea`).
@@ -400,6 +476,21 @@ in for that host, and prints the exact `tea logins add` command when it is not.
   now about reviewability, not corruption — unless you set `use_worktree`, which
   gives each task its own worktree and lifts the serialisation.
 - Never use `agents input` to hand an agent a second, unrelated task — spawn a new one.
+- **Aim a flow at a workflow worktree, never the live checkout.** A flow runs
+  every round of every agent in the one `--workdir` you gave it, with worktree
+  isolation refused, so it will happily rewrite the tree the user is sitting in.
+  `workflows create` first, then `flow start --workdir <that worktree>`.
+- Debug a flow through its queue, not by guessing: `singl queue list --queue
+  flow-<id>` shows the round's two tasks and their states, `singl flow tree
+  --id <id>` joins them to their agents, and `singl agents output --id
+  <agent_id> --offset <n>` is the transcript. `flow show --id <id>` has the
+  verdicts and findings.
+- **Never `agents input` a flow's agent.** The fix round *is* the correction
+  mechanism: the reviewer's findings are fed to the next round's fixer
+  automatically. Steering a step by hand puts work into the tree that no
+  verdict accounts for — and the agent is terminated the moment its task
+  settles anyway, exactly as for any queued task. If the flow is heading the
+  wrong way, `flow cancel` it and start a better-specified one.
 - Too big for one agent? Declare the steps as one DAG with `queue add --file`
   and let `after` sequence them — that is what the queue is for. Reserve
   "review the diff, then submit the next task" for steps whose *shape* depends on
@@ -424,6 +515,12 @@ in for that host, and prints the exact `tea logins add` command when it is not.
   content goes through an agent — including a one-line config flip or a
   mechanical rename across files. "It's only one line" is exactly how an
   orchestrator ends up with an untracked, unreviewed diff no task accounts for.
+- The TUI has a **Flows view** — `F6` in repo mode, `F7` in project mode (it sits
+  right after Agents) — with the flow list on the left and the selected flow's
+  round/step tree on the right: `tab` switches pane, `j`/`k` and arrows move,
+  `l`/`enter` expand, `h` collapse, `n` starts a flow (work dir, goal, review
+  focus, max rounds), `c` cancels behind a confirm, `a` opens the selected
+  step's agent in the Agents view, `r` refreshes, `/` filters.
 - What you *do* touch directly, and nothing beyond it: the git plumbing the
   daemon exposes (`commit`, `sync push`, `mr create`, `workflows create|remove`),
   reading files and read-only commands to decide what to delegate, and reviewing
@@ -448,6 +545,21 @@ in for that host, and prints the exact `tea logins add` command when it is not.
   state: `queue answer` errors with CONFLICT for every input, and `queue wait`
   never returns a question. Do not write a branch for it — a stuck agent shows
   up as a task still `running`, which is what `opts.timeout_secs` is for.
+- **Flows have no cost cap.** N rounds is roughly 2N agents, and nothing
+  aggregates their `TotalCostUSD` — not `flow show`, not `flow list`. The only
+  bounds are `--max-rounds` (1..20, default 3) and the per-step
+  `--timeout`/`opts.timeout_secs`. Set both, deliberately, before you start one.
+- **Nothing stops a reviewer rejecting cosmetically until the cap.** There is no
+  daemon-side "good enough" rule — that would be the fail-open the verdict
+  design refuses — so `--max-rounds` is the whole convergence guarantee and
+  `rejected` is a first-class outcome, not an error. Narrow the reviewer with
+  `--review-prompt` if you see a flow burning rounds on style.
+- **Flows inherit the `waiting_human` gap.** A flow cannot stop to ask a
+  question, because nothing in this build ever reaches that state; a stuck step
+  shows up as a task still `running`, bounded only by its timeout.
+- **`flow start --max-retries N` exits `2`.** The flag is registered only so it
+  can say why: no per-task retry count reaches the daemon for a flow. Use
+  `--timeout` for a step and `--max-rounds` for the flow.
 - `use_worktree` worktrees are never reclaimed automatically — see step 2.
   `agents remove`, `queue cancel`, a completed task and `daemon stop` all end
   the agent's process but leave its checkout and branch on disk. Clean them

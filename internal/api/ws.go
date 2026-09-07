@@ -23,6 +23,7 @@ const (
 	WSEventAgentResumed      = "agent_resumed"
 	WSEventAgentError        = "agent_error"
 	WSEventQueueTaskChanged  = "queue_task_changed"
+	WSEventFlowUpdated       = "flow_updated"
 	WSEventWorkflowUpdated   = "workflow_updated"
 	WSEventSyncProgress      = "sync_progress"
 	WSEventDiscoveryProgress = "discovery_progress"
@@ -105,6 +106,16 @@ type AgentErrorPayload struct {
 // order with respect to a client's own polling.
 type QueueTaskChangedPayload struct {
 	Task Task `json:"task"`
+}
+
+// FlowUpdatedPayload is the payload of a "flow_updated" WS frame. The daemon
+// emits one per flow state change, carrying the whole flow rather than an ID
+// — queue_task_changed's reasoning: a flow view renders the transition with
+// no follow-up fetch, and the frame stays meaningful if it arrives out of
+// order with respect to a client's own polling. The flow's tasks keep
+// producing queue_task_changed frames unchanged.
+type FlowUpdatedPayload struct {
+	Flow Flow `json:"flow"`
 }
 
 // ErrorPayload is the payload of an "error" WS frame.

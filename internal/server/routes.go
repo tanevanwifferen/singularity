@@ -190,6 +190,14 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/queue/resume", wrap(s.handleQueueResume))
 	mux.HandleFunc("/api/queue/remove", wrap(s.handleQueueRemove))
 
+	// Flow.
+	mux.HandleFunc("/api/flow/start", wrap(s.handleFlowStart))
+	mux.HandleFunc("/api/flow/list", wrap(s.handleFlowList))
+	mux.HandleFunc("/api/flow/get", wrap(s.handleFlowGet))
+	mux.HandleFunc("/api/flow/tree", wrap(s.handleFlowTree))
+	mux.HandleFunc("/api/flow/cancel", wrap(s.handleFlowCancel))
+	mux.HandleFunc("/api/flow/remove", wrap(s.handleFlowRemove))
+
 	// Jira.
 	mux.HandleFunc("/api/jira/search", wrap(s.handleJiraSearch))
 	mux.HandleFunc("/api/jira/issue", wrap(s.handleJiraIssue))

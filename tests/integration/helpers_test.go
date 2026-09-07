@@ -26,6 +26,7 @@ import (
 	"gitlab.com/tanevanwifferen1/singularity/internal/client"
 	"gitlab.com/tanevanwifferen1/singularity/internal/config"
 	"gitlab.com/tanevanwifferen1/singularity/internal/daemon"
+	"gitlab.com/tanevanwifferen1/singularity/internal/flow"
 	"gitlab.com/tanevanwifferen1/singularity/internal/queue"
 	"gitlab.com/tanevanwifferen1/singularity/internal/server"
 	"gitlab.com/tanevanwifferen1/singularity/internal/service/local"
@@ -75,8 +76,11 @@ type testDaemon struct {
 	// agent runner behind it. Exposed so a test can drive task completion
 	// without spawning subprocesses while still going through the real
 	// manager, handlers and client.
-	Queue   *queue.Manager
-	Runner  *scriptedRunner
+	Queue  *queue.Manager
+	Runner *scriptedRunner
+	// Flow is the daemon's real flow manager, wired over the same queue
+	// and reconciling on the same terms as internal/daemon.Run.
+	Flow    *flow.Manager
 	srv     *server.Server
 	ln      net.Listener
 	release func()
@@ -93,6 +97,15 @@ type testDaemon struct {
 // signal handling: we want the test process to keep its own signal
 // disposition. Cleanup is automatic via t.Cleanup.
 func startTestDaemon(t *testing.T) *testDaemon {
+	t.Helper()
+	return startTestDaemonFlowsAt(t, "")
+}
+
+// startTestDaemonFlowsAt is startTestDaemon with the flow store's directory
+// overridden. An empty override means Paths.Flows, which is what every
+// ordinary test wants; a path that cannot be created exercises the daemon's
+// "persistence disabled, keep serving" fallback.
+func startTestDaemonFlowsAt(t *testing.T, flowsDir string) *testDaemon {
 	t.Helper()
 	home := shortTempDir(t)
 	t.Setenv("SINGULARITY_HOME", home)
@@ -128,7 +141,28 @@ func startTestDaemon(t *testing.T) *testDaemon {
 	taskQueue.OnChange(srv.QueueChangeHook())
 	taskQueue.Start()
 
-	srv.SetServices(local.New(srv.Engine(), nil, config.JiraConfig{}, taskQueue))
+	// A real flow manager over the same queue, wired exactly as
+	// internal/daemon.Run wires it: the additive change observer (the
+	// single OnChange slot is the WS broadcast's), Restore before the
+	// reconciler starts, and the flow-change hook feeding flow_updated.
+	if flowsDir == "" {
+		flowsDir = paths.Flows
+	}
+	// The same fallback Run applies, and for the same reason: a state
+	// directory the daemon cannot create disables flow persistence but must
+	// not stop it from serving. NewStore("") is a valid no-op store.
+	flowStore, ferr := flow.NewStore(flowsDir)
+	if ferr != nil {
+		t.Logf("flow: persistence disabled: %v", ferr)
+		flowStore, _ = flow.NewStore("")
+	}
+	flowMgr := flow.NewManager(taskQueue, flowStore)
+	flowMgr.OnFlowChange(srv.FlowChangeHook())
+	taskQueue.AddChangeObserver(flowMgr.Notify)
+	flowMgr.Restore()
+	flowMgr.StartReconciler()
+
+	srv.SetServices(local.New(srv.Engine(), nil, config.JiraConfig{}, taskQueue, flowMgr))
 
 	serveCh := make(chan error, 1)
 	go func() { serveCh <- srv.Serve(ln) }()
@@ -149,6 +183,7 @@ func startTestDaemon(t *testing.T) *testDaemon {
 		Client:  c,
 		Queue:   taskQueue,
 		Runner:  runner,
+		Flow:    flowMgr,
 		srv:     srv,
 		ln:      ln,
 		release: release,
@@ -167,9 +202,13 @@ func (d *testDaemon) shutdown() {
 	}
 	_ = d.Client.Disconnect()
 
-	// Before the engine, in the same order internal/daemon.Run uses: Stop
-	// waits for any in-flight spawn so nothing is still inside the runner
-	// when the engine is torn down.
+	// Before the engine, in the same order internal/daemon.Run uses: the
+	// reconciler first so it cannot submit a round into a stopping
+	// scheduler, then Stop, which waits for any in-flight spawn so nothing
+	// is still inside the runner when the engine is torn down.
+	if d.Flow != nil {
+		d.Flow.StopReconciler()
+	}
 	if d.Queue != nil {
 		d.Runner.releaseAll()
 		d.Queue.Stop()
