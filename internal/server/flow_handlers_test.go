@@ -36,7 +36,8 @@ func sampleFlow() service.Flow {
 }
 
 // flowEndpoint names one route plus how to drive it, so the error-code and
-// unavailability tables can walk all six without repeating the plumbing.
+// unavailability tables can walk every one of them without repeating the
+// plumbing.
 type flowEndpoint struct {
 	name    string
 	handler func(*Server) http.HandlerFunc
@@ -50,6 +51,13 @@ func flowEndpoints() []flowEndpoint {
 			func(s *Server) http.HandlerFunc { return s.handleFlowStart },
 			func() *http.Request {
 				return postJSON("/api/flow/start", `{"goal":"g","work_dir":"/w/flow"}`)
+			},
+		},
+		{
+			"continue",
+			func(s *Server) http.HandlerFunc { return s.handleFlowContinue },
+			func() *http.Request {
+				return postJSON("/api/flow/continue", `{"flow_id":"f1","rounds":2}`)
 			},
 		},
 		{
@@ -129,6 +137,69 @@ func TestHandleFlowStartHappyPath(t *testing.T) {
 		if !strings.Contains(string(data), want) {
 			t.Errorf("response missing %s: %s", want, data)
 		}
+	}
+}
+
+// TestHandleFlowContinueHappyPath covers POST /api/flow/continue: the flow
+// id and the extra-round count reach the service unaltered, and the raised
+// record comes back wrapped under "flow" the way start's does.
+func TestHandleFlowContinueHappyPath(t *testing.T) {
+	var gotID string
+	var gotRounds int
+	stub := fake.NewFlowStub()
+	stub.ContinueFn = func(_ context.Context, flowID string, extraRounds int) (*service.Flow, error) {
+		gotID, gotRounds = flowID, extraRounds
+		f := sampleFlow()
+		f.State = service.FlowRunning
+		f.MaxRounds = 5
+		return &f, nil
+	}
+	s := newFlowTestServer(stub)
+
+	rec := httptest.NewRecorder()
+	s.handleFlowContinue(rec, postJSON("/api/flow/continue", `{"flow_id":"f1","rounds":2}`))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if gotID != "f1" || gotRounds != 2 {
+		t.Errorf("service got (%q, %d), want (f1, 2)", gotID, gotRounds)
+	}
+	resp := decodeResp(t, rec)
+	if !resp.Success {
+		t.Fatalf("success = false, error %q", resp.Error)
+	}
+	data, _ := json.Marshal(resp.Data)
+	for _, want := range []string{`"flow":{`, `"id":"f1"`, `"state":"running"`, `"max_rounds":5`} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("response missing %s: %s", want, data)
+		}
+	}
+}
+
+// TestHandleFlowContinueDefaultsRounds pins the one thing the handler must
+// not do: fill in a round count. An omitted `rounds` reaches the service as
+// 0, which is what the flow manager reads as "the default, 3" — a handler
+// that substituted 3 itself would put a second copy of that default on the
+// edge, to drift from the manager's the day it changes.
+func TestHandleFlowContinueDefaultsRounds(t *testing.T) {
+	got := -1
+	stub := fake.NewFlowStub()
+	stub.ContinueFn = func(_ context.Context, _ string, extraRounds int) (*service.Flow, error) {
+		got = extraRounds
+		f := sampleFlow()
+		return &f, nil
+	}
+	s := newFlowTestServer(stub)
+
+	rec := httptest.NewRecorder()
+	s.handleFlowContinue(rec, postJSON("/api/flow/continue", `{"flow_id":"f1"}`))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got != 0 {
+		t.Errorf("service got rounds %d, want 0 so the manager applies its own default", got)
 	}
 }
 
@@ -346,6 +417,18 @@ func TestFlowHandlerValidation(t *testing.T) {
 			http.StatusBadRequest,
 		},
 		{
+			"continue without flow_id",
+			func(s *Server) http.HandlerFunc { return s.handleFlowContinue },
+			postJSON("/api/flow/continue", `{"rounds":2}`),
+			http.StatusBadRequest,
+		},
+		{
+			"continue with malformed body",
+			func(s *Server) http.HandlerFunc { return s.handleFlowContinue },
+			postJSON("/api/flow/continue", `{"flow_id":`),
+			http.StatusBadRequest,
+		},
+		{
 			"cancel without flow_id",
 			func(s *Server) http.HandlerFunc { return s.handleFlowCancel },
 			postJSON("/api/flow/cancel", `{}`),
@@ -369,6 +452,12 @@ func TestFlowHandlerValidation(t *testing.T) {
 			httptest.NewRequest(http.MethodGet, "/api/flow/cancel", nil),
 			http.StatusMethodNotAllowed,
 		},
+		{
+			"continue via GET",
+			func(s *Server) http.HandlerFunc { return s.handleFlowContinue },
+			httptest.NewRequest(http.MethodGet, "/api/flow/continue", nil),
+			http.StatusMethodNotAllowed,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -387,6 +476,11 @@ func TestFlowHandlerValidation(t *testing.T) {
 			stub.TreeFn = func(context.Context, string) (*service.FlowTree, error) {
 				dispatched = true
 				return &service.FlowTree{FlowID: "f1"}, nil
+			}
+			stub.ContinueFn = func(context.Context, string, int) (*service.Flow, error) {
+				dispatched = true
+				f := sampleFlow()
+				return &f, nil
 			}
 			stub.CancelFn = func(context.Context, string) error { dispatched = true; return nil }
 			stub.RemoveFn = func(context.Context, string) error { dispatched = true; return nil }
@@ -425,6 +519,14 @@ func TestFlowServiceErrMapping(t *testing.T) {
 	}{
 		{"start", service.ErrInvalidRequest, api.ErrCodeBadRequest},
 		{"start", service.ErrUnavailable, api.ErrCodeUnavailable},
+		// A continue answers with every code the surface has: CONFLICT for
+		// an accepted or still-live flow, BAD_REQUEST for a round count
+		// that will not fit under the ceiling or a work dir that has since
+		// gone, NOT_FOUND for an id the daemon has no record of.
+		{"continue", service.ErrConflict, api.ErrCodeConflict},
+		{"continue", service.ErrInvalidRequest, api.ErrCodeBadRequest},
+		{"continue", service.ErrNotFound, api.ErrCodeNotFound},
+		{"continue", service.ErrUnavailable, api.ErrCodeUnavailable},
 		{"list", service.ErrInvalidRequest, api.ErrCodeBadRequest},
 		{"list", service.ErrUnavailable, api.ErrCodeUnavailable},
 		{"get", service.ErrNotFound, api.ErrCodeNotFound},
@@ -449,6 +551,9 @@ func TestFlowServiceErrMapping(t *testing.T) {
 			err := tc.err
 			stub := fake.NewFlowStub()
 			stub.StartFn = func(context.Context, service.FlowStartRequest) (*service.Flow, error) {
+				return nil, err
+			}
+			stub.ContinueFn = func(context.Context, string, int) (*service.Flow, error) {
 				return nil, err
 			}
 			stub.ListFn = func(context.Context, []service.FlowState) ([]service.Flow, error) {

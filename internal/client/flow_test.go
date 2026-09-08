@@ -100,8 +100,14 @@ func TestFlowClientReads(t *testing.T) {
 
 func TestFlowClientWrites(t *testing.T) {
 	fs := newFlowTestServer(t, func(path string) any {
-		if path == "/api/flow/start" {
+		switch path {
+		case "/api/flow/start":
 			return api.FlowStartResponse{Flow: api.Flow{ID: "f1", State: service.FlowPending}}
+		case "/api/flow/continue":
+			return api.FlowContinueResponse{Flow: api.Flow{
+				ID: "f1", State: service.FlowRunning, MaxRounds: 5,
+				Rounds: []*api.FlowRound{{N: 1}, {N: 2}, {N: 3}},
+			}}
 		}
 		return nil
 	})
@@ -120,6 +126,35 @@ func TestFlowClientWrites(t *testing.T) {
 	}
 	if fs.body["goal"] != "g" || fs.body["work_dir"] != "/w" {
 		t.Errorf("start body = %v", fs.body)
+	}
+
+	// A continue names the flow and the extra rounds and nothing else: goal,
+	// work dir and options are the flow's own, so there is nowhere on this
+	// request to respecify them.
+	cont, err := c.FlowContinue(ctx, "f1", 2)
+	if err != nil {
+		t.Fatalf("FlowContinue: %v", err)
+	}
+	if cont.State != service.FlowRunning || cont.MaxRounds != 5 || len(cont.Rounds) != 3 {
+		t.Errorf("FlowContinue = %+v", cont)
+	}
+	if fs.path != "/api/flow/continue" {
+		t.Errorf("continue path = %q", fs.path)
+	}
+	if fs.body["flow_id"] != "f1" || fs.body["rounds"] != float64(2) {
+		t.Errorf("continue body = %v, want flow_id f1 and rounds 2", fs.body)
+	}
+	if len(fs.body) != 2 {
+		t.Errorf("continue body carries more than the flow and its round count: %v", fs.body)
+	}
+
+	// An unasked-for round count travels as 0 rather than being filled in
+	// client-side: the daemon's default of 3 more is the manager's to apply.
+	if _, err := c.FlowContinue(ctx, "f1", 0); err != nil {
+		t.Fatalf("FlowContinue(0): %v", err)
+	}
+	if fs.body["rounds"] != float64(0) {
+		t.Errorf("unasked round count = %v, want 0", fs.body["rounds"])
 	}
 
 	cases := []struct {
@@ -163,12 +198,16 @@ func TestFlowErrorCodeRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	calls := map[string]func() error{
-		"Start":  func() error { _, err := c.FlowStart(ctx, api.FlowStartRequest{}); return err },
-		"List":   func() error { _, err := c.FlowList(ctx, nil); return err },
-		"Get":    func() error { _, err := c.FlowGet(ctx, "nope"); return err },
-		"Tree":   func() error { _, err := c.FlowTree(ctx, "nope"); return err },
-		"Cancel": func() error { return c.FlowCancel(ctx, "nope") },
-		"Remove": func() error { return c.FlowRemove(ctx, "nope") },
+		"Start": func() error { _, err := c.FlowStart(ctx, api.FlowStartRequest{}); return err },
+		// A remote CONFLICT — an accepted flow, or one still running — must
+		// arrive as the very sentinel a local continue would have returned,
+		// or `flow continue` prints a transport error instead of the reason.
+		"Continue": func() error { _, err := c.FlowContinue(ctx, "nope", 2); return err },
+		"List":     func() error { _, err := c.FlowList(ctx, nil); return err },
+		"Get":      func() error { _, err := c.FlowGet(ctx, "nope"); return err },
+		"Tree":     func() error { _, err := c.FlowTree(ctx, "nope"); return err },
+		"Cancel":   func() error { return c.FlowCancel(ctx, "nope") },
+		"Remove":   func() error { return c.FlowRemove(ctx, "nope") },
 	}
 
 	codes := []struct {

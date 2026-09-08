@@ -37,6 +37,27 @@ type FlowService interface {
 	// clears, because every round must see the same tree.
 	Start(ctx context.Context, req FlowStartRequest) (*Flow, error)
 
+	// Continue extends a flow that finished without being accepted: more
+	// rounds against the same goal, the same review goal, the same
+	// work_dir and the same options, none of which is re-specifiable. The
+	// flow itself goes back to FlowRunning, round numbering carries on
+	// where it stopped, and its cap is raised by extraRounds — 3 when
+	// zero. One contiguous record is the point: the next round's fix
+	// prompt is composed from the rounds before it, so a continued flow's
+	// fixer sees findings a new flow would have to be told about by hand.
+	//
+	// Eligible from FlowRejected, FlowErrored and FlowCancelled. Returns
+	// ErrConflict for FlowAccepted — its work passed review, so there is
+	// nothing to fix — and for a flow that has not finished, which is not
+	// something to continue but something to wait for or cancel.
+	//
+	// Returns ErrInvalidRequest when the raised cap would pass the
+	// 20-round ceiling (a flow already at it says so by name: no round
+	// count would have worked) or when the flow's work_dir is no longer an
+	// existing directory, which is what a flow aimed at a since-removed
+	// worktree looks like. ErrNotFound for an unknown flowID.
+	Continue(ctx context.Context, flowID string, extraRounds int) (*Flow, error)
+
 	// List returns flows oldest first, optionally narrowed to a set of
 	// states. An empty states slice means every state; an unknown state is
 	// ErrInvalidRequest rather than an empty result, exactly as

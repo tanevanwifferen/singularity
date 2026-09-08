@@ -40,6 +40,37 @@ func (s *Server) handleFlowStart(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true, Data: api.FlowStartResponse{Flow: *f}})
 }
 
+// handleFlowContinue handles POST /api/flow/continue.
+//
+// Only flow_id is checked here, the same line withFlowID draws: an id the
+// handler cannot act on at all is ours to reject, and every judgement about
+// the request — whether the flow's state allows a continue, whether the
+// raised cap fits under the ceiling, whether the work dir is still there —
+// belongs to the flow manager, which owns the record the answer depends on.
+// A round count is deliberately not range-checked here either, so the
+// operator gets the manager's message naming the largest number that would
+// have worked rather than a bare "out of range" from the edge.
+func (s *Server) handleFlowContinue(w http.ResponseWriter, r *http.Request) {
+	if !s.requireMethod(w, r, http.MethodPost) || !s.requireFlow(w) {
+		return
+	}
+	var req api.FlowContinueRequest
+	if err := s.parseJSON(r, &req); err != nil {
+		s.writeCoded(w, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+	if req.FlowID == "" {
+		s.writeCoded(w, api.ErrCodeBadRequest, "flow_id required")
+		return
+	}
+	f, err := s.Services.Flow.Continue(r.Context(), req.FlowID, req.Rounds)
+	if err != nil {
+		s.writeServiceErr(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true, Data: api.FlowContinueResponse{Flow: *f}})
+}
+
 // handleFlowList handles GET /api/flow/list?state=.
 func (s *Server) handleFlowList(w http.ResponseWriter, r *http.Request) {
 	if !s.requireFlow(w) {
