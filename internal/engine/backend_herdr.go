@@ -56,6 +56,12 @@ type herdrBackend struct {
 	// backend instance. It doubles as the herdr workspace label.
 	name string
 
+	// sessionID is the claude session id this agent is launched with
+	// (`--session-id`), chosen here so the driver knows which transcript
+	// file to tail (see herdr_transcript.go) and so the agent record's
+	// session id is one a human can `claude --resume`.
+	sessionID string
+
 	// launchModel is what Args() resolved and passed to `claude --model`,
 	// echoed back as the BackendSessionInit model since nothing in herdr's
 	// output confirms it independently.
@@ -83,7 +89,7 @@ type herdrBackend struct {
 // reason (see PerAgentBackend in backend.go). The random name here is the
 // fallback for a backend that never goes through StartAgent.
 func NewHerdrBackend() Backend {
-	return &herdrBackend{name: "singl-" + randomHex(6)}
+	return &herdrBackend{name: "singl-" + randomHex(6), sessionID: newSessionUUID()}
 }
 
 // NewForAgent gives this agent its own herdr backend instance, named after
@@ -92,7 +98,7 @@ func NewHerdrBackend() Backend {
 // must be unique among live agents — and would share this instance's
 // initOnce, so the second agent would never report a session init.
 func (b *herdrBackend) NewForAgent(agentID string) Backend {
-	return &herdrBackend{name: herdrAgentName(agentID)}
+	return &herdrBackend{name: herdrAgentName(agentID), sessionID: newSessionUUID()}
 }
 
 // herdrAgentName derives a valid herdr agent name from an agent ID. herdr
@@ -195,8 +201,10 @@ func (b *herdrBackend) Args(model, effort string, maxTurns int, allowedTools []s
 		"--kind", "claude",
 		"--prompt-timeout-ms", strconv.Itoa(promptTimeoutMS),
 		"--poll-ms", strconv.Itoa(herdrDefaultPollMS),
+		"--session-id", b.sessionID,
 		"--",
 		"--permission-mode", "bypassPermissions",
+		"--session-id", b.sessionID,
 	}
 	if b.launchModel != "" {
 		args = append(args, "--model", b.launchModel)
@@ -307,8 +315,10 @@ type herdrPromptResult struct {
 
 // ParseEvent parses one line from the driver's stdout: the one-time
 // __SINGL_INIT__ marker, a __SINGL_STATE__ marker carrying the base64 JSON
-// that settled the turn, a __SINGL_OUT__ marker carrying a base64 chunk of
-// new pane text, a __SINGL_ERR__ marker carrying a driver-level error, or
+// that settled the turn, a __SINGL_JSONL__ marker carrying one base64 record
+// of claude's session transcript, a __SINGL_OUT__ marker carrying a base64
+// chunk of pane text (the fallback when the transcript produced nothing for
+// a turn), a __SINGL_ERR__ marker carrying a driver-level error, or
 // (harmlessly) anything else the driver's stdout happened to carry.
 func (b *herdrBackend) ParseEvent(line []byte) ([]*BackendEvent, error) {
 	events := b.parseLine(string(line))
@@ -338,6 +348,13 @@ func (b *herdrBackend) parseLine(line string) []*BackendEvent {
 			return []*BackendEvent{{Kind: BackendError, Content: fmt.Sprintf("herdr driver: bad state encoding: %v", err)}}
 		}
 		return []*BackendEvent{b.resultEventFromState(decoded)}
+
+	case strings.HasPrefix(line, herdrMarkerJSONL):
+		decoded, err := decodeHerdrPayload(line, herdrMarkerJSONL)
+		if err != nil {
+			return []*BackendEvent{{Kind: BackendError, Content: fmt.Sprintf("herdr driver: bad transcript encoding: %v", err)}}
+		}
+		return herdrTranscriptEvents(decoded)
 
 	case strings.HasPrefix(line, herdrMarkerOut):
 		decoded, err := decodeHerdrPayload(line, herdrMarkerOut)
@@ -428,7 +445,7 @@ func (b *herdrBackend) sessionInitEvents(paneID string) []*BackendEvent {
 		events = append(events, &BackendEvent{
 			Kind:      BackendSessionInit,
 			Model:     b.launchModel,
-			SessionID: b.name,
+			SessionID: b.sessionID,
 			PaneID:    paneID,
 		})
 	})

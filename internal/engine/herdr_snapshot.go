@@ -41,12 +41,10 @@ import (
 //
 // If nothing matches at either end, the whole snapshot is re-emitted and
 // lossy is true: cur could not be anchored to prev at all, so there is no
-// basis for telling which of its lines are new. On the live viewport reads
-// that is routine (more than the 39 rows an unattached, daemon-created pane
-// renders arriving between two polls; see herdr_driver.go's
-// herdrLiveReadSource), and it is why the caller reports it and falls back to
-// the end-of-turn full read — emitFullSnapshot — which diffs the whole
-// scrollback and does recover the rows the live stream could not anchor.
+// basis for telling which of its lines are new. The driver only reads the
+// pane as a fallback once a turn has settled (herdr_driver.go's
+// emitFullSnapshot, on the scrollback-inclusive source), where consecutive
+// reads overlap by construction and this case does not arise in practice.
 func herdrDiffSnapshot(prev, cur string) (delta string, lossy bool) {
 	if prev == "" {
 		return cur, false
