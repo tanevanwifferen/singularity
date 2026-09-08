@@ -220,6 +220,75 @@ func TestFlowStartUsageErrors(t *testing.T) {
 	}
 }
 
+// TestFlowContinueUsageErrors covers the refusals `flow continue` makes
+// before it opens a connection. A missing --id is a usage error (2); --help
+// is not (0). A round count is deliberately absent from this list: the
+// daemon knows the flow's current cap, so a number that will not fit is
+// answered by the manager naming the largest one that would, and refusing it
+// here would replace that with a guess.
+func TestFlowContinueUsageErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want int
+	}{
+		{"no flags at all", nil, 2},
+		{"--rounds without --id", []string{"--rounds", "2"}, 2},
+		{"--help", []string{"--help"}, 0},
+		{"unknown flag", []string{"--id", "f1", "--goal", "something else"}, 2},
+	} {
+		if code := runFlowContinue(context.Background(), tc.args); code != tc.want {
+			t.Errorf("`flow continue` with %s exited %d, want %d", tc.name, code, tc.want)
+		}
+	}
+}
+
+// TestFmtFlowContinued covers what a continue prints, which is the point of
+// the verb: an operator who authorised more rounds has to see the cap they
+// bought and the round the work resumes at, not merely that the call
+// succeeded.
+func TestFmtFlowContinued(t *testing.T) {
+	f := api.Flow{
+		ID: "f3", QueueID: "flow-f3", Title: "retry-after handling",
+		State: service.FlowRunning, WorkDir: "/w/api", MaxRounds: 5,
+		Rounds: []*api.FlowRound{
+			{N: 1, State: service.FlowRoundRejected},
+			{N: 2, State: service.FlowRoundRejected},
+			{N: 3, State: service.FlowRoundRejected},
+		},
+	}
+	out := fmtFlowContinued(f)
+	for _, want := range []string{
+		"`f3` continued", "retry-after handling", "State: `running`",
+		"Max rounds: 5", "Resumes at round 4", "/w/api",
+		"singl flow wait --id f3", "singl queue list --queue flow-f3",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("continue output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestNextFlowRound pins the numbering a continue reports against the
+// daemon's own: rounds start at 1 and every round the flow ran stays on the
+// record, so the next one is one past what is there. A client that guessed
+// differently would tell the operator work resumes at a round the daemon
+// will never open.
+func TestNextFlowRound(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		f    api.Flow
+		want int
+	}{
+		{"never ran", api.Flow{}, 1},
+		{"stopped at 3", api.Flow{Rounds: []*api.FlowRound{{N: 1}, {N: 2}, {N: 3}}}, 4},
+	} {
+		if got := nextFlowRound(tc.f); got != tc.want {
+			t.Errorf("%s: nextFlowRound = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
 // TestFlowIDArg covers the flag body the five --id verbs share: a missing
 // --id is a usage error (2), and --help is not (0, with no ID to act on).
 func TestFlowIDArg(t *testing.T) {
@@ -247,15 +316,24 @@ func TestFlowHelpCoversEveryVerb(t *testing.T) {
 		t.Fatal("nounUsage has no flow entry")
 	}
 	for _, want := range []string{
-		"  start", "  list", "  show", "  tree", "  wait", "  cancel", "  remove",
+		"  start", "  continue", "  list", "  show", "  tree", "  wait", "  cancel", "  remove",
 		"--workdir", "--prompt", "--review-prompt", "--max-rounds", "--title",
 		"--model", "--effort", "--timeout", "--backend", "--context-file",
 		"--allowed-tools", "--reviewer-model", "--reviewer-effort",
 		"--smart-route", "--no-smart-route", "--id", "--state", "--interval",
+		"--rounds",
 		"--json", // every non-streaming verb takes it
 	} {
 		if !strings.Contains(usage, want) {
 			t.Errorf("flow help does not document %s", want)
+		}
+	}
+	// A continue is refused from two of the six states and defaults its
+	// round count, and an operator who has to discover either by being
+	// refused has been failed by the reference.
+	for _, want := range []string{"rejected", "errored", "cancelled", "accepted", "defaults to 3"} {
+		if !strings.Contains(usage, want) {
+			t.Errorf("flow help does not say what `continue` does about %q", want)
 		}
 	}
 	// A bare `singl flow` prints this and exits 0; an unknown verb, 2.

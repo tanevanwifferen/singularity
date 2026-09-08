@@ -19,6 +19,21 @@ func (c *Client) FlowStart(ctx context.Context, req api.FlowStartRequest) (*api.
 	return &resp.Flow, nil
 }
 
+// FlowContinue calls Flow.Continue: more rounds on a flow that finished
+// without being accepted, against the same goal in the same tree.
+// extraRounds is an increment on the flow's cap, 0 meaning the daemon's
+// default of 3 more. A flow that was accepted, or that has not finished,
+// comes back as ErrConflict; a cap that would pass the ceiling, or a work
+// dir that has since gone, as ErrInvalidRequest.
+func (c *Client) FlowContinue(ctx context.Context, flowID string, extraRounds int) (*api.Flow, error) {
+	var resp api.FlowContinueResponse
+	req := api.FlowContinueRequest{FlowID: flowID, Rounds: extraRounds}
+	if err := c.post(ctx, "/api/flow/continue", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp.Flow, nil
+}
+
 // FlowList calls Flow.List. An empty states slice means every state. States
 // are sent as repeated `state` params for the reason QueueList does it:
 // the daemon accepts them comma-separated too, but url.Values spelling keeps
