@@ -492,3 +492,178 @@ func typeInto(v *FlowsView, s string) {
 		v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
 }
+
+// rejectedFlowsView is loadedFlowsView's flow after the reviewer kept
+// rejecting to the cap: the state a continue is for.
+func rejectedFlowsView(t *testing.T) (*FlowsView, *fake.FlowStub) {
+	t.Helper()
+	v, stub := loadedFlowsView(t)
+	f := testFlow()
+	f.State = service.FlowRejected
+	f.Rounds[2].State = service.FlowRoundRejected
+	stub.ListFn = func(context.Context, []service.FlowState) ([]service.Flow, error) {
+		return []service.Flow{f}, nil
+	}
+	cmd := v.RefreshCmd()
+	if cmd == nil {
+		t.Fatal("RefreshCmd returned nothing with services wired")
+	}
+	v.Update(cmd())
+	if v.flows[0].State != service.FlowRejected {
+		t.Fatalf("row state = %q, want rejected", v.flows[0].State)
+	}
+	return v, stub
+}
+
+// 'C' on a rejected flow opens the continue modal prefilled with the
+// daemon's own default, shows what the extra rounds buy, and hands the
+// increment to the service on Enter.
+func TestContinueFlowOnRejectedFlow(t *testing.T) {
+	v, stub := rejectedFlowsView(t)
+	gotID, gotRounds := "", -1
+	stub.ContinueFn = func(_ context.Context, id string, extra int) (*service.Flow, error) {
+		gotID, gotRounds = id, extra
+		f := testFlow()
+		f.State = service.FlowRunning
+		f.MaxRounds = 5
+		return &f, nil
+	}
+
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+	if !v.showContinue {
+		t.Fatalf("'C' did not open the continue modal (status %q)", v.statusMsg)
+	}
+	if v.continueTarget.ID != "f1" {
+		t.Errorf("modal targets %q, want f1", v.continueTarget.ID)
+	}
+	if v.continueRounds.Value != "3" {
+		t.Errorf("extra rounds prefill = %q, want the CLI's default of 3", v.continueRounds.Value)
+	}
+	if !v.CapturesInput() {
+		t.Error("the open modal must capture input")
+	}
+
+	// The modal shows where the flow stopped, the cap it would reach and
+	// the round it resumes at — and that nothing else is being changed.
+	modal := v.renderContinueModal()
+	for _, want := range []string{"f1", "rejected", "round 3/3", "6 rounds (was 3)", "round 4 of 6", "goal"} {
+		if !strings.Contains(modal, want) {
+			t.Errorf("continue modal missing %q:\n%s", want, modal)
+		}
+	}
+
+	// Two rounds instead of three: the field is the increment, not a cap.
+	v.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	if !strings.Contains(v.renderContinueModal(), "5 rounds (was 3)") {
+		t.Errorf("modal did not follow the typed count:\n%s", v.renderContinueModal())
+	}
+
+	_, cmd := v.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Enter produced no continue command")
+	}
+	if v.showContinue {
+		t.Error("the modal must close once the request is on its way")
+	}
+	msg, ok := cmd().(flowActionMsg)
+	if !ok || msg.err != nil {
+		t.Fatalf("continue result = %#v, want a successful flowActionMsg", msg)
+	}
+	if gotID != "f1" || gotRounds != 2 {
+		t.Errorf("service called with (%q, %d), want (f1, 2)", gotID, gotRounds)
+	}
+
+	v.Update(msg)
+	if !strings.Contains(v.statusMsg, "capped at 5 rounds") || !strings.Contains(v.statusMsg, "round 4") {
+		t.Errorf("status = %q, want the raised cap and the resuming round", v.statusMsg)
+	}
+}
+
+// 'C' on an accepted flow says why it is not on offer, in the flash line —
+// it neither opens the modal nor calls the service.
+func TestContinueRefusedOnAcceptedAndRunningFlows(t *testing.T) {
+	v, stub := loadedFlowsView(t) // testFlow is accepted
+	called := false
+	stub.ContinueFn = func(context.Context, string, int) (*service.Flow, error) {
+		called = true
+		return nil, nil
+	}
+
+	if _, cmd := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}}); cmd != nil {
+		t.Error("'C' on an accepted flow must not produce a command")
+	}
+	if v.showContinue {
+		t.Error("'C' on an accepted flow must not open the modal")
+	}
+	if !strings.Contains(v.statusMsg, "accepted") || !strings.Contains(v.statusMsg, "nothing to continue") {
+		t.Errorf("status = %q, want the accepted-flow explanation", v.statusMsg)
+	}
+	if !strings.Contains(v.View(), "nothing to continue") {
+		t.Error("the explanation must be visible in the rendered view")
+	}
+
+	// And a flow that has not finished is something to wait for or cancel,
+	// not something to continue.
+	running := testFlow()
+	running.State = service.FlowRunning
+	running.Rounds = running.Rounds[:2]
+	stub.ListFn = func(context.Context, []service.FlowState) ([]service.Flow, error) {
+		return []service.Flow{running}, nil
+	}
+	v.Update(v.RefreshCmd()())
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+	if v.showContinue {
+		t.Error("'C' on a running flow must not open the modal")
+	}
+	if !strings.Contains(v.statusMsg, "running") || !strings.Contains(v.statusMsg, "cancel it first") {
+		t.Errorf("status = %q, want the not-finished explanation", v.statusMsg)
+	}
+	if called {
+		t.Error("the service must not have been called at all")
+	}
+}
+
+// A refusal from the service — a cap already at the ceiling, a work dir that
+// has since been removed — lands in the flash line and nowhere else.
+func TestContinueServiceRefusalGoesToFlashLine(t *testing.T) {
+	v, stub := rejectedFlowsView(t)
+	stub.ContinueFn = func(context.Context, string, int) (*service.Flow, error) {
+		return nil, service.ErrInvalidRequest
+	}
+
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+	_, cmd := v.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Enter produced no continue command")
+	}
+	v.Update(cmd())
+
+	if !strings.Contains(v.statusMsg, "refused") {
+		t.Errorf("status = %q, want the refusal in the flash line", v.statusMsg)
+	}
+	if v.err != nil {
+		t.Errorf("a refused continue must not become a view error: %v", v.err)
+	}
+	if !strings.Contains(v.View(), "refused") {
+		t.Error("the refusal must be visible in the rendered view")
+	}
+
+	// Locally detectable nonsense never reaches the service: the modal
+	// stays open with the complaint on it.
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+	v.continueRounds.Set("plenty")
+	if _, cmd := v.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		t.Error("a non-numeric round count must not reach the service")
+	}
+	if !v.showContinue || !strings.Contains(v.statusMsg, "not a number") {
+		t.Errorf("bad rounds: showContinue=%v status=%q", v.showContinue, v.statusMsg)
+	}
+	if !strings.Contains(v.renderContinueModal(), "not a number") {
+		t.Error("the complaint must render on the modal the user is still in")
+	}
+	v.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if v.showContinue {
+		t.Error("Esc must abandon the modal")
+	}
+}

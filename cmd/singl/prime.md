@@ -208,13 +208,55 @@ singl --json flow wait --id f3 --timeout 3600 --interval 5
 because the work must not be landed on the strength of it. Read the findings
 (`flow show`) and decide by hand.
 
+**When the cap is the problem, continue the flow — do not start another one.**
+A `rejected` flow means one thing only: the reviewer was still rejecting when
+the round cap ran out. Nothing was wrong with the goal, and the rounds that ran
+are the most valuable thing you have — every verdict, every finding, and the
+tree the fixer has been working in. `flow continue` is how an orchestrator
+authorises more rounds against that same record:
+
+```
+singl --json flow continue --id f3 [--rounds N]
+# → {"flow":{...},"flow_id":"f3","max_rounds":6,"next_round":4}
+```
+
+Round numbering carries on where it stopped (a flow that ended at round 3 opens
+round 4), the cap is *raised by* `--rounds` (default `3` more, exactly as
+`--max-rounds` defaults to 3), and every round already recorded keeps its
+verdict and findings — which is the point, because the next round's fix prompt
+is composed from them. A new flow against the same work dir would throw all of
+that away and hand its first reviewer a tree it has no account of.
+
+Nothing else is re-specifiable: goal, `--review-prompt`, `--workdir` and both
+option blocks stay the flow's own. If the *goal* was wrong, a continue is the
+wrong verb — start a better-specified flow instead.
+
+- **Continuable states: `rejected`, `errored`, `cancelled`.** An `accepted`
+  flow is refused with CONFLICT (its work passed review; there is nothing to
+  fix), and so is a `pending` or `running` one — that has not finished, so
+  wait for it or `flow cancel` it first.
+- **The 20-round ceiling still holds.** The raised cap must land inside the
+  same 1..20 every flow is capped by, so a flow at 20 is refused whatever you
+  ask for, and a smaller ask than you made is named for you ("ask for at most N
+  more"). Both come back as BAD_REQUEST, as does a `--workdir` that has been
+  removed since the flow started — the commonest case being a workflow whose
+  worktrees were torn down.
+- A trailing round that never reached a verdict (the usual shape of a
+  `cancelled` flow's last one) is settled `errored` with a synthetic reject
+  before round N+1 opens, and never reopened — so the next fixer is told the
+  tree may hold a half-finished round. Check what is actually in there before
+  building on it. A round that *did* reach a verdict is left as it is: that
+  rejection is what the next round is for.
+
 Flow states: `pending` → `running`, then one of `accepted`, `rejected`,
-`errored`, `cancelled`. Verbs:
+`errored`, `cancelled` — and `flow continue` is the one edge back out, from
+any of the three non-accepted terminals to `running`. Verbs:
 
 ```
 singl --json flow list  [--state running,accepted]
 singl --json flow show  --id f3    # rounds, verdicts, findings, task and agent IDs
 singl flow tree  --id f3           # ascii tree of flow → rounds → steps (--json for the node list)
+singl --json flow continue --id f3 [--rounds N]   # more rounds, same goal, same tree
 singl flow cancel --id f3          # marks the flow cancelled, stops the tasks it created
 singl flow remove --id f3          # refused with CONFLICT while the flow is non-terminal
 ```
@@ -427,7 +469,7 @@ idempotent for the repos that already cleaned.
 | `status` | — | — |
 | `queue` | add list show graph wait cancel retry answer pause resume queues remove | `--file` `--workdir` `--prompt` `--title` `--after` `--queue` `--id` `--state` `--message` `--model` `--effort` `--timeout` `--interval` `--backend` `--use-worktree` `--context-file` `--allowed-tools` `--max-retries` `--on-failure` `--priority` `--smart-route` `--no-smart-route` |
 | `agents` | list get spawn resume kill remove output input wait wait-all watch watch-all chat stats | `--id` `--workdir` `--prompt` `--message` `--offset` `--tail` `--last` `--full` `--model` `--effort` `--smart-route` `--max-turns` `--timeout` `--interval` `--any` `--backend` |
-| `flow` | start list show tree wait cancel remove | `--workdir` `--prompt` `--review-prompt` `--max-rounds` `--title` `--id` `--state` `--model` `--effort` `--timeout` `--interval` `--backend` `--context-file` `--allowed-tools` `--reviewer-model` `--reviewer-effort` `--smart-route` `--no-smart-route` (no `--use-worktree`; `--max-retries` is rejected) |
+| `flow` | start continue list show tree wait cancel remove | `--workdir` `--prompt` `--review-prompt` `--max-rounds` `--rounds` (continue: extra rounds, default 3) `--title` `--id` `--state` `--model` `--effort` `--timeout` `--interval` `--backend` `--context-file` `--allowed-tools` `--reviewer-model` `--reviewer-effort` `--smart-route` `--no-smart-route` (no `--use-worktree`; `--max-retries` is rejected) |
 | `project` | list status load info refresh branch-check context workflows | `--name` (load) `--project` (handle) `--branch` |
 | `workflows` | list create remove discover | `--project` `--branch` `--base-dir` (create makes a worktree per repo; remove tears the whole workflow down) |
 | `branches` | list checkout create delete head compare | `--repo` `--branch` `--start-point` `--base` `--head` `--force` |
@@ -518,9 +560,12 @@ in for that host, and prints the exact `tea logins add` command when it is not.
 - The TUI has a **Flows view** — `F6` in repo mode, `F7` in project mode (it sits
   right after Agents) — with the flow list on the left and the selected flow's
   round/step tree on the right: `tab` switches pane, `j`/`k` and arrows move,
-  `l`/`enter` expand, `h` collapse, `n` starts a flow (work dir, goal, review
-  focus, max rounds), `c` cancels behind a confirm, `a` opens the selected
-  step's agent in the Agents view, `r` refreshes, `/` filters.
+  `l`/`enter` expand, `h` collapse, `n` starts a flow (workflow, goal, review
+  focus, max rounds), `C` continues a `rejected`/`errored`/`cancelled` flow
+  with more rounds (it shows the new cap and the round it resumes at; on an
+  accepted or still-running flow it says why instead), `c` cancels behind a
+  confirm, `a` opens the selected step's agent in the Agents view, `r`
+  refreshes, `/` filters.
 - What you *do* touch directly, and nothing beyond it: the git plumbing the
   daemon exposes (`commit`, `sync push`, `mr create`, `workflows create|remove`),
   reading files and read-only commands to decide what to delegate, and reviewing
@@ -549,11 +594,16 @@ in for that host, and prints the exact `tea logins add` command when it is not.
   aggregates their `TotalCostUSD` — not `flow show`, not `flow list`. The only
   bounds are `--max-rounds` (1..20, default 3) and the per-step
   `--timeout`/`opts.timeout_secs`. Set both, deliberately, before you start one.
+  `flow continue` raises the cap on purpose, so it buys roughly 2 more agents
+  per round asked for, with the 20-round ceiling as the only hard stop — a
+  number to choose, not to default past.
 - **Nothing stops a reviewer rejecting cosmetically until the cap.** There is no
   daemon-side "good enough" rule — that would be the fail-open the verdict
-  design refuses — so `--max-rounds` is the whole convergence guarantee and
-  `rejected` is a first-class outcome, not an error. Narrow the reviewer with
-  `--review-prompt` if you see a flow burning rounds on style.
+  design refuses — so the cap is the whole convergence guarantee and `rejected`
+  is a first-class outcome, not an error. Narrow the reviewer with
+  `--review-prompt` if you see a flow burning rounds on style; the cap itself is
+  yours to raise with `flow continue` when the findings say the work is
+  converging, which is a judgement no daemon-side rule makes for you.
 - **Flows inherit the `waiting_human` gap.** A flow cannot stop to ask a
   question, because nothing in this build ever reaches that state; a stuck step
   shows up as a task still `running`, bounded only by its timeout.

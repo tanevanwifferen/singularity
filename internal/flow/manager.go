@@ -44,6 +44,12 @@ var (
 	// queue.Manager.RemoveQueue: dropping the record of a running flow
 	// would orphan the tasks it is the only index of.
 	ErrActive = errors.New("flow is still active")
+	// ErrNotContinuable means Continue was called on a flow whose state
+	// forbids it: an accepted flow has nothing left to fix, and a pending
+	// or running one has not finished. Maps to CONFLICT rather than
+	// BAD_REQUEST because the request is well formed — "continue f3" is a
+	// perfectly good ask — and it is the flow's state that refuses it.
+	ErrNotContinuable = errors.New("flow cannot be continued")
 )
 
 // maxRounds is the upper bound on a flow's round cap, and defaultRounds the
@@ -353,13 +359,27 @@ func (m *Manager) Cancel(flowID string) error {
 	m.saveLocked(f)
 	m.mu.Unlock()
 
+	m.stopTasks(flowID, taskIDs)
+	return nil
+}
+
+// stopTasks cancels the flow's own recorded tasks that have not settled yet.
+// Called with no lock held, by Cancel and by Continue — which stops the
+// leftovers of an abandoned round for the same reason Cancel stops a live
+// one's: a task nothing is watching any more can still be dispatched into the
+// flow's working directory.
+//
+// A task the queue no longer has is skipped rather than reported (`queue
+// remove` got there first, and there is nothing left to stop), and a cancel
+// that fails is logged rather than returned: the caller's decision stands
+// either way, and the reconciler is what notices a task that outlived it.
+func (m *Manager) stopTasks(flowID string, taskIDs []string) {
 	if m.queue == nil {
-		return nil
+		return
 	}
 	for _, id := range taskIDs {
 		t, err := m.queue.Get(id)
 		if err != nil {
-			// Gone from the queue (queue remove) — nothing left to stop.
 			continue
 		}
 		if t.State.Terminal() {
@@ -369,7 +389,6 @@ func (m *Manager) Cancel(flowID string) error {
 			log.Printf("flow: cancel task %s of flow %s: %v", id, flowID, err)
 		}
 	}
-	return nil
 }
 
 // Remove deletes a flow's record and its verdict directory. It is refused

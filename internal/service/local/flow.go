@@ -43,6 +43,21 @@ func (s *localFlowService) Start(ctx context.Context, req service.FlowStartReque
 	return &f, nil
 }
 
+// Continue extends a non-accepted flow by more rounds against the same goal.
+func (s *localFlowService) Continue(ctx context.Context, flowID string, extraRounds int) (*service.Flow, error) {
+	if err := checkCtx(ctx); err != nil {
+		return nil, err
+	}
+	if s.mgr == nil {
+		return nil, service.ErrUnavailable
+	}
+	f, err := s.mgr.Continue(flowID, extraRounds)
+	if err != nil {
+		return nil, mapFlowErr(err)
+	}
+	return &f, nil
+}
+
 // List returns flows, optionally filtered by state.
 func (s *localFlowService) List(ctx context.Context, states []service.FlowState) ([]service.Flow, error) {
 	if err := checkCtx(ctx); err != nil {
@@ -149,7 +164,7 @@ func mapFlowErr(err error) error {
 		return errFromSentinel{sentinel: service.ErrNotFound, original: err}
 	case errors.Is(err, flow.ErrInvalid):
 		return errFromSentinel{sentinel: service.ErrInvalidRequest, original: err}
-	case errors.Is(err, flow.ErrActive):
+	case errors.Is(err, flow.ErrActive), errors.Is(err, flow.ErrNotContinuable):
 		return errFromSentinel{sentinel: service.ErrConflict, original: err}
 	}
 	return wrapErr(err)

@@ -116,6 +116,16 @@ Verbs:
           There is no --use-worktree: every round must see the same tree, so
           create the worktree first and pass it as --workdir.
           --max-retries is rejected: no per-task retry count reaches the daemon.
+  continue --id <flow-id> [--rounds N]
+          Give a finished flow more rounds against the same goal, in the same
+          work dir, under the same options — none of which can be respecified.
+          Continuable from rejected, errored and cancelled; refused for an
+          accepted flow (its work passed review) and for a pending or running
+          one (cancel it or wait for it first).
+          --rounds is how many MORE rounds to allow and defaults to 3; it is
+          added to the flow's current cap, which may not pass 20 in total.
+          Round numbering carries on, so a flow that stopped at round 3
+          resumes at round 4 with the earlier rounds' findings in hand.
   list    [--state s1,s2 ...]                      flows with their round progress
   show    --id <flow-id>                           rounds, verdicts, findings and agent IDs
   tree    --id <flow-id>                           flow/round/step tree (ascii, or --json)

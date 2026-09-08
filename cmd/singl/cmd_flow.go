@@ -21,6 +21,8 @@ func cmdFlow(ctx context.Context, verb string, args []string) int {
 	switch verb {
 	case "start":
 		return runFlowStart(ctx, args)
+	case "continue":
+		return runFlowContinue(ctx, args)
 	case "list":
 		return runFlowList(ctx, args)
 	case "show":
@@ -121,6 +123,83 @@ func runFlowStart(ctx context.Context, args []string) int {
 	md += fmt.Sprintf("\nWait for it: `singl flow wait --id %s`  \n", f.ID)
 	md += fmt.Sprintf("Watch its tasks: `singl queue list --queue %s`\n", f.QueueID)
 	return renderMarkdown(md)
+}
+
+// runFlowContinue gives a flow that finished unaccepted more rounds against
+// the same goal. It has its own flag set rather than sharing flowIDArg's
+// because --rounds rides along with --id; nothing else is offered, since
+// nothing else is re-specifiable.
+//
+// --rounds is passed through unvalidated, the way --max-rounds is: the
+// daemon knows the flow's current cap and answers a number that will not fit
+// by naming the largest one that would, which no client-side range check
+// could do.
+func runFlowContinue(ctx context.Context, args []string) int {
+	fs := flag.NewFlagSet("flow-continue", flag.ContinueOnError)
+	id := fs.String("id", "", "flow ID (required)")
+	rounds := fs.Int("rounds", 0, "how many more rounds to allow, on top of the flow's cap (0 = daemon default of 3)")
+	if code, done := parseArgs(fs, args); done {
+		return code
+	}
+	if *id == "" {
+		fmt.Fprintln(os.Stderr, "error: --id is required")
+		return 2
+	}
+	c, err := newClient()
+	if err != nil {
+		return die(err)
+	}
+	tctx, cancel := withTimeout(ctx)
+	defer cancel()
+	f, err := c.FlowContinue(tctx, *id, *rounds)
+	if err != nil {
+		// The refusal that needs a way out, as with `flow remove`: a
+		// conflict here is either a flow whose work already passed review
+		// or one that has not finished, and "conflict" alone says neither.
+		if errors.Is(err, service.ErrConflict) {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "hint: only a rejected, errored or cancelled flow can be continued; "+
+				"check it (`singl flow show --id %s`), and cancel it first (`singl flow cancel --id %s`) if it is still live\n", *id, *id)
+			return 1
+		}
+		return die(err)
+	}
+	if globals.json {
+		// A map rather than the bare flow, for the reason `flow wait`
+		// reports one: next_round is derived, and it is the number the
+		// operator just authorised work at.
+		return printJSON(map[string]any{
+			"flow":       f,
+			"flow_id":    f.ID,
+			"max_rounds": f.MaxRounds,
+			"next_round": nextFlowRound(*f),
+		})
+	}
+	return renderMarkdown(fmtFlowContinued(*f))
+}
+
+// fmtFlowContinued renders what a continue actually bought: the raised cap
+// and the round the flow resumes at. Both are the point of the verb — an
+// operator who asked for 2 more rounds needs to see the flow is now capped
+// at 5 and that round 4 is next, not merely that the call succeeded.
+func fmtFlowContinued(f api.Flow) string {
+	md := fmt.Sprintf("## Flow `%s` continued\n\n", f.ID)
+	if f.Title != "" {
+		md += fmt.Sprintf("Title: %s  \n", f.Title)
+	}
+	md += fmt.Sprintf("State: `%s`  \nMax rounds: %d  \nResumes at round %d  \nWorkdir: `%s`  \n",
+		f.State, f.MaxRounds, nextFlowRound(f), f.WorkDir)
+	md += fmt.Sprintf("\nWait for it: `singl flow wait --id %s`  \n", f.ID)
+	md += fmt.Sprintf("Watch its tasks: `singl queue list --queue %s`\n", f.QueueID)
+	return md
+}
+
+// nextFlowRound is the round a continued flow will open next: rounds are
+// numbered from 1 and every round the flow ran is still on the record, so
+// the next one is one past what is there. Computed the same way the daemon
+// numbers rounds, which is what makes the two agree.
+func nextFlowRound(f api.Flow) int {
+	return len(f.Rounds) + 1
 }
 
 // composeFlowOpts builds the work and reviewer option blocks from the shared
