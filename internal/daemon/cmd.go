@@ -175,11 +175,10 @@ func Run(opts RunOptions) error {
 		if b := engine.BackendByName(cfg.AI.Provider); b != nil {
 			srv.Engine().SetDefaultBackend(b)
 			log.Printf("agent backend: %s (from config AI.Provider)", cfg.AI.Provider)
-			// Some backends (herdr) have no unattended/non-interactive
-			// session mode and return an error from this call — surface
-			// that now, at startup, instead of letting the operator find
-			// out only when automatic rebase-conflict resolution
-			// (worktree.go) needs it and fails.
+			// A backend that cannot run unattended sessions returns an
+			// error from this call — surface that now, at startup, instead
+			// of letting the operator find out only when automatic
+			// rebase-conflict resolution (worktree.go) needs it and fails.
 			if _, _, err := b.UnattendedSessionCommand(""); err != nil {
 				log.Printf("WARNING: agent backend %q cannot run unattended sessions (%v) — "+
 					"automatic rebase-conflict resolution will fail; configure claude or pi "+
