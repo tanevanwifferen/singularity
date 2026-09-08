@@ -3,7 +3,9 @@ package local
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/flow"
@@ -234,6 +236,77 @@ func TestFlowServiceMissingWorkDirIsNotNotFound(t *testing.T) {
 	}
 }
 
+// Continue maps its three refusals onto three different codes, which is the
+// whole of what this layer has to get right: a state that forbids it is a
+// CONFLICT, a request the manager cannot satisfy is a BAD_REQUEST, and an
+// unknown flow is a NOT_FOUND.
+func TestFlowServiceContinue(t *testing.T) {
+	s, dir := newFlowSvc(t)
+	ctx := context.Background()
+	f := startFlow(t, s, dir, "do the thing")
+
+	// A flow that has not finished is waited on or cancelled, not
+	// continued — CONFLICT, the same code Remove answers for the same
+	// reason.
+	if _, err := s.Continue(ctx, f.ID, 3); !errors.Is(err, service.ErrConflict) {
+		t.Fatalf("continue of a pending flow = %v, want ErrConflict", err)
+	}
+	if _, err := s.Continue(ctx, "f404", 3); !errors.Is(err, service.ErrNotFound) {
+		t.Fatalf("continue of an unknown flow = %v, want ErrNotFound", err)
+	}
+
+	if err := s.Cancel(ctx, f.ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	got, err := s.Continue(ctx, f.ID, 2)
+	if err != nil {
+		t.Fatalf("Continue: %v", err)
+	}
+	if got.ID != f.ID || got.State != service.FlowRunning {
+		t.Errorf("continued flow = %s/%s, want %s running", got.ID, got.State, f.ID)
+	}
+	if got.MaxRounds != f.MaxRounds+2 {
+		t.Errorf("max rounds = %d, want the original %d raised by 2", got.MaxRounds, f.MaxRounds)
+	}
+	if got.EndedAt != nil || got.Error != "" {
+		t.Errorf("continued flow still carries %q / %v, want the cancellation cleared", got.Error, got.EndedAt)
+	}
+	// It is live again, so it is no longer continuable.
+	if _, err := s.Continue(ctx, f.ID, 2); !errors.Is(err, service.ErrConflict) {
+		t.Fatalf("continue of the revived flow = %v, want ErrConflict", err)
+	}
+}
+
+// A vanished work dir is the caller's problem to fix, not a missing resource:
+// BAD_REQUEST, and specifically not the NOT_FOUND that mapErr's substring
+// table would make of "no such file or directory".
+func TestFlowServiceContinueWithAVanishedWorkDir(t *testing.T) {
+	s, dir := newFlowSvc(t)
+	ctx := context.Background()
+	tree := filepath.Join(dir, "worktree")
+	if err := os.Mkdir(tree, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	f := startFlow(t, s, tree, "do the thing")
+	if err := s.Cancel(ctx, f.ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if err := os.RemoveAll(tree); err != nil {
+		t.Fatalf("remove worktree: %v", err)
+	}
+
+	_, err := s.Continue(ctx, f.ID, 2)
+	if !errors.Is(err, service.ErrInvalidRequest) {
+		t.Fatalf("err = %v, want ErrInvalidRequest", err)
+	}
+	if errors.Is(err, service.ErrNotFound) {
+		t.Fatalf("err = %v, want BAD_REQUEST and not NOT_FOUND", err)
+	}
+	if !strings.Contains(err.Error(), tree) {
+		t.Errorf("err = %q, want it to name the missing path", err)
+	}
+}
+
 // TestFlowServiceNilManager covers the degradation the daemon relies on:
 // without a flow manager every method reports UNAVAILABLE instead of
 // dereferencing nil.
@@ -242,12 +315,13 @@ func TestFlowServiceNilManager(t *testing.T) {
 	ctx := context.Background()
 
 	cases := map[string]func() error{
-		"Start":  func() error { _, err := s.Start(ctx, service.FlowStartRequest{Goal: "g", WorkDir: "/tmp"}); return err },
-		"List":   func() error { _, err := s.List(ctx, nil); return err },
-		"Get":    func() error { _, err := s.Get(ctx, "f1"); return err },
-		"Tree":   func() error { _, err := s.Tree(ctx, "f1"); return err },
-		"Cancel": func() error { return s.Cancel(ctx, "f1") },
-		"Remove": func() error { return s.Remove(ctx, "f1") },
+		"Start":    func() error { _, err := s.Start(ctx, service.FlowStartRequest{Goal: "g", WorkDir: "/tmp"}); return err },
+		"Continue": func() error { _, err := s.Continue(ctx, "f1", 3); return err },
+		"List":     func() error { _, err := s.List(ctx, nil); return err },
+		"Get":      func() error { _, err := s.Get(ctx, "f1"); return err },
+		"Tree":     func() error { _, err := s.Tree(ctx, "f1"); return err },
+		"Cancel":   func() error { return s.Cancel(ctx, "f1") },
+		"Remove":   func() error { return s.Remove(ctx, "f1") },
 	}
 	for name, call := range cases {
 		t.Run(name, func(t *testing.T) {

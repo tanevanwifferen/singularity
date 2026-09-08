@@ -19,7 +19,9 @@ import (
 // Not safe for concurrent mutation: set the hooks before handing the stub to
 // the code under test.
 type FlowStub struct {
-	StartFn  func(ctx context.Context, req service.FlowStartRequest) (*service.Flow, error)
+	StartFn    func(ctx context.Context, req service.FlowStartRequest) (*service.Flow, error)
+	ContinueFn func(ctx context.Context, flowID string, extraRounds int) (*service.Flow, error)
+
 	ListFn   func(ctx context.Context, states []service.FlowState) ([]service.Flow, error)
 	GetFn    func(ctx context.Context, flowID string) (*service.Flow, error)
 	TreeFn   func(ctx context.Context, flowID string) (*service.FlowTree, error)
@@ -40,6 +42,14 @@ func (f *FlowStub) Start(ctx context.Context, req service.FlowStartRequest) (*se
 		return nil, unavail()
 	}
 	return f.StartFn(ctx, req)
+}
+
+// Continue extends a non-accepted flow by more rounds.
+func (f *FlowStub) Continue(ctx context.Context, flowID string, extraRounds int) (*service.Flow, error) {
+	if f.ContinueFn == nil {
+		return nil, unavail()
+	}
+	return f.ContinueFn(ctx, flowID, extraRounds)
 }
 
 // List returns flows filtered by state.

@@ -24,24 +24,32 @@ import (
 const unparseableAfterTwo = "unparseable reviewer verdict after 2 attempts"
 
 // afterSettledRound decides what follows a round that already has its verdict.
-// Reached two ways: right after settleRound recorded a rejection with rounds
-// still on the clock, and after a restart that found a settled round under a
-// running flow — the daemon died between recording the verdict and submitting
-// the next round. One branch serves both, which is the point of re-deriving.
+// Reached three ways: right after settleRound recorded a rejection with rounds
+// still on the clock; after a restart that found a settled round under a
+// running flow, the daemon having died between recording the verdict and
+// submitting the next round; and after Continue put a finished flow back to
+// running with a raised cap. One branch serves all three, which is the point
+// of re-deriving from the record rather than from what happened.
 func (m *Manager) afterSettledRound(snap *Flow, cur *Round) (Flow, bool) {
-	switch cur.State {
-	case RoundAccepted:
+	if cur.State == RoundAccepted {
 		return m.finish(snap, StateAccepted, "")
-	case RoundRejected:
-		if cur.N >= snap.MaxRounds {
+	}
+	if cur.N >= snap.MaxRounds {
+		// The cap is what ends a flow that keeps not being accepted, and
+		// the last round's grade is what it ends as.
+		if cur.State == RoundRejected {
 			return m.finish(snap, StateRejected, "")
 		}
-		return m.submitRound(snap, cur.N+1)
-	default:
-		// RoundErrored under a live flow: the round concluded nothing, so
-		// there is nothing for a next round to fix from.
 		return m.finish(snap, StateErrored, fmt.Sprintf("round %d could not be concluded", cur.N))
 	}
+	// Rejected, or errored with rounds still on the clock. An errored round
+	// under a live flow is only reachable one way — every transition that
+	// grades a round errored ends the flow in the same write — and that way
+	// is Continue, which settles the trailing round of a flow the operator
+	// has just asked to run further (continue.go). Having been asked, the
+	// flow opens the next round rather than re-deriving the ending it was
+	// continued out of.
+	return m.submitRound(snap, cur.N+1)
 }
 
 // advanceRound reads the current round's two tasks and acts on what they say.
