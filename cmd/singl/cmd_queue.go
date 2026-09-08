@@ -173,7 +173,7 @@ func runQueueAdd(ctx context.Context, args []string) int {
 	// the helper means it stays that way when the precedence rules change.
 	smartRoute := smartRouteFlags(fs)
 	timeout := fs.Int("timeout", 0, "agent timeout in seconds (0 = daemon default)")
-	backend := fs.String("backend", "", "agent backend: claude or pi (default: daemon default)")
+	backend := fs.String("backend", "", "agent backend: claude, pi or herdr (default: daemon default)")
 	useWorktree := fs.Bool("use-worktree", false, "run the task in its own git worktree (exempts it from the one-agent-per-directory rule)")
 	var contextFiles pathListFlag
 	fs.Var(&contextFiles, "context-file", "file to inject into the agent's context (repeatable)")

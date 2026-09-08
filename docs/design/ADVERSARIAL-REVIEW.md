@@ -349,7 +349,7 @@ is: `cmd_flow.go` (dispatch, start, cancel, remove), `cmd_flow_view.go`
 singl flow start  --workdir <dir> --prompt <goal> [--review-prompt <text>]
                   [--max-rounds N] [--title T]
                   [--model M] [--effort low|medium|high] [--timeout SECS]
-                  [--backend claude|pi] [--context-file P ...] [--allowed-tools a,b]
+                  [--backend claude|pi|herdr] [--context-file P ...] [--allowed-tools a,b]
                   [--max-retries N] [--reviewer-model M] [--reviewer-effort E]
                   [--smart-route[=bool]] [--no-smart-route]
 singl flow list   [--state s1,s2]

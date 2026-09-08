@@ -150,6 +150,21 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 	if backend == nil {
 		backend = e.defaultBackend
 	}
+	// The default backend is one shared instance (installed at startup), and
+	// a backend that keeps per-agent state cannot be shared — give this agent
+	// its own instance before anything touches it. See PerAgentBackend.
+	if perAgent, ok := backend.(PerAgentBackend); ok {
+		backend = perAgent.NewForAgent(id)
+	}
+	// Some backends run their own internal per-turn wait (herdr's
+	// `--prompt-timeout-ms`) that needs to know about an overall --timeout so
+	// it isn't shorter — or, just as wrong, longer — than what the operator
+	// actually asked for. See TimeoutAwareBackend.
+	if opts.Timeout > 0 {
+		if timeoutAware, ok := backend.(TimeoutAwareBackend); ok {
+			timeoutAware.SetTurnTimeout(opts.Timeout)
+		}
+	}
 	agent := newAgent(id, projectPath, task, opts, backend)
 	agent.soundCfg = e.soundCfg
 	agent.notify = func() { e.notifyUpdate(id) }

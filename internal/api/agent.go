@@ -77,7 +77,7 @@ type AgentStartRequest struct {
 	SmartRoute   bool     `json:"smart_route,omitempty"`
 	UseWorktree  bool     `json:"use_worktree,omitempty"`
 	Summary      string   `json:"summary,omitempty"`
-	// Backend selects the agent runtime: "claude" or "pi".
+	// Backend selects the agent runtime: "claude", "pi" or "herdr".
 	// Empty means use the daemon's current default.
 	Backend string `json:"backend,omitempty"`
 }
@@ -95,7 +95,7 @@ type AgentResumeRequest struct {
 	SmartRoute   bool     `json:"smart_route,omitempty"`
 	UseWorktree  bool     `json:"use_worktree,omitempty"`
 	Summary      string   `json:"summary,omitempty"`
-	// Backend selects the agent runtime: "claude" or "pi".
+	// Backend selects the agent runtime: "claude", "pi" or "herdr".
 	// Empty means use the daemon's current default.
 	Backend string `json:"backend,omitempty"`
 }

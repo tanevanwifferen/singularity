@@ -54,7 +54,7 @@ Verbs:
   get        --id <id> [--last N] [--full]                one agent snapshot (+ last N output entries)
   spawn      --workdir <dir> --prompt <task> [--model M] [--effort low|medium|high]
              [--smart-route|--no-smart-route] [--max-turns N] [--timeout SECS]
-             [--backend claude|pi]
+             [--backend claude|pi|herdr]
   resume     --id <id> --message <text> [spawn flags]     new agent inheriting history
   kill       --id <id>                                    terminate the agent subprocess
   remove     --id <id>                                    drop the agent from the registry
@@ -76,7 +76,7 @@ only when both are pinned. --no-smart-route turns it off entirely.
 
 Verbs:
   add       --workdir <dir> --prompt <task> [--title T] [--after t1,t2] [--queue <id>]
-            [--model M] [--effort low|medium|high] [--timeout SECS] [--backend claude|pi]
+            [--model M] [--effort low|medium|high] [--timeout SECS] [--backend claude|pi|herdr]
             [--use-worktree] [--context-file P ...] [--allowed-tools a,b]
             [--max-retries N] [--on-failure block|continue|abort-queue] [--priority N]
             [--smart-route[=bool]] [--no-smart-route]
@@ -106,7 +106,7 @@ tasks and "agents output --id <agent>" shows a step's transcript.
 
 Verbs:
   start   --workdir <dir> --prompt <goal> [--review-prompt <text>] [--max-rounds N] [--title T]
-          [--model M] [--effort low|medium|high] [--timeout SECS] [--backend claude|pi]
+          [--model M] [--effort low|medium|high] [--timeout SECS] [--backend claude|pi|herdr]
           [--context-file P ...] [--allowed-tools a,b]
           [--reviewer-model M] [--reviewer-effort low|medium|high]
           [--smart-route[=bool]] [--no-smart-route]

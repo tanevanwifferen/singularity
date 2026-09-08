@@ -2,15 +2,18 @@ package engine
 
 import (
 	"sync/atomic"
+	"time"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/config"
 )
 
 // Backend abstracts the coding-agent subprocess protocol.
-// Two implementations are provided: ClaudeBackend (stream-json) and PiBackend (RPC).
+// Three implementations are provided: ClaudeBackend (stream-json), PiBackend
+// (RPC), and herdrBackend (herdr driving an interactive claude — see
+// backend_herdr.go for why: claude --print is rejected on Max-plan auth).
 // Each agent owns its own Backend instance so implementations may keep per-agent state.
 type Backend interface {
-	// Name returns the backend identifier ("claude" or "pi").
+	// Name returns the backend identifier ("claude", "pi" or "herdr").
 	Name() string
 
 	// Binary returns the executable name (e.g. "claude", "pi").
@@ -109,11 +112,69 @@ type BackendEvent struct {
 	// Session init
 	SessionID string
 	Model     string
+	// PaneID is set by the herdr backend on session init: the herdr pane
+	// hosting the agent's claude session, so a human can find it directly
+	// (`herdr pane get <id>`, or attach to it). Other backends leave it empty.
+	PaneID string
 
 	// Result
 	CostUSD       float64
 	Subtype       string
 	IsResultError bool
+}
+
+// PerAgentBackend is implemented by backends whose instances carry per-agent
+// state and therefore must not be shared between agents. Engine.StartAgent
+// calls NewForAgent for every agent, including the ones that fall back to the
+// engine's single default backend — which is where sharing would otherwise
+// happen, since one instance is installed as that default at startup
+// (internal/daemon/cmd.go).
+//
+// herdrBackend needs this: its state includes the herdr agent name, which
+// herdr requires to be unique among live agents, so two concurrent agents on
+// one instance would fight over the same herdr session. A stateless backend
+// simply does not implement it.
+type PerAgentBackend interface {
+	// NewForAgent returns a fresh Backend for the given agent ID. The
+	// receiver is left untouched and may be reused as a template.
+	NewForAgent(agentID string) Backend
+}
+
+// GracefulBackend is implemented by backends whose subprocess owns resources
+// that outlive it unless it is given the chance to release them. Agent.kill
+// sends SIGTERM and waits up to this long for a clean exit before falling
+// back to SIGKILL; a backend that does not implement it is SIGKILLed
+// immediately, as before.
+//
+// herdrBackend needs this too: the pane and the interactive claude inside it
+// belong to the herdr server, not to the driver process, so a driver killed
+// outright leaves both running.
+type GracefulBackend interface {
+	TerminationGrace() time.Duration
+}
+
+// PreflightChecker is implemented by backends with external prerequisites
+// that can be checked cheaply up front (a CLI on PATH, a server running).
+// The daemon calls it once at startup for the configured default backend and
+// logs what it reports, so a misconfiguration surfaces there instead of as a
+// cryptic failure on the first spawn.
+type PreflightChecker interface {
+	Preflight() error
+}
+
+// TimeoutAwareBackend is implemented by backends whose subprocess has its own
+// internal per-turn wait, independent of Engine.StartAgent's overall
+// AgentOptions.Timeout kill-switch, that needs to be sized to it. Without
+// this a backend-internal default can time out a turn well before the
+// operator's own --timeout would, or ignore a shorter one entirely.
+//
+// herdrBackend needs this: `herdr agent prompt --wait` has its own
+// --prompt-timeout-ms, separate from (and previously oblivious to) the
+// agent's --timeout.
+type TimeoutAwareBackend interface {
+	// SetTurnTimeout tells the backend the agent's configured overall
+	// timeout. Called once, before the backend's subprocess is started.
+	SetTurnTimeout(d time.Duration)
 }
 
 // currentModels holds the active model table. nil means "use the compiled-in
@@ -140,7 +201,7 @@ func Models() *config.ModelsConfig {
 // NewClaudeBackend returns a Backend that drives the claude CLI via stream-json.
 func NewClaudeBackend() Backend { return &claudeBackend{} }
 
-// BackendByName resolves a backend by name ("claude" or "pi").
+// BackendByName resolves a backend by name ("claude", "pi" or "herdr").
 // Returns nil for unknown names so callers can fall back to the engine default.
 func BackendByName(name string) Backend {
 	switch name {
@@ -148,6 +209,8 @@ func BackendByName(name string) Backend {
 		return NewClaudeBackend()
 	case "pi":
 		return NewPiBackend("")
+	case "herdr":
+		return NewHerdrBackend()
 	default:
 		return nil
 	}

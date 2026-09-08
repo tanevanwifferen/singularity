@@ -56,7 +56,7 @@ func runFlowStart(ctx context.Context, args []string) int {
 	// anyway — cannot be reintroduced at a third call site.
 	smartRoute := smartRouteFlags(fs)
 	timeout := fs.Int("timeout", 0, "agent timeout in seconds (0 = daemon default)")
-	backend := fs.String("backend", "", "agent backend: claude or pi (default: daemon default)")
+	backend := fs.String("backend", "", "agent backend: claude, pi or herdr (default: daemon default)")
 	var contextFiles pathListFlag
 	fs.Var(&contextFiles, "context-file", "file to inject into every step's context (repeatable)")
 	var allowedTools idListFlag

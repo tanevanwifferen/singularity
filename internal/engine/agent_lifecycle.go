@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -380,6 +381,44 @@ func (a *Agent) processExited() bool {
 	}
 }
 
+// terminationGrace is how long this agent's backend wants between SIGTERM and
+// SIGKILL. Zero (the default for every backend that does not implement
+// GracefulBackend) means SIGKILL straight away.
+func (a *Agent) terminationGrace() time.Duration {
+	if graceful, ok := a.backend.(GracefulBackend); ok {
+		return graceful.TerminationGrace()
+	}
+	return 0
+}
+
+// terminateProcess ends proc, giving it grace to exit on its own first.
+//
+// With grace > 0 the process gets SIGTERM and up to grace to clean up after
+// itself before SIGKILL follows; done is closed by waitForExit once the
+// process is reaped, so a process that exits early costs no waiting. This is
+// what lets a backend release resources it does not itself own — the herdr
+// driver closes its herdr workspace here, and without it the pane and the
+// claude session inside it survive the agent indefinitely (see
+// GracefulBackend).
+//
+// The returned error is from the signal that was actually needed; a clean
+// exit within the grace period returns nil.
+func terminateProcess(proc *os.Process, done <-chan struct{}, grace time.Duration) error {
+	if grace > 0 {
+		// A platform that cannot deliver SIGTERM (Windows) errors here
+		// immediately; there is nothing to wait for in that case, so fall
+		// straight through to Kill rather than burning the grace period.
+		if err := proc.Signal(syscall.SIGTERM); err == nil {
+			select {
+			case <-done:
+				return nil
+			case <-time.After(grace):
+			}
+		}
+	}
+	return proc.Kill()
+}
+
 // kill terminates the agent subprocess and, unless preserveWorktree is set,
 // cleans up any worktree and forces the state to killed. preserveWorktree is
 // for terminate's complete/error-but-still-alive case (see terminate); every
@@ -391,9 +430,14 @@ func (a *Agent) processExited() bool {
 // free a directory before the same tick's dispatch runs — need
 // processExited to already be true the instant this returns, since
 // Engine.WorkDirOccupied asks the process, not the state label. A signal
-// alone is not enough: cmd.Process.Kill only delivers SIGKILL, and the
-// process is not confirmed reaped until waitForExit's cmd.Wait returns and
-// closes done.
+// alone is not enough: the process is not confirmed reaped until
+// waitForExit's cmd.Wait returns and closes done.
+//
+// Backends that implement GracefulBackend get SIGTERM and a grace period
+// before SIGKILL (see terminateProcess). That is also why cleanupWorktree
+// below is safe to run right after: the subprocess has had its chance to stop
+// whatever it started elsewhere — the herdr backend's pane, and the claude
+// process inside it whose cwd is the worktree about to be removed.
 func (a *Agent) kill(preserveWorktree bool) error {
 	a.mu.Lock()
 
@@ -435,8 +479,11 @@ func (a *Agent) kill(preserveWorktree bool) error {
 	}
 	a.appendOutputLocked("system", "Agent killed")
 
-	err := a.cmd.Process.Kill()
+	proc := a.cmd.Process
+	grace := a.terminationGrace()
 	a.mu.Unlock()
+
+	err := terminateProcess(proc, a.done, grace)
 
 	// Wait for waitForExit's cmd.Wait to actually reap the process. SIGKILL
 	// cannot be blocked, so this is bounded by how fast the kernel delivers
