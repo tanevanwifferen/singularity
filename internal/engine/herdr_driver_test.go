@@ -71,6 +71,7 @@ func newTestDriver(t *testing.T, out *bytes.Buffer) *herdrDriver {
 		// A transcript dir with no file in it: the driver falls back to the
 		// pane unless a test writes records with writeTranscript.
 		transcript: newHerdrTranscriptTailer(t.TempDir(), "singltest-session"),
+		trustFile:  filepath.Join(t.TempDir(), ".claude.json"),
 	}
 }
 
