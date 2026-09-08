@@ -37,6 +37,29 @@ type FlowStartResponse struct {
 	Flow Flow `json:"flow"`
 }
 
+// FlowContinueRequest is the body for POST /api/flow/continue. It names a
+// flow and how many more rounds it may have, and carries nothing else on
+// purpose: goal, review goal, work_dir and both option blocks are the
+// flow's own and are not re-specifiable, because rounds recorded against
+// one goal would stop meaning anything under another.
+//
+// Rounds is an increment, not a new ceiling: it is added to the flow's
+// max_rounds, and 0 means the daemon's default of 3 more. The result must
+// still land inside the 1..20 every flow is capped by, so a flow already at
+// 20 is refused whatever is asked for.
+type FlowContinueRequest struct {
+	FlowID string `json:"flow_id"`
+	Rounds int    `json:"rounds"`
+}
+
+// FlowContinueResponse is the body for POST /api/flow/continue, wrapped the
+// way FlowStartResponse is. The flow comes back as recorded: FlowRunning
+// with its raised cap and every round it already had, since opening the next
+// one is the reconciler's job.
+type FlowContinueResponse struct {
+	Flow Flow `json:"flow"`
+}
+
 // FlowListResponse is the body for GET /api/flow/list?state=. Flows come
 // back oldest first.
 type FlowListResponse struct {

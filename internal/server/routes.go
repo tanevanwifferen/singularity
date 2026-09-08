@@ -192,6 +192,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 	// Flow.
 	mux.HandleFunc("/api/flow/start", wrap(s.handleFlowStart))
+	mux.HandleFunc("/api/flow/continue", wrap(s.handleFlowContinue))
 	mux.HandleFunc("/api/flow/list", wrap(s.handleFlowList))
 	mux.HandleFunc("/api/flow/get", wrap(s.handleFlowGet))
 	mux.HandleFunc("/api/flow/tree", wrap(s.handleFlowTree))
