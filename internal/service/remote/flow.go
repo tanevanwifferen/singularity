@@ -29,6 +29,14 @@ func (s *remoteFlowService) Start(ctx context.Context, req service.FlowStartRequ
 	return s.c.FlowStart(ctx, req)
 }
 
+// Continue extends a non-accepted flow by more rounds against the same goal.
+// extraRounds travels as the request's `rounds`, an increment on the flow's
+// cap, and 0 still means the daemon's default of 3 more — the defaulting is
+// the manager's, so a remote caller and a local one get the same number.
+func (s *remoteFlowService) Continue(ctx context.Context, flowID string, extraRounds int) (*service.Flow, error) {
+	return s.c.FlowContinue(ctx, flowID, extraRounds)
+}
+
 // List returns flows oldest first, optionally narrowed by state.
 func (s *remoteFlowService) List(ctx context.Context, states []service.FlowState) ([]service.Flow, error) {
 	return s.c.FlowList(ctx, states)
