@@ -262,6 +262,11 @@ refused with `CONFLICT` while the flow is non-terminal, the same rule and reason
 as `queue.Manager.RemoveQueue`; it leaves the underlying queue alone, which
 `queue remove` handles.
 
+> **Added later:** three of these four terminal states turned out not to be the
+> end of the flow. `Flow.Continue` (§11, an addition after this design) takes a
+> `rejected`, `errored` or `cancelled` flow back to `running` with a raised cap.
+> Everything above still describes how a flow *arrives* at a terminal state.
+
 ---
 
 ## 5. Persistence
@@ -479,12 +484,15 @@ becomes a hard requirement.
 
 **Deliberately accepted failure modes.**
 
-*No convergence guarantee.* A reviewer can reject cosmetically until the cap. The
+*No convergence guarantee.* [Revised by §11 — the cap is now raisable after the
+fact.] A reviewer can reject cosmetically until the cap. The
 alternative — a daemon-side "good enough" rule — is exactly the fail-open §3
 refuses, so the cap is the answer and `rejected` is a first-class outcome, not an
 error.
 
-*No cost cap.* N rounds is roughly 2N agents. The engine tracks `TotalCostUSD`
+*No cost cap.* [Revised by §11 — a continue buys roughly 2 more agents per round
+asked for, so the bound is now what an operator re-authorises, up to 20 rounds.]
+N rounds is roughly 2N agents. The engine tracks `TotalCostUSD`
 per agent but nothing aggregates it; `--max-rounds` and `opts.timeout_secs` are
 the only bounds. Summing round costs into `flow show` is a cheap follow-up.
 
@@ -503,3 +511,95 @@ flow cannot stop to ask a question; a stuck agent shows up as a task still
 `running`, bounded by `opts.timeout_secs`. That is the queue's documented gap,
 inherited unchanged rather than worked around. Forbidding `use_worktree` (§2)
 incidentally keeps flows clear of the never-reclaimed-worktree gap too.
+
+---
+
+## 11. Continuing a flow — an addition after the original design
+
+**This section was not part of the design above.** Sections 0–10 were written and
+implemented first, and they treat `rejected` as the end of a flow: read the
+findings and decide by hand. In use that turned out to be the wrong shape for
+the commonest outcome. A `rejected` flow is not a failed flow — it is a flow
+whose reviewer was still rejecting when the cap ran out — and the only move the
+design left was to start another flow against the same work dir, which throws
+away every verdict and finding and hands a fresh reviewer a tree it has no
+account of. `Flow.Continue` (`internal/flow/continue.go`) was added afterwards to
+close that. It is recorded here, separately, so this document stays a record of
+what was decided when rather than reading as though it was always here.
+
+**Decision: a continue extends the same flow; it does not seed a new one.** The
+alternative considered was a `flow start --from <id>` that copied the goal and
+options into a new record and linked back to the old one. Extending won on the
+argument that makes flows worth having at all: `FixPrompt` composes round N+1's
+work from the rounds before it, so a continued flow's fixer sees the history a
+new flow's implementer would have to be told about by hand. Round numbering
+therefore carries on (a flow that stopped at round 3 opens round 4), every round
+already recorded keeps its state, verdict and findings, and `flow show` stays one
+contiguous account of the work instead of a chain of records an operator has to
+reassemble. Nothing but the round count is re-specifiable: goal, review goal,
+`work_dir`, `Opts` and `ReviewOpts` stay the flow's own, because rounds recorded
+against one goal would stop meaning anything under another. If the goal was
+wrong, the answer is still a new flow.
+
+**Continuable states.** `rejected`, `errored` and `cancelled` — the three
+terminals that are not an acceptance. `accepted` is refused (`ErrNotContinuable`
+→ `CONFLICT`): its work passed review, so there is nothing to fix. `pending` and
+`running` are refused by the same sentinel, on the grounds that the request is
+well formed and it is the flow's state that says no: a flow that has not finished
+is not something to continue but something to wait for or cancel. The state is
+re-checked under `m.mu` after the filesystem and queue work, because a second
+continue — or a reconciler pass on the flow the first one revived — can land in
+between.
+
+**The rule for a trailing half-run round.** A `cancelled` flow's last round is
+usually mid-flight: its work task done and its review cancelled, or a step still
+recorded non-terminal because the daemon died before `Cancel` reached the queue.
+The rule chosen — and it is the one part of a continue that is not obvious — is
+that **a trailing round which never reached a verdict is settled `errored`,
+given §3.3's synthetic reject as its verdict, and never reopened.** Reopening it
+would mean a round with two work tasks. Leaving it non-terminal would hand the
+reconciler a "current round" it would go on polling, and `advanceRound` would
+either read a cancelled step and terminate the flow the operator has just
+continued, or wait forever on a step nothing will dispatch. Settling it means the
+next pass takes `afterSettledRound`, whose only question is whether the cap
+leaves room for round N+1. The synthetic reject carries a `major` finding saying
+the tree may hold a half-finished round, so the next fixer is told rather than
+left to discover it — and a round that *did* reach a verdict is left exactly as
+it is, because a rejection at the cap is precisely what the next round is for. A
+verdict file a killed reviewer happened to leave on disk is likewise not read:
+that attempt was stopped, and reading a decision out of an interrupted process is
+how a fail-open gets in (§3.3).
+
+Before any of that, `Continue` stops the flow's own recorded task IDs — the same
+authority `Cancel` has (§4), never `CancelQueue` — while the flow is still
+terminal and the reconciler is therefore still skipping it. A half-run round can
+leave a task the queue would still dispatch, and that agent would be writing into
+the very tree the new round is about to fix.
+
+**The ceiling.** `rounds` is an increment on `MaxRounds`, defaulting to 3 (the
+same number `MaxRounds` itself defaults to), and the result must still satisfy
+the 1..20 §4 validates everywhere else. Two refusals, both `ErrInvalid` →
+`BAD_REQUEST`: a flow already at 20 is refused *by name* rather than with a range
+complaint, because no round count would have worked and the operator needs to
+know that instead of trying a smaller one; an increment that would overshoot
+names the largest one that would have fit. The `work_dir` is re-stat'ed too — it
+was checked at start, but a continue can come hours later, and the commonest case
+is a flow aimed at a workflow's worktree that has since been torn down.
+
+**What the record looks like afterwards.** `Error` and `EndedAt` are cleared, so a
+continued flow does not carry the reason it stopped as though it were still true;
+the rounds before it keep theirs. The state goes to `running` and `Continue`
+submits nothing itself, for the reason `Start` leaves round 1 to the reconciler
+(§5): the submit path a restart takes must be the path a continue takes, or the
+two disagree exactly when the daemon dies between them. It does call `Wake`,
+because unlike a fresh flow a continue is an operator watching for something to
+happen. No change callback fires — that slot reports the reconciler's work, not
+the API's, exactly as `Start`'s pending record and `Cancel`'s terminal one go
+unemitted.
+
+**Surfaces.** `POST /api/flow/continue` (`api.FlowContinueRequest` →
+`api.FlowContinueResponse`; row 127 of `docs/design/WIRE-CONTRACT.md`),
+`FlowService.Continue`, `Client.FlowContinue`, `singl flow continue --id <id>
+[--rounds N]`, and `C` in the TUI's Flows view — which offers it only for a
+continuable flow and otherwise says why in the flash line, and shows the current
+round count, the cap it would reach and the round it resumes at before acting.

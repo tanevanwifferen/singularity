@@ -112,11 +112,14 @@ round sees the same tree.
 | `verdict.go` | Parser for the reviewer's JSON verdict; unparseable or missing is a reject, never an accept |
 | `prompt.go` | Implement / fix / review prompt composition, including the verdict path and prior-round findings |
 | `manager.go` | Record keeper: `Start`, `Get`, `List`, `Cancel`, `Remove`, `Tree` over a `TaskQueue` interface the package defines |
+| `continue.go` | `Continue`: raises a non-accepted flow's cap and puts it back to `running`, settling a trailing round that never reached a verdict |
 | `reconcile.go`, `rounds.go` | The reconciler — submits rounds, reads verdicts, applies the one re-review, settles the flow |
 | `store.go`, `restore.go` | One JSON file per flow under `<state-dir>/flows`, plus a verdict dir each; restored on daemon start |
 
 **Flow states:** `pending → running`, then `accepted`, `rejected` (cap reached),
-`errored` or `cancelled`. Progress reaches clients as `flow_updated` WS frames
+`errored` or `cancelled`. `Continue` is the only edge back out of a terminal
+state: from `rejected`, `errored` or `cancelled` to `running`, with round
+numbering carrying on. Progress reaches clients as `flow_updated` WS frames
 carrying the whole flow, plus the ordinary `queue_task_changed` frames its tasks
 produce.
 
@@ -208,6 +211,7 @@ main()
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/flow/start` | Start a flow (work dir, goal, review goal, max rounds, work/review opts) |
+| POST | `/api/flow/continue` | Give a flow that finished unaccepted more rounds against the same goal: `rounds` is an increment on its cap (0 = 3), the record is extended rather than forked (409 for an accepted or still-running flow, 400 past the 20-round ceiling or if the work dir has gone) |
 | GET | `/api/flow/list` | List flows, optionally filtered by `state` |
 | GET | `/api/flow/get` | One flow by `flow_id`, rounds and verdicts included |
 | GET | `/api/flow/tree` | Flat, parent-linked node list: flow → rounds → steps, with task and agent state |
