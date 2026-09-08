@@ -44,9 +44,11 @@ const (
 	focusFlowTree
 )
 
-// Start-modal fields, in tab order.
+// Start-modal fields, in tab order. The first is a select, not an input:
+// a flow belongs in a workflow's worktrees, and the user already has a
+// workflow list, so typing a path is the wrong affordance.
 const (
-	flowFieldWorkDir = iota
+	flowFieldWorkflow = iota
 	flowFieldGoal
 	flowFieldReview
 	flowFieldRounds
@@ -104,21 +106,31 @@ type FlowsView struct {
 	statusMsg string
 
 	// Start modal, in the TextInput + ConfirmPrompt idiom WorkflowsView's
-	// start modal uses — four fields instead of one.
+	// start modal uses — four fields instead of one. startInputs is indexed
+	// by field; the flowFieldWorkflow slot stays empty because that field
+	// is the workflow picker below, not something to type into.
 	showStart   bool
 	startField  int
 	startInputs [flowFieldCount]components.TextInput
 
+	// Workflow select for the start modal: the rows on offer, the one
+	// chosen (nil until one is), and the picker overlay over them.
+	showWorkflowPicker bool
+	workflowOptions    []flowWorkflowOption
+	workflowChoice     *flowWorkflowOption
+	workflowPicker     *components.Filter[flowWorkflowOption]
+
 	cancelConfirm components.ConfirmPrompt
 
-	// workflows, when set (project mode), supplies the work dir the start
-	// modal prefills: a flow belongs in a workflow's worktree, not in the
-	// live checkout every other view is pointed at.
+	// workflows, when set (project mode), supplies the workflows the start
+	// modal offers: a flow belongs in a workflow's worktrees, not in the
+	// live checkout every other view is pointed at. In repo mode it is nil
+	// and the modal falls back to repoPath, labelled as such.
 	workflows *WorkflowsView
 }
 
 // NewFlowsView creates the flows view for the given repo path, which is also
-// the work dir the start modal prefills outside project mode.
+// the work dir the start modal falls back to outside project mode.
 func NewFlowsView(repoPath string) *FlowsView {
 	v := &FlowsView{
 		viewBase:  viewBase{repoPath: repoPath, width: 80, height: 24},
@@ -129,8 +141,8 @@ func NewFlowsView(repoPath string) *FlowsView {
 	return v
 }
 
-// SetWorkflowsView wires the project-mode workflows view, whose selected
-// workflow is where a flow started from here should run.
+// SetWorkflowsView wires the project-mode workflows view, whose workflows are
+// the ones a flow started from here can run in.
 func (v *FlowsView) SetWorkflowsView(wv *WorkflowsView) { v.workflows = wv }
 
 // Init loads the flow list and the selected flow's tree. With no services
@@ -353,10 +365,14 @@ func (v *FlowsView) listHeight() int {
 	return max(v.height-flowChromeLines, 4)
 }
 
-// SetSize updates the dimensions and the list pane's height.
+// SetSize updates the dimensions and the list pane's height — and the
+// workflow picker's, which may be open across a resize.
 func (v *FlowsView) SetSize(width, height int) {
 	v.viewBase.SetSize(width, height)
 	v.filter.SetHeight(v.listHeight())
+	if v.workflowPicker != nil {
+		v.workflowPicker.SetHeight(v.workflowPickerHeight())
+	}
 }
 
 // CapturesInput reports the modes in which global keys must not be stolen.
