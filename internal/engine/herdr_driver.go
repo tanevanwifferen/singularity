@@ -174,6 +174,11 @@ type herdrDriver struct {
 	// source of every text and tool event this driver reports.
 	transcript *herdrTranscriptTailer
 
+	// trustFile is claude's top-level config file, where start marks the
+	// work dir trusted before launching (see herdr_trust.go). Empty
+	// disables the step.
+	trustFile string
+
 	// snapMu guards fullSnapshot.
 	snapMu sync.Mutex
 	// fullSnapshot is the previous scrollback-inclusive pane read (see
@@ -200,6 +205,7 @@ func RunHerdrDriver(args []string) int {
 	pollMS := fs.Int("poll-ms", herdrDefaultPollMS, "how often to re-read claude's transcript while a turn is running")
 	sessionID := fs.String("session-id", "", "claude session id (also passed to claude as --session-id after `--`)")
 	transcriptDir := fs.String("transcript-dir", herdrClaudeConfigDir(), "claude config dir holding projects/*/<session>.jsonl")
+	trustFile := fs.String("claude-config", herdrClaudeConfigFile(), "claude config file to mark the work dir trusted in (empty: skip)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -220,6 +226,7 @@ func RunHerdrDriver(args []string) int {
 		cancel:        cancel,
 		out:           bufio.NewWriter(os.Stdout),
 		transcript:    newHerdrTranscriptTailer(*transcriptDir, *sessionID),
+		trustFile:     *trustFile,
 	}
 	return d.run(os.Stdin)
 }
@@ -308,6 +315,18 @@ func (d *herdrDriver) start() error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("resolve cwd: %w", err)
+	}
+
+	// Answer claude's trust-this-folder dialog ahead of time; a cwd claude
+	// has not seen before otherwise blocks the session before the first
+	// prompt (herdr_trust.go). Best-effort: when this fails the launch goes
+	// ahead and the dialog, if it appears, surfaces as the agent_not_ready
+	// wait below timing out — the same failure as before, now with a line
+	// on the output stream saying why.
+	if d.trustFile != "" {
+		if terr := herdrTrustWorkDir(d.trustFile, cwd); terr != nil {
+			d.emit(herdrMarkerErr, fmt.Sprintf("could not mark %s trusted in %s: %v (claude may block on its trust dialog)", cwd, d.trustFile, terr))
+		}
 	}
 
 	// --env, not a plain os/exec environment variable on the driver itself:
