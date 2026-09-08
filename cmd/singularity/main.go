@@ -12,6 +12,7 @@ import (
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app"
 	"gitlab.com/tanevanwifferen1/singularity/internal/daemon"
+	"gitlab.com/tanevanwifferen1/singularity/internal/engine"
 	"gitlab.com/tanevanwifferen1/singularity/internal/project"
 	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
@@ -30,6 +31,11 @@ func main() {
 			os.Exit(runDaemonCmd(os.Args[2:]))
 		case "project":
 			os.Exit(runProjectCmd(os.Args[2:]))
+		case "herdr-driver":
+			// Internal: the subprocess the herdr agent backend spawns for
+			// one agent (internal/engine/herdr_driver.go). Not for humans —
+			// it speaks a marker protocol on stdout, not text.
+			os.Exit(engine.RunHerdrDriver(os.Args[2:]))
 		case "help", "-h", "--help":
 			printUsage()
 			return
@@ -55,6 +61,8 @@ Usage:
   singularity project init           scan cwd for git repos → projects config
   singularity project generate-config <dir>
                                      print a project config JSON for <dir>
+  singularity herdr-driver …         internal: drive one claude session in a
+                                     herdr pane (spawned by the herdr backend)
   singularity version                print version
   singularity help                   this message
 

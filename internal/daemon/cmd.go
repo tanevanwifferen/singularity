@@ -168,12 +168,46 @@ func Run(opts RunOptions) error {
 	engine.SetModels(config.LoadDefaultModelsConfig())
 
 	var jiraCfg config.JiraConfig
+	herdrChecked := false
 	if cfg, lerr := config.LoadDefaultConfig(); lerr == nil && cfg != nil {
 		jiraCfg = cfg.Jira
-		// Apply backend from AI provider config ("claude" or "pi").
+		// Apply backend from AI provider config ("claude", "pi" or "herdr").
 		if b := engine.BackendByName(cfg.AI.Provider); b != nil {
 			srv.Engine().SetDefaultBackend(b)
 			log.Printf("agent backend: %s (from config AI.Provider)", cfg.AI.Provider)
+			// Some backends (herdr) have no unattended/non-interactive
+			// session mode and return an error from this call — surface
+			// that now, at startup, instead of letting the operator find
+			// out only when automatic rebase-conflict resolution
+			// (worktree.go) needs it and fails.
+			if _, _, err := b.UnattendedSessionCommand(""); err != nil {
+				log.Printf("WARNING: agent backend %q cannot run unattended sessions (%v) — "+
+					"automatic rebase-conflict resolution will fail; configure claude or pi "+
+					"for that path", cfg.AI.Provider, err)
+			}
+			// Same reasoning for the backend's external prerequisites (the
+			// herdr backend needs the herdr CLI and a running herdr server):
+			// without this the first spawn is the first hint, and it fails
+			// with a raw JSON error from a herdr subcommand.
+			if pre, ok := b.(engine.PreflightChecker); ok {
+				if err := pre.Preflight(); err != nil {
+					log.Printf("WARNING: agent backend %q is not ready: %v — agents will fail to start",
+						cfg.AI.Provider, err)
+				}
+			}
+			herdrChecked = cfg.AI.Provider == "herdr"
+		}
+	}
+	// herdr can be requested per agent with --backend herdr regardless of
+	// the configured default provider, which the check above misses
+	// whenever that default is claude or pi — exactly the case this warning
+	// exists for. Check it here too, unless the block above already did.
+	if !herdrChecked {
+		if pre, ok := engine.NewHerdrBackend().(engine.PreflightChecker); ok {
+			if err := pre.Preflight(); err != nil {
+				log.Printf("WARNING: herdr backend is not ready (only matters if an agent is spawned "+
+					"with --backend herdr): %v", err)
+			}
 		}
 	}
 

@@ -263,7 +263,7 @@ singl flow remove --id f3          # refused with CONFLICT while the flow is non
 
 `flow start` flags: `--workdir` and `--prompt` are required; then
 `--review-prompt`, `--max-rounds N` (1..20, default 3), `--title`, `--model`,
-`--effort low|medium|high`, `--timeout <secs>`, `--backend claude|pi`,
+`--effort low|medium|high`, `--timeout <secs>`, `--backend claude|pi|herdr`,
 `--context-file <p>` (repeatable), `--allowed-tools a,b`, `--reviewer-model`,
 `--reviewer-effort`, `--smart-route[=bool]`, `--no-smart-route`. The reviewer
 inherits the work options and `--reviewer-*` overrides only what it names.
@@ -347,7 +347,7 @@ singl --json agents spawn --workdir ~/.worktrees/<project>/feature-x/api \
 ```
 
 Flags: `--model`, `--effort low|medium|high`, `--max-turns`, `--timeout <secs>`,
-`--backend claude|pi`, `--smart-route[=bool]`, `--no-smart-route`.
+`--backend claude|pi|herdr`, `--smart-route[=bool]`, `--no-smart-route`.
 
 Smart routing is **on by default**: a Haiku classifier reads the prompt and
 picks the model (planning → opus, implementation → sonnet), the effort
@@ -437,7 +437,45 @@ singl --json mr create --repo <worktree> --source feature/x --target main --titl
 ```
 
 `commit suggest` and `mr title/create` generate text with a cheap one-shot prompt on
-the provider from `ai.provider` (claude or pi); both fall back to heuristics if it fails.
+the provider from `ai.provider` (claude, pi or herdr); all fall back to heuristics if
+it fails. Under herdr that one-shot is plain `claude --print`, identical to the claude
+provider's: it works with API/enterprise auth and fails only on the Max-plan auth the
+herdr backend exists for, in which case you get the heuristic message instead of a
+model-written one.
+
+`ai.provider: herdr` also becomes the daemon's default agent backend
+(internal/daemon/cmd.go via `BackendByName`). What you trade for being able to run
+agents on Max-plan auth at all:
+
+- no unattended/non-interactive session mode — `UnattendedSessionCommand` returns a
+  hard error, which breaks the automatic rebase-conflict-resolution path
+  (internal/engine/worktree.go). Set `ai.provider` to `claude` or `pi` if that path
+  matters to you.
+- no tool events. The agent's output is claude's rendered TUI read out of a herdr
+  pane, so `agents output` shows text (refreshed while the turn runs, every ~500ms),
+  never the `tool_use`/`tool_result` entries the claude and pi backends produce.
+- live output is viewport-sized; the full transcript arrives at the end of the turn.
+  A herdr pane the daemon creates is never attached to a herdr client, so it renders
+  at herdr's default 39 rows, and while the agent is *working* that viewport is all
+  herdr will read out (it refuses a larger read with `agent_not_idle` mid-turn). So a
+  turn printing more than 39 rows shows only the last screenful live. Once the turn
+  settles the driver re-reads the pane's scrollback (`--source recent-unwrapped`) and
+  emits what the live stream could not keep up with, so the finished turn's
+  transcript is complete. When that recovery kicks in the output stream carries an
+  explicit error event saying the live stream had a gap and that some output above is
+  repeated below.
+- a follow-up sent while a turn is in flight is queued, not delivered live: it lands
+  on the pane only once the current turn settles, even though the UI shows it as
+  accepted immediately. Queued means queued for a follow-up of any size — the driver
+  drains its stdin continuously, so submitting one does not block on the running
+  turn. herdr has a steer path (`agent send-keys` / `pane send-text`) this backend
+  does not use for that yet.
+- the per-turn wait (`herdr agent prompt --wait`) is sized to the agent's own
+  `--timeout` when one is set, else defaults to 30 minutes.
+- it needs a running herdr server (`herdr status`). The daemon logs a startup warning
+  for both of these when `ai.provider: herdr` is set, or when an agent is spawned with
+  `--backend herdr` while a different provider is the default, so you find out then
+  rather than on your first spawn.
 `commit suggest`/`generate` use the staged diff and fall back to the unstaged
 diff when nothing is staged, so they only fail when the working tree is fully
 clean.

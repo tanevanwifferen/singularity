@@ -54,6 +54,9 @@ func (a *Agent) handleBackendEvent(ev *BackendEvent) {
 			a.sessionID = ev.SessionID
 			a.mu.Unlock()
 		}
+		if ev.PaneID != "" {
+			a.appendOutput("system", fmt.Sprintf("herdr pane: %s", ev.PaneID))
+		}
 
 	case BackendResult:
 		a.handleResult(ev)

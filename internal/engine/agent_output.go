@@ -29,6 +29,15 @@ func (a *Agent) streamOutput(r io.ReadCloser) {
 			a.handleBackendEvent(ev)
 		}
 	}
+	// A scanner stops on error as silently as it stops on EOF, and the two
+	// mean opposite things: EOF is the subprocess exiting, an error (a line
+	// over the 1MiB token limit above all) is this loop giving up on a
+	// process that is still running and still producing events. Without this
+	// the agent just sits in AgentRunning until its timeout, with no clue
+	// why.
+	if err := scanner.Err(); err != nil {
+		a.appendOutput("error", fmt.Sprintf("output stream aborted: %v (no further agent events will be read)", err))
+	}
 }
 
 // streamStderr reads stderr and appends as error entries

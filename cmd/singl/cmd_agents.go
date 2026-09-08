@@ -229,7 +229,7 @@ func runAgentsSpawn(ctx context.Context, args []string) int {
 	maxTurns := fs.Int("max-turns", 0, "max agent turns (0 = unlimited)")
 	timeout := fs.Int("timeout", 0, "timeout in seconds (0 = no timeout)")
 	useWorktree := fs.Bool("use-worktree", false, "run agent in isolated git worktree")
-	backend := fs.String("backend", "", "agent backend: claude or pi (default: daemon default)")
+	backend := fs.String("backend", "", "agent backend: claude, pi or herdr (default: daemon default)")
 	if code, done := parseArgs(fs, args); done {
 		return code
 	}
@@ -377,7 +377,7 @@ func runAgentsResume(ctx context.Context, args []string) int {
 	maxTurns := fs.Int("max-turns", 0, "max agent turns")
 	timeout := fs.Int("timeout", 0, "timeout in seconds")
 	useWorktree := fs.Bool("use-worktree", false, "run agent in isolated git worktree")
-	backend := fs.String("backend", "", "agent backend: claude or pi (default: daemon default)")
+	backend := fs.String("backend", "", "agent backend: claude, pi or herdr (default: daemon default)")
 	if code, done := parseArgs(fs, args); done {
 		return code
 	}
