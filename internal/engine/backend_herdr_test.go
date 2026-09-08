@@ -238,21 +238,29 @@ func TestHerdrParseEventUnknownLineIgnored(t *testing.T) {
 	}
 }
 
-func TestHerdrUnattendedSessionCommandErrors(t *testing.T) {
+func TestHerdrUnattendedSessionCommandIsPi(t *testing.T) {
 	b := newHerdrTestBackend(t)
-	if _, _, err := b.UnattendedSessionCommand("do something"); err == nil {
-		t.Fatal("UnattendedSessionCommand: want error, got nil")
+	binary, args, err := b.UnattendedSessionCommand("do something")
+	if err != nil {
+		t.Fatalf("UnattendedSessionCommand: %v", err)
+	}
+	wantBinary, wantArgs, _ := NewPiBackend("").UnattendedSessionCommand("do something")
+	if binary != wantBinary || strings.Join(args, " ") != strings.Join(wantArgs, " ") {
+		t.Fatalf("UnattendedSessionCommand = %q %v, want pi's %q %v", binary, args, wantBinary, wantArgs)
 	}
 }
 
-func TestHerdrOneShotCommandIsClaudePrint(t *testing.T) {
+func TestHerdrOneShotCommandIsPi(t *testing.T) {
 	b := newHerdrTestBackend(t)
 	binary, args := b.OneShotCommand("hello")
-	// This is deliberately claude's own headless mode, not herdr: it works
-	// under API/enterprise auth and fails only on the Max-plan auth this
-	// backend exists for. cmd/singl/prime.md says so to operators.
-	if binary != "claude" || strings.Join(args, " ") == "" || args[0] != "--print" {
-		t.Fatalf("OneShotCommand = %q %v, want claude --print …", binary, args)
+	// Never `claude --print`: headless claude is refused on the Max-plan
+	// auth this backend exists for, and a one-shot prompt needs no pane.
+	if binary == "claude" {
+		t.Fatalf("OneShotCommand = %q %v, must not use claude's print mode", binary, args)
+	}
+	wantBinary, wantArgs := NewPiBackend("").OneShotCommand("hello")
+	if binary != wantBinary || strings.Join(args, " ") != strings.Join(wantArgs, " ") {
+		t.Fatalf("OneShotCommand = %q %v, want pi's %q %v", binary, args, wantBinary, wantArgs)
 	}
 }
 

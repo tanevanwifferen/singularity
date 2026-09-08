@@ -438,19 +438,19 @@ singl --json mr create --repo <worktree> --source feature/x --target main --titl
 
 `commit suggest` and `mr title/create` generate text with a cheap one-shot prompt on
 the provider from `ai.provider` (claude, pi or herdr); all fall back to heuristics if
-it fails. Under herdr that one-shot is plain `claude --print`, identical to the claude
-provider's: it works with API/enterprise auth and fails only on the Max-plan auth the
-herdr backend exists for, in which case you get the heuristic message instead of a
-model-written one.
+it fails. Under herdr that one-shot goes through pi (`pi --print` on pi's classifier
+model), never through `claude --print`, which is refused on the Max-plan auth the
+herdr backend exists for. The same holds for the unattended session behind automatic
+rebase-conflict resolution: under herdr it runs on pi.
 
 `ai.provider: herdr` also becomes the daemon's default agent backend
 (internal/daemon/cmd.go via `BackendByName`). What you trade for being able to run
 agents on Max-plan auth at all:
 
-- no unattended/non-interactive session mode — `UnattendedSessionCommand` returns a
-  hard error, which breaks the automatic rebase-conflict-resolution path
-  (internal/engine/worktree.go). Set `ai.provider` to `claude` or `pi` if that path
-  matters to you.
+- the unattended paths run on pi, not on herdr: the automatic rebase-conflict
+  resolution (internal/engine/worktree.go) and the one-shot prompts above need a
+  single exec with no TUI, which herdr cannot give, so they delegate to the pi
+  backend. pi must be installed and configured alongside herdr.
 - no tool events. The agent's output is claude's rendered TUI read out of a herdr
   pane, so `agents output` shows text (refreshed while the turn runs, every ~500ms),
   never the `tool_use`/`tool_result` entries the claude and pi backends produce.
