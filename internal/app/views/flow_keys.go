@@ -178,34 +178,27 @@ func (v *FlowsView) confirmCancel() tea.Cmd {
 	return nil
 }
 
-// openStartModal opens the start modal with the work dir prefilled and the
-// round cap at the daemon's own default.
+// openStartModal opens the start modal with the workflow select loaded and
+// the round cap at the daemon's own default.
 func (v *FlowsView) openStartModal() {
 	v.showStart = true
-	v.startField = flowFieldWorkDir
+	v.showWorkflowPicker = false
+	v.startField = flowFieldWorkflow
 	for i := range v.startInputs {
 		v.startInputs[i].Clear()
 	}
-	v.startInputs[flowFieldWorkDir].Set(v.defaultWorkDir())
 	v.startInputs[flowFieldRounds].Set("3")
-}
-
-// defaultWorkDir is the selected workflow's worktree in project mode, and
-// the view's repo path otherwise.
-func (v *FlowsView) defaultWorkDir() string {
-	if v.workflows != nil {
-		if wf := v.workflows.currentWorkflow(); wf != nil {
-			if dir := wf.WorkflowDir(); dir != "" {
-				return dir
-			}
-		}
-	}
-	return v.repoPath
+	v.loadWorkflowOptions()
 }
 
 // handleStartInput drives the start modal: tab/shift+tab between the four
-// fields, enter to submit, esc to abandon.
+// fields, enter to submit, esc to abandon — and, on the workflow field,
+// space to open the picker, since that field is a select with no text to
+// type into.
 func (v *FlowsView) handleStartInput(msg tea.KeyMsg) tea.Cmd {
+	if v.showWorkflowPicker {
+		return v.handleWorkflowPicker(msg)
+	}
 	switch msg.String() {
 	case "esc":
 		v.showStart = false
@@ -218,20 +211,44 @@ func (v *FlowsView) handleStartInput(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	case "enter":
 		return v.submitStart()
-	default:
+	case " ":
+		if v.startField == flowFieldWorkflow {
+			v.showWorkflowPicker = true
+			return nil
+		}
 		v.startInputs[v.startField].HandleKey(msg)
+		return nil
+	default:
+		// The workflow field holds no input, so a stray keystroke on it
+		// must not land in whatever field was last focused.
+		if v.startField != flowFieldWorkflow {
+			v.startInputs[v.startField].HandleKey(msg)
+		}
 		return nil
 	}
 }
 
 // submitStart validates what it can locally and hands the rest to the
 // service, whose refusals (a work dir that is not a directory, worktree
-// isolation, a max_rounds outside 1..20) come back as a flash message.
+// isolation, a max_rounds outside 1..20) come back as a flash message. The
+// work dir is the selected workflow's root, never typed — see
+// flowWorkflowOptionFrom for why the root and not a repo worktree.
 func (v *FlowsView) submitStart() tea.Cmd {
-	workDir := strings.TrimSpace(v.startInputs[flowFieldWorkDir].Value)
 	goal := strings.TrimSpace(v.startInputs[flowFieldGoal].Value)
 	review := strings.TrimSpace(v.startInputs[flowFieldReview].Value)
 	roundsText := strings.TrimSpace(v.startInputs[flowFieldRounds].Value)
+
+	// Nothing to run in is not an error to hand to the service: the modal
+	// stays open saying where a workflow comes from.
+	if v.workflowChoice == nil {
+		if len(v.workflowOptions) == 0 {
+			v.statusMsg = "No workflow to run in — create one in the Workflows view first"
+		} else {
+			v.statusMsg = "Select a workflow first — press space on the Workflow field"
+		}
+		return nil
+	}
+	workDir := v.workflowChoice.RootDir
 
 	if goal == "" {
 		v.statusMsg = "A goal is required"
