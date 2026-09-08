@@ -40,14 +40,18 @@ import (
 //     clean stdin EOF. A signal handler does that; a shell script cannot
 //     catch the SIGKILL Agent.kill used to send (see the SIGTERM grace
 //     period in agent_lifecycle.go, and herdrBackend.TerminationGrace).
-//   - the pane has to be polled *while* the turn runs for the output stream
-//     to show live progress, which means writing to stdout from two places
-//     at once — safe behind a mutex, a race in shell.
+//   - claude's session transcript has to be tailed *while* the turn runs for
+//     the output stream to show live progress (see herdr_transcript.go),
+//     which means writing to stdout from two places at once — safe behind a
+//     mutex, a race in shell.
 const (
 	// herdrMarkerInit is printed once, after the workspace exists and herdr
 	// has confirmed claude is ready for input. The payload is the pane ID.
 	herdrMarkerInit = "__SINGL_INIT__"
-	// herdrMarkerOut carries a base64 chunk of new pane text.
+	// herdrMarkerOut carries a base64 chunk of pane text — only the
+	// end-of-turn fallback read, when the transcript produced nothing for
+	// the turn (see runTurn). The transcript itself travels on
+	// herdrMarkerJSONL (herdr_transcript.go).
 	herdrMarkerOut = "__SINGL_OUT__"
 	// herdrMarkerState carries the base64 JSON response of the
 	// `herdr agent prompt --wait` (or follow-up `herdr agent wait`) that
@@ -70,53 +74,24 @@ const herdrTaskPrefix = "T:"
 // would choke on. Splitting happens on line boundaries.
 const herdrOutChunkBytes = 64 * 1024
 
-// herdrLiveReadSource is the `herdr agent read --source` the mid-turn
-// progress polls use, and the only one they can use.
+// herdrFullReadSource and herdrFullReadLines are the pane read the driver
+// falls back to once a turn has settled and claude's transcript produced no
+// record for it (transcript saving off in the pane's claude, or the file
+// never found). It is the only pane read the driver makes.
 //
-// "visible" is the currently rendered viewport. It is the one source whose
-// extent does not depend on the agent's state, which matters because the
-// larger sources are simply refused while a turn is in flight: verified
-// against the installed herdr (0.8.2) that `agent read <name> --source
-// recent --lines 600` fails with
-//
-//	{"error":{"code":"agent_not_idle","message":"cannot read 600 lines while
-//	 <name> is working: its alternate-screen history can only be captured by
-//	 scrolling while idle"}}
-//
-// for as long as the agent reports "working", and answers normally the
-// moment it settles. So a live poll has no choice: viewport or nothing.
-const herdrLiveReadSource = "visible"
-
-// herdrFullReadSource and herdrFullReadLines are the read the driver makes
-// once a turn has settled, and they are what the turn's transcript is
-// actually built from.
-//
-// The point of reading twice is that the viewport is far smaller than a
-// turn: a pane the daemon creates is never attached to a herdr client, so it
-// renders at herdr's default size (viewport_rows: 39 on the installed herdr,
-// read straight off `workspace create`'s root_pane.scroll). A turn printing
-// more than that scrolls the rest out of the viewport, and the mid-turn polls
-// can only see what is in it.
-//
-// This code used to treat those rows as gone, on the strength of herdr's own
-// warning that "rows that leave the alternate screen do not enter Herdr's
-// host scrollback, so a larger line count cannot recover them". That warning
-// is about the *refusal* above, and reading it as an absolute cost this
-// driver had to eat was wrong. Measured against herdr 0.8.2, in a
-// daemon-created workspace pane running claude: after a turn printing 150
-// numbered lines settled, `--source visible` returned 39 rows starting at
-// "121", while `--source recent-unwrapped --lines 400` returned 178 rows
-// covering the whole turn from claude's banner onward. A second turn printing
-// 200 more lines then read back complete at --lines 600 (395 rows). The
-// alternate-screen history is recoverable; it just has to be asked for while
-// the agent is idle, which is exactly where runTurn's end-of-turn read sits.
-//
-// recent-unwrapped rather than recent because herdr recommends it for
-// transcripts (it joins soft-wrapped rows back into one line), and a line
-// count far above any plausible single turn because the window slides:
-// herdrDiffSnapshot's overlapAt anchors a later window against an earlier
-// one, so asking for more rows than the turn produced costs a slightly
-// larger diff and nothing else.
+// It is made only after the turn settles because the larger sources are
+// refused while a turn is in flight: verified against the installed herdr
+// (0.8.2) that `agent read <name> --source recent --lines 600` fails with
+// agent_not_idle for as long as the agent reports "working", and answers
+// normally the moment it settles. Measured then in a daemon-created pane:
+// after a turn printing 150 numbered lines, `--source recent-unwrapped
+// --lines 400` returned the whole turn from claude's banner onward, where
+// the 39-row viewport held only the tail. recent-unwrapped because herdr
+// recommends it for transcripts (it joins soft-wrapped rows back into one
+// line), and a line count far above any plausible single turn because the
+// window slides: herdrDiffSnapshot's overlapAt anchors a later window
+// against an earlier one, so asking for more rows than the turn produced
+// costs a slightly larger diff and nothing else.
 const (
 	herdrFullReadSource = "recent-unwrapped"
 	herdrFullReadLines  = 5000
@@ -127,12 +102,9 @@ const (
 // (config load, MCP servers) is slower than herdr's own 30s default.
 const herdrStartTimeoutMS = 120 * 1000
 
-// herdrDefaultPollMS is how often the pane is re-read while a turn is in
-// flight. A turn can run for many minutes; without this nothing at all
-// reaches `singl agents output` or the TUI until it ends. It is also what
-// bounds how much of a running turn's output the live stream shows in place
-// rather than only after the turn settles (see herdrLiveReadSource, and
-// emitFullSnapshot for how the rest is recovered).
+// herdrDefaultPollMS is how often claude's transcript is re-read while a
+// turn is in flight. A turn can run for many minutes; without this nothing
+// at all reaches `singl agents output` or the TUI until it ends.
 const herdrDefaultPollMS = 500
 
 // herdrPromptTimeoutMS bounds a single `herdr agent prompt --wait` —
@@ -198,24 +170,16 @@ type herdrDriver struct {
 	// any failure path.
 	workspaceID string
 
-	// snapMu guards the three fields below: the poll loop and the
-	// end-of-turn reads both go through them.
+	// transcript tails the claude session's own transcript file, the
+	// source of every text and tool event this driver reports.
+	transcript *herdrTranscriptTailer
+
+	// snapMu guards fullSnapshot.
 	snapMu sync.Mutex
-	// visibleSnapshot is the previous *viewport* read, diffed against the
-	// next one by herdrDiffSnapshot to give the live progress stream.
-	visibleSnapshot string
-	// fullSnapshot is the previous scrollback-inclusive read (see
-	// herdrFullReadSource), the baseline the authoritative end-of-turn diff
-	// is taken against. Kept separate from visibleSnapshot because the two
-	// sources cover different extents and diffing one against the other
-	// finds no common anchor at all.
+	// fullSnapshot is the previous scrollback-inclusive pane read (see
+	// herdrFullReadSource), the baseline the fallback read is diffed
+	// against so it yields one turn's output and not the whole session's.
 	fullSnapshot string
-	// turnLossy records that at least one live poll in the current turn
-	// could not be anchored to the previous one, i.e. the viewport scrolled
-	// by more than its own height between two polls. It is what decides
-	// whether the end-of-turn full read has to be emitted (recovering the
-	// rows the live stream missed) or merely recorded as the next baseline.
-	turnLossy bool
 
 	cleanupOnce sync.Once
 	// shuttingDown stops emit from reporting anything after cleanup has
@@ -233,7 +197,9 @@ func RunHerdrDriver(args []string) int {
 	name := fs.String("name", "", "herdr agent name (also the workspace label)")
 	kind := fs.String("kind", "claude", "herdr agent kind")
 	promptTimeout := fs.Int("prompt-timeout-ms", herdrPromptTimeoutMS, "per-turn timeout for `herdr agent prompt --wait`")
-	pollMS := fs.Int("poll-ms", herdrDefaultPollMS, "how often to re-read the pane while a turn is running")
+	pollMS := fs.Int("poll-ms", herdrDefaultPollMS, "how often to re-read claude's transcript while a turn is running")
+	sessionID := fs.String("session-id", "", "claude session id (also passed to claude as --session-id after `--`)")
+	transcriptDir := fs.String("transcript-dir", herdrClaudeConfigDir(), "claude config dir holding projects/*/<session>.jsonl")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -253,6 +219,7 @@ func RunHerdrDriver(args []string) int {
 		ctx:           ctx,
 		cancel:        cancel,
 		out:           bufio.NewWriter(os.Stdout),
+		transcript:    newHerdrTranscriptTailer(*transcriptDir, *sessionID),
 	}
 	return d.run(os.Stdin)
 }
@@ -348,8 +315,21 @@ func (d *herdrDriver) start() error {
 	// inherits the server's environment, never the driver's. --env is the
 	// mechanism that actually reaches it (herdrBackend.Env used to set
 	// CLAUDE_NO_ANALYTICS on the driver process, where it had no effect).
+	//
+	// The blanked variables are the ones claude sets for its own child
+	// processes. A herdr server started from inside a claude session
+	// passes them on to every pane, and the claude in the pane then takes
+	// itself for a nested child session — which, among other things, turns
+	// transcript saving off, and the transcript is where this driver's
+	// output comes from. Blanking them makes it a top-level session again.
 	raw, err := d.herdr("workspace", "create", "--cwd", cwd, "--label", d.name,
-		"--env", "CLAUDE_NO_ANALYTICS=true", "--no-focus")
+		"--env", "CLAUDE_NO_ANALYTICS=true",
+		"--env", "CLAUDE_CODE_CHILD_SESSION=",
+		"--env", "CLAUDECODE=",
+		"--env", "CLAUDE_CODE_ENTRYPOINT=",
+		"--env", "CLAUDE_CODE_SESSION_ID=",
+		"--env", "CLAUDE_PID=",
+		"--no-focus")
 	if err != nil {
 		return fmt.Errorf("herdr workspace create: %w: %s", err, raw)
 	}
@@ -394,11 +374,10 @@ func (d *herdrDriver) start() error {
 		}
 	}
 
-	// Seed the full-read baseline while the agent is freshly idle, so the
-	// first turn's end-of-turn diff is that turn and not the whole boot
-	// banner as well. Best-effort: an empty baseline only makes the first
-	// full delta larger, which emitFullSnapshot discards anyway unless the
-	// turn was lossy.
+	// Seed the fallback read's baseline while the agent is freshly idle, so
+	// a first turn that has to fall back to the pane yields that turn and
+	// not the whole boot banner as well. Best-effort: an empty baseline only
+	// makes that first delta larger.
 	if raw, rerr := d.herdr("agent", "read", d.name, "--source", herdrFullReadSource,
 		"--lines", fmt.Sprint(herdrFullReadLines), "--format", "text"); rerr == nil {
 		d.snapMu.Lock()
@@ -488,24 +467,21 @@ func (d *herdrDriver) relay(stdin io.Reader) {
 
 // runTurn submits one prompt and reports the turn's outcome.
 //
-// The pane is read in two ways, for two different jobs. While the prompt is
-// in flight the viewport is polled so the output stream shows progress in
-// place (emitLiveSnapshot); once it has settled, the scrollback-inclusive
-// snapshot is read back so the transcript is complete even for a turn that
-// printed far more than a 39-row viewport (emitFullSnapshot). Only the second
-// read can see the rows that scrolled past, and only after the turn settles —
-// herdr refuses it while the agent is working.
+// While the prompt is in flight claude's transcript is tailed so the output
+// stream shows progress as it happens; once the turn has settled the tail is
+// drained one last time. Only when the transcript produced nothing for the
+// turn is the pane read instead (emitFullSnapshot): its scrollback-inclusive
+// snapshot, which herdr refuses while the agent is working and answers once
+// it settles, diffed against the previous one.
 //
-// Ordering matters: the pane text is emitted before the state line, because
+// Ordering matters: the output is emitted before the state line, because
 // the state line is what ParseEvent turns into a BackendResult and
 // handleResult (agent_events.go) treats that as "turn complete" — it sets
 // EndedAt, plays the completion sound and starts the worktree merge. Anything
 // that reads the transcript on that notification must already be able to see
 // the turn's output.
 func (d *herdrDriver) runTurn(text string) {
-	d.snapMu.Lock()
-	d.turnLossy = false
-	d.snapMu.Unlock()
+	before := d.transcript.records
 
 	stop := make(chan struct{})
 	polled := make(chan struct{})
@@ -518,9 +494,11 @@ func (d *herdrDriver) runTurn(text string) {
 
 	close(stop)
 	<-polled
+	d.pollTranscript()
 
-	d.emitLiveSnapshot()
-	d.emitFullSnapshot()
+	if d.transcript.records == before {
+		d.emitFullSnapshot()
+	}
 	d.emit(herdrMarkerState, state)
 }
 
@@ -775,8 +753,8 @@ func (d *herdrDriver) watchAgent(stop <-chan struct{}) bool {
 	}
 }
 
-// pollLoop re-reads the pane until stop is closed, so a long turn reports
-// progress as it happens instead of arriving in one lump at the end.
+// pollLoop re-reads the transcript until stop is closed, so a long turn
+// reports progress as it happens instead of arriving in one lump at the end.
 func (d *herdrDriver) pollLoop(stop <-chan struct{}) {
 	ticker := time.NewTicker(d.pollInterval)
 	defer ticker.Stop()
@@ -787,86 +765,45 @@ func (d *herdrDriver) pollLoop(stop <-chan struct{}) {
 		case <-d.ctx.Done():
 			return
 		case <-ticker.C:
-			d.emitLiveSnapshot()
+			d.pollTranscript()
 		}
 	}
 }
 
-// emitLiveSnapshot reads the pane's viewport and emits whatever is new since
-// the previous viewport read, so a long turn reports progress as it happens.
-// A failed read is reported as an error event and nothing else: it is
-// routinely transient (the pane can be mid-resize, the server mid-reload),
-// and losing one poll costs nothing — the end-of-turn read (emitFullSnapshot)
-// covers the whole turn regardless.
-func (d *herdrDriver) emitLiveSnapshot() {
-	raw, err := d.herdr("agent", "read", d.name, "--source", herdrLiveReadSource, "--format", "text")
+// pollTranscript forwards every transcript record claude has written since
+// the previous poll. The poll loop and runTurn's final drain never overlap
+// (runTurn waits for the loop to stop first), so the tailer needs no lock.
+func (d *herdrDriver) pollTranscript() {
+	err := d.transcript.poll(func(record string) {
+		d.emit(herdrMarkerJSONL, record)
+	})
 	if err != nil {
-		d.emit(herdrMarkerErr, fmt.Sprintf("herdr agent read: %v: %s", err, raw))
-		return
+		d.emit(herdrMarkerErr, fmt.Sprintf("claude transcript %s: %v", d.transcript.path, err))
 	}
-
-	d.snapMu.Lock()
-	delta, lossy := herdrDiffSnapshot(d.visibleSnapshot, raw)
-	d.visibleSnapshot = raw
-	if lossy {
-		d.turnLossy = true
-	}
-	d.snapMu.Unlock()
-
-	if lossy {
-		// Neither end of the previous read lines up with this one: the pane
-		// scrolled by more than its own viewport between polls, which is
-		// unremarkable on the 39-row viewport a daemon-created,
-		// never-attached pane gets. Not a hole in the transcript — the
-		// end-of-turn full read fills it in — but worth saying, because
-		// until it does the live stream is missing rows and what it does
-		// then emit repeats some of what was already shown.
-		d.emit(herdrMarkerErr, "herdr agent read: pane output scrolled past the viewport between live polls with "+
-			"no overlap detected; the live stream is incomplete until this turn's full transcript is read back at "+
-			"the end of the turn (which then repeats some of the output above)")
-	}
-	d.emitText(delta)
 }
 
-// emitFullSnapshot reads the settled pane's scrollback-inclusive snapshot and
-// makes it the transcript's baseline, emitting the turn's output when the
-// live stream could not keep up with it.
-//
-// This is the read that makes the transcript complete, and it can only happen
-// here: the source it uses is refused while the agent is working (see
-// herdrLiveReadSource) and answers in full once the turn has settled, which
-// is precisely where runTurn calls this. The diff is taken against the
-// previous *full* read rather than against the viewport, so what it returns
-// is exactly this turn's output, scrolled-past rows included.
-//
-// It is emitted only when the turn was lossy. A live stream that stayed
-// anchored poll to poll has already carried every row of the turn, and
-// emitting the full delta on top of it would duplicate the whole turn in the
-// agent's output on every single turn. The baseline is updated either way,
-// so the next turn's delta is that turn alone.
+// emitFullSnapshot is the pane fallback: it reads the settled pane's
+// scrollback-inclusive snapshot, emits what is new since the previous such
+// read, and makes this read the next baseline.
 //
 // A failed read leaves the baseline alone on purpose: the next successful
-// full read then diffs against the last known-good snapshot and recovers the
-// missed turn too, instead of starting from a gap. The most likely failure is
-// herdr's own agent_not_idle, which is what a turn that ended in a timeout
-// (claude still working in the pane) looks like from here.
+// read then diffs against the last known-good snapshot and recovers the
+// missed turn too, instead of starting from a gap. The most likely failure
+// is herdr's own agent_not_idle, which is what a turn that ended in a
+// timeout (claude still working in the pane) looks like from here.
 func (d *herdrDriver) emitFullSnapshot() {
 	raw, err := d.herdr("agent", "read", d.name, "--source", herdrFullReadSource,
 		"--lines", fmt.Sprint(herdrFullReadLines), "--format", "text")
 	if err != nil {
-		d.emit(herdrMarkerErr, fmt.Sprintf("herdr agent read (full transcript): %v: %s", err, raw))
+		d.emit(herdrMarkerErr, fmt.Sprintf("herdr agent read (pane fallback, no transcript record for this turn): %v: %s", err, raw))
 		return
 	}
 
 	d.snapMu.Lock()
 	delta, _ := herdrDiffSnapshot(d.fullSnapshot, raw)
 	d.fullSnapshot = raw
-	lossy := d.turnLossy
 	d.snapMu.Unlock()
 
-	if !lossy {
-		return
-	}
 	d.emitText(delta)
 }
 

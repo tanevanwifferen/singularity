@@ -12,7 +12,7 @@ func newHerdrTestBackend(t *testing.T) *herdrBackend {
 	t.Helper()
 	SetModels(config.DefaultModelsConfig())
 	t.Cleanup(func() { SetModels(nil) })
-	return &herdrBackend{name: "singltest"}
+	return &herdrBackend{name: "singltest", sessionID: "0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f"}
 }
 
 func TestHerdrArgsBuildsDriverInvocation(t *testing.T) {
@@ -28,7 +28,9 @@ func TestHerdrArgsBuildsDriverInvocation(t *testing.T) {
 		"--kind claude",
 		// Everything after `--` is claude's own flags, passed through
 		// herdr's own `--` to the agent.
-		"-- --permission-mode bypassPermissions",
+		// The session id goes to the driver (which transcript to tail)
+		// and to claude (which session to write it as).
+		"--session-id 0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f -- --permission-mode bypassPermissions --session-id 0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f",
 		"--model sonnet",
 		"--effort high",
 		"--allowedTools Read --allowedTools Edit",
@@ -80,8 +82,8 @@ func TestHerdrParseEventSessionInitOnce(t *testing.T) {
 	if err != nil || len(events) != 1 || events[0].Kind != BackendSessionInit {
 		t.Fatalf("first init: events=%+v err=%v", events, err)
 	}
-	if events[0].SessionID != "singltest" || events[0].Model != "anthropic/claude-sonnet-5" || events[0].PaneID != "w1:p1" {
-		t.Errorf("init event = %+v, want SessionID=singltest Model=anthropic/claude-sonnet-5 PaneID=w1:p1", events[0])
+	if events[0].SessionID != b.sessionID || events[0].Model != "anthropic/claude-sonnet-5" || events[0].PaneID != "w1:p1" {
+		t.Errorf("init event = %+v, want SessionID=%s Model=anthropic/claude-sonnet-5 PaneID=w1:p1", events[0], b.sessionID)
 	}
 
 	events, err = b.ParseEvent(b64Line("__SINGL_INIT__", "w1:p1"))
@@ -111,6 +113,9 @@ func TestHerdrNewForAgentIsolatesConcurrentAgents(t *testing.T) {
 	if a.name == b.name {
 		t.Errorf("both agents got the herdr agent name %q; herdr rejects a duplicate live name", a.name)
 	}
+	if a.sessionID == "" || a.sessionID == b.sessionID || a.sessionID == template.sessionID {
+		t.Errorf("session ids a=%q b=%q template=%q; each agent needs its own claude session", a.sessionID, b.sessionID, template.sessionID)
+	}
 	if template.name != "singltest" {
 		t.Errorf("template name changed to %q; NewForAgent must not mutate the receiver", template.name)
 	}
@@ -122,7 +127,7 @@ func TestHerdrNewForAgentIsolatesConcurrentAgents(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ParseEvent: %v", err)
 		}
-		if len(events) != 1 || events[0].Kind != BackendSessionInit || events[0].SessionID != backend.name {
+		if len(events) != 1 || events[0].Kind != BackendSessionInit || events[0].SessionID != backend.sessionID {
 			t.Errorf("agent %q init events = %+v, want one BackendSessionInit naming its own session",
 				backend.name, events)
 		}

@@ -451,19 +451,19 @@ agents on Max-plan auth at all:
   resolution (internal/engine/worktree.go) and the one-shot prompts above need a
   single exec with no TUI, which herdr cannot give, so they delegate to the pi
   backend. pi must be installed and configured alongside herdr.
-- no tool events. The agent's output is claude's rendered TUI read out of a herdr
-  pane, so `agents output` shows text (refreshed while the turn runs, every ~500ms),
-  never the `tool_use`/`tool_result` entries the claude and pi backends produce.
-- live output is viewport-sized; the full transcript arrives at the end of the turn.
-  A herdr pane the daemon creates is never attached to a herdr client, so it renders
-  at herdr's default 39 rows, and while the agent is *working* that viewport is all
-  herdr will read out (it refuses a larger read with `agent_not_idle` mid-turn). So a
-  turn printing more than 39 rows shows only the last screenful live. Once the turn
-  settles the driver re-reads the pane's scrollback (`--source recent-unwrapped`) and
-  emits what the live stream could not keep up with, so the finished turn's
-  transcript is complete. When that recovery kicks in the output stream carries an
-  explicit error event saying the live stream had a gap and that some output above is
-  repeated below.
+- output comes from claude's own session transcript, not from the pane. The driver
+  launches claude with a `--session-id` it chose and tails
+  `~/.claude/projects/*/<session>.jsonl` while the turn runs, so `agents output`
+  carries the same `text`/`tool_use`/`tool_result` entries the claude backend
+  produces, live (every ~500ms). The agent record's session id is that claude
+  session, so `claude --resume <id>` reopens it by hand. Only when a turn produced no
+  transcript record at all (transcript saving off in that claude) does the driver
+  fall back to reading the pane's scrollback once the turn has settled — rendered
+  TUI text, tool calls included as claude drew them.
+- the driver blanks claude's own child-session variables (`CLAUDE_CODE_CHILD_SESSION`,
+  `CLAUDECODE`, …) in the pane. A herdr server started from inside a claude session
+  passes them to every pane, and a claude that inherits them turns transcript saving
+  off — which would force the fallback above on every turn.
 - a follow-up sent while a turn is in flight is queued, not delivered live: it lands
   on the pane only once the current turn settles, even though the UI shows it as
   accepted immediately. Queued means queued for a follow-up of any size — the driver
