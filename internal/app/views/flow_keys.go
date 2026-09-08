@@ -24,6 +24,9 @@ func (v *FlowsView) handleFlowKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if v.showStart {
 		return v, v.handleStartInput(msg)
 	}
+	if v.showContinue {
+		return v, v.handleContinueInput(msg)
+	}
 	if handled, cmd := v.cancelConfirm.HandleKey(msg); handled {
 		return v, cmd
 	}
@@ -51,6 +54,15 @@ func (v *FlowsView) handleFlowKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "c":
 		return v, v.confirmCancel()
+
+	// Shift-c rather than a plain letter: every plain one this view wants
+	// is taken (c is cancel, n start, a agent, r refresh, j/k/h/l/enter
+	// navigation, / the filter), and an uppercase C collides with nothing
+	// the app or the router claims either — their capitals are R, P, T and
+	// the g submenu.
+	case "C":
+		v.openContinueModal()
+		return v, nil
 
 	case "a":
 		return v, v.openSelectedAgent()

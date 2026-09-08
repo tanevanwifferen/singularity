@@ -120,6 +120,10 @@ func (v *FlowsView) View() string {
 		s.WriteString(v.renderStartModal())
 		return s.String()
 	}
+	if v.showContinue {
+		s.WriteString(v.renderContinueModal())
+		return s.String()
+	}
 	if v.cancelConfirm.Visible {
 		s.WriteString("\n")
 		s.WriteString(v.cancelConfirm.Render(modalWidth(v.width)))

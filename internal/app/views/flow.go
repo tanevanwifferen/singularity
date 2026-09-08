@@ -74,9 +74,10 @@ type flowTreeLoadedMsg struct {
 	err    error
 }
 
-// flowActionMsg is the result of a Start or Cancel. Refusals land in the
-// flash line rather than anywhere that can take the view down: an invalid
-// work dir, a use_worktree option or an out-of-range max_rounds are all
+// flowActionMsg is the result of a Start, Continue or Cancel. Refusals land
+// in the flash line rather than anywhere that can take the view down: an
+// invalid work dir, a use_worktree option, an out-of-range max_rounds, a cap
+// already at the ceiling and a work dir that has since been removed are all
 // ordinary answers from the service.
 type flowActionMsg struct {
 	action string
@@ -121,6 +122,14 @@ type FlowsView struct {
 	workflowPicker     *components.Filter[flowWorkflowOption]
 
 	cancelConfirm components.ConfirmPrompt
+
+	// Continue modal: the one-field form 'C' opens over a flow that
+	// finished without being accepted. continueTarget is the row the modal
+	// is about, captured on open so a refresh landing behind it cannot
+	// retarget the request at whatever the cursor has since moved to.
+	showContinue   bool
+	continueTarget FlowInfo
+	continueRounds components.TextInput
 
 	// workflows, when set (project mode), supplies the workflows the start
 	// modal offers: a flow belongs in a workflow's worktrees, not in the
@@ -377,7 +386,7 @@ func (v *FlowsView) SetSize(width, height int) {
 
 // CapturesInput reports the modes in which global keys must not be stolen.
 func (v *FlowsView) CapturesInput() bool {
-	return v.showStart || v.cancelConfirm.Visible || v.filter.IsActive()
+	return v.showStart || v.showContinue || v.cancelConfirm.Visible || v.filter.IsActive()
 }
 
 // CapturesKey claims tab, which toggles pane focus rather than cycling views.
@@ -385,13 +394,14 @@ func (v *FlowsView) CapturesKey(key string) bool { return key == "tab" }
 
 // ShortHelp returns the status-bar help line.
 func (v *FlowsView) ShortHelp() string {
-	return "n:start  c:cancel  a:agent  tab:pane  l/h:expand/collapse  r:refresh  /:filter"
+	return "n:start  C:continue  c:cancel  a:agent  tab:pane  l/h:expand  r:refresh  /:filter"
 }
 
 // KeyBindings returns the view's bindings for the help overlay.
 func (v *FlowsView) KeyBindings() []components.KeyBinding {
 	return []components.KeyBinding{
 		{Key: "n", Description: "Start a flow"},
+		{Key: "C", Description: "Continue the selected flow with more rounds (rejected/errored/cancelled only)"},
 		{Key: "c", Description: "Cancel the selected flow"},
 		{Key: "a", Description: "Open the selected step's agent"},
 		{Key: "r", Description: "Refresh flows"},
