@@ -273,8 +273,9 @@ func TestOpenAgentFromStep(t *testing.T) {
 	}
 }
 
-// 'n' opens the start modal with the work dir and round cap prefilled, and
-// Enter hands the composed request to the service.
+// 'n' opens the start modal with the workflow selected and the round cap
+// prefilled, and Enter hands the composed request to the service. This view
+// is repo mode, so the workflow select falls back to the repo path.
 func TestStartFlowModalSubmits(t *testing.T) {
 	v, stub := loadedFlowsView(t)
 	var got service.FlowStartRequest
@@ -289,8 +290,11 @@ func TestStartFlowModalSubmits(t *testing.T) {
 	if !v.showStart {
 		t.Fatal("'n' did not open the start modal")
 	}
-	if v.startInputs[flowFieldWorkDir].Value != "/home/dev/singularity" {
-		t.Errorf("work dir prefill = %q, want the repo path", v.startInputs[flowFieldWorkDir].Value)
+	if v.workflowChoice == nil || v.workflowChoice.RootDir != "/home/dev/singularity" {
+		t.Errorf("work dir = %v, want the repo-mode fallback to the repo path", v.workflowChoice)
+	}
+	if v.startField != flowFieldWorkflow {
+		t.Errorf("the modal opens on field %d, want the workflow select", v.startField)
 	}
 	if v.startInputs[flowFieldRounds].Value != "3" {
 		t.Errorf("max rounds prefill = %q, want 3", v.startInputs[flowFieldRounds].Value)

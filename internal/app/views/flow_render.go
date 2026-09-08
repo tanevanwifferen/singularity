@@ -391,11 +391,16 @@ func flowStateStyle(state string, th theme.Theme) lipgloss.Style {
 	}
 }
 
-// renderStartModal renders the start-a-flow form: work dir, goal, optional
-// review focus and the round cap, in the TextInput idiom WorkflowsView's
-// start modal uses.
+// renderStartModal renders the start-a-flow form: the workflow select, goal,
+// optional review focus and the round cap, in the TextInput idiom
+// WorkflowsView's start modal uses. With the picker open it renders that
+// instead — one modal at a time, as WorktreeView's branch picker does.
 func (v *FlowsView) renderStartModal() string {
+	if v.showWorkflowPicker {
+		return v.renderWorkflowPicker()
+	}
 	th := theme.GetTheme()
+	width := modalWidth(v.width)
 	field := func(idx int, label string) string {
 		marker := "  "
 		if idx == v.startField {
@@ -408,21 +413,32 @@ func (v *FlowsView) renderStartModal() string {
 		return fmt.Sprintf("%s%-13s %s", marker, label, value)
 	}
 
+	wfMarker := "  "
+	wfHint := ""
+	if v.startField == flowFieldWorkflow {
+		wfMarker = "> "
+		wfHint = "   (space to choose)"
+	}
 	lines := []string{
 		"",
-		field(flowFieldWorkDir, "Work dir:"),
+		fmt.Sprintf("%s%-13s %s%s", wfMarker, "Workflow:", v.workflowFieldValue(), wfHint),
+	}
+	lines = append(lines, v.workflowSummaryLines(width-4)...)
+	lines = append(lines,
 		field(flowFieldGoal, "Goal:"),
 		field(flowFieldReview, "Review focus:"),
 		field(flowFieldRounds, "Max rounds:"),
 		"",
-		"  Every round runs in the work dir — aim a flow at a",
-		"  workflow worktree, never the live checkout.",
-	}
+		"  Every round runs in the workflow root, which is not a",
+		"  git repo itself: each repo is a subdirectory of it. So",
+		"  implementer and reviewer both see every repo, and a",
+		"  cross-repo change is reviewed as one change.",
+	)
 	if v.statusMsg != "" {
 		lines = append(lines, "", "  "+v.statusMsg)
 	}
-	lines = append(lines, "", "  Enter: Start  Tab: Next field  Esc: Cancel")
-	return renderModal("Start Adversarial Review Flow", lines, modalWidth(v.width)) + "\n" +
+	lines = append(lines, "", "  Enter: Start  Space: Choose workflow  Tab: Next field  Esc: Cancel")
+	return renderModal("Start Adversarial Review Flow", lines, width) + "\n" +
 		th.Help.Render(" Review focus is optional; max rounds must be 1–20.")
 }
 
