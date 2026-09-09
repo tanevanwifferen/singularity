@@ -36,6 +36,12 @@ func main() {
 			// one agent (internal/engine/herdr_driver.go). Not for humans —
 			// it speaks a marker protocol on stdout, not text.
 			os.Exit(engine.RunHerdrDriver(os.Args[2:]))
+		case "herdr-oneshot":
+			// Internal: herdrBackend.OneShotCommand's subprocess for a
+			// single prompt-in/text-out call (internal/engine/herdr_oneshot.go).
+			// Not for humans — plain text on stdout, but driven by a
+			// throwaway herdr-driver underneath.
+			os.Exit(engine.RunHerdrOneshot(os.Args[2:]))
 		case "help", "-h", "--help":
 			printUsage()
 			return
@@ -63,6 +69,8 @@ Usage:
                                      print a project config JSON for <dir>
   singularity herdr-driver …         internal: drive one claude session in a
                                      herdr pane (spawned by the herdr backend)
+  singularity herdr-oneshot <prompt> internal: one prompt-in/text-out call
+                                     through a throwaway herdr pane
   singularity version                print version
   singularity help                   this message
 
