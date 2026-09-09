@@ -290,15 +290,18 @@ func (b *herdrBackend) takeWarnings() []string {
 	return warnings
 }
 
-// OneShotCommand runs a cheap one-shot prompt through pi, never through
-// `claude --print`. This backend exists because headless claude is not
-// allowed on a Max-plan subscription, and the smart-router classifier and the
-// commit-message/MR-title helpers in internal/oneshot are exactly that call:
-// a prompt in, a text answer out, no pane and no TUI. herdr adds nothing for
-// such a call, so it goes to the one backend that can answer it without
-// print mode — pi, on the model table's pi classifier model.
+// OneShotCommand runs a cheap one-shot prompt through claude --print. The
+// smart-router classifier and the commit-message/MR-title helpers in
+// internal/oneshot are exactly that call: a prompt in, a text answer out, no
+// pane and no TUI. herdr adds nothing for such a call, so it goes to a
+// backend that can answer it without print mode.
+//
+// TEMPORARY: this used to go through pi instead, because headless claude was
+// believed unusable on a Max-plan subscription. That's not working out —
+// switched to claude for now. Revisit if claude --print turns out to be
+// blocked after all.
 func (b *herdrBackend) OneShotCommand(prompt string) (string, []string) {
-	return NewPiBackend("").OneShotCommand(prompt)
+	return NewClaudeBackend().OneShotCommand(prompt)
 }
 
 // herdrPromptResult decodes the JSON `herdr agent prompt --wait` prints on
