@@ -106,6 +106,44 @@ func TestRunTimeoutIsReported(t *testing.T) {
 	}
 }
 
+func TestRunTimeoutFromCallerContextOmitsZeroDuration(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err := Run(ctx, stubCommander{binary: "fake"}, Request{
+		Prompt: "p",
+		Runner: func(ctx context.Context, _, _ string, _, _ []string) ([]byte, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("error = %v, want it to mention a timeout", err)
+	}
+	if strings.Contains(err.Error(), "after 0s") {
+		t.Errorf("error = %v, must not report the zero Request.Timeout as the deadline", err)
+	}
+}
+
+// TestExecRunnerDoesNotWaitForOrphanedChildren: killing the CLI on deadline
+// must not leave Run blocked on a grandchild that inherited the output pipes.
+// `sleep 5; true` forces sh to fork sleep instead of exec-ing it.
+func TestExecRunnerDoesNotWaitForOrphanedChildren(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := execRunner(ctx, "", "sh", []string{"-c", "sleep 5; true"}, nil)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected the killed command to fail")
+	}
+	if elapsed > 4*time.Second {
+		t.Errorf("execRunner returned after %v, want it to give up on the orphaned pipe holder within WaitDelay", elapsed)
+	}
+}
+
 func TestRunWithoutCommander(t *testing.T) {
 	if Default() != nil {
 		t.Fatal("precondition: no default Commander should be installed")

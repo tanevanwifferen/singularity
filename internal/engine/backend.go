@@ -216,6 +216,23 @@ func BackendByName(name string) Backend {
 	}
 }
 
+// ConfiguredBackend resolves the backend from the user's persisted AI.Provider
+// config ("claude", "pi" or "herdr"). Used wherever a backend is needed before
+// the daemon has had a chance to apply config (see cmd.go) or without a daemon
+// at all — the classifier's nil-backend fallback, in particular.
+//
+// pi requires enterprise tokens that can run out, so it is never used as the
+// last-resort default here: when config can't be read or names an unknown
+// provider, this falls back to herdr, which has no such quota to exhaust.
+func ConfiguredBackend() Backend {
+	if cfg, err := config.LoadDefaultConfig(); err == nil && cfg != nil {
+		if b := BackendByName(cfg.AI.Provider); b != nil {
+			return b
+		}
+	}
+	return NewHerdrBackend()
+}
+
 // NewPiBackend returns a Backend that drives the pi CLI via RPC mode.
 // oneShotModel is the full model ID used for one-shot prompt calls
 // (e.g. "anthropic/claude-haiku-4-5"). When empty it is resolved from the
