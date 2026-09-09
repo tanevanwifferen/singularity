@@ -76,7 +76,11 @@ type Engine struct {
 	timerMu         sync.Mutex
 }
 
-// New creates a new agent engine using the claude backend by default.
+// New creates a new agent engine, defaulting to the backend named by the
+// user's AI.Provider config (falling back to herdr if config can't be read).
+// The daemon overrides this again once its own config load completes (see
+// cmd.go) — this default only matters for callers that start before then, or
+// that never load config at all.
 func New(maxAgents int) *Engine {
 	if maxAgents <= 0 {
 		maxAgents = 10
@@ -84,7 +88,7 @@ func New(maxAgents int) *Engine {
 	return &Engine{
 		agents:         make(map[string]*Agent),
 		maxAgents:      maxAgents,
-		defaultBackend: NewPiBackend(""),
+		defaultBackend: ConfiguredBackend(),
 		updateTimers:   make(map[string]*time.Timer),
 		summarize:      defaultSummarizer,
 	}

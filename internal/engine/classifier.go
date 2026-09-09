@@ -4,11 +4,32 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
 	"strings"
 	"time"
+
+	"gitlab.com/tanevanwifferen1/singularity/internal/oneshot"
 )
+
+// classifierTimeout is the backstop for the one-shot classification call.
+//
+// It is a backstop, not the budget pi needs: the classifier runs pi with its
+// retries switched off (see piNoRetry), so a 429 reaches stderr on the first
+// attempt instead of being retried for 2+4+8s at the session level and, when
+// retry.provider.maxRetries is configured, honouring Retry-After for up to 60s
+// per attempt underneath that. Without the override a deadline of any length
+// could SIGKILL pi mid-retry and turn "monthly spend limit exceeded" into an
+// opaque "signal: killed". What is left for the deadline to cover is pi's
+// startup plus one model round trip, and the agent is already visible in the
+// routing state while it runs, so a generous value costs a later start, not
+// a hang.
+const classifierTimeout = 30 * time.Second
+
+// classifyOneShot is the classifier's own seam onto the one-shot runner. It
+// is separate from oneShotPrompt so tests can stub the summariser while the
+// classifier still executes the backend's real argv (and vice versa).
+var classifyOneShot = func(ctx context.Context, c oneshot.Commander, req oneshot.Request) (string, error) {
+	return oneshot.Run(ctx, c, req)
+}
 
 // PromptCategory represents the type of task a prompt is requesting
 type PromptCategory string
@@ -50,19 +71,36 @@ func ClassifyPrompt(ctx context.Context, prompt string, backend Backend) (*Class
 	classifyInput := fmt.Sprintf(classifierPrompt, prompt)
 
 	if backend == nil {
-		backend = NewPiBackend("")
+		backend = ConfiguredBackend()
 	}
-	binary, args := backend.OneShotCommand(classifyInput)
 
-	cmd := exec.CommandContext(ctx, binary, args...)
-	cmd.Env = append(os.Environ(), "CLAUDE_NO_ANALYTICS=true")
+	// The budget is whatever the caller's ctx carries (RoutePrompt sets
+	// classifierTimeout; tests pass their own), so a timeout reports the
+	// deadline that actually fired rather than the constant.
+	budget := time.Duration(0)
+	if deadline, ok := ctx.Deadline(); ok {
+		budget = time.Until(deadline).Round(100 * time.Millisecond)
+	}
 
-	output, err := cmd.Output()
+	// Go through the shared one-shot runner rather than exec directly: it
+	// folds the CLI's stderr into the error and names a timeout as such, so a
+	// failed route says why (rate limit, missing binary, bad model id) instead
+	// of only that the process died. piNoRetry makes sure that stderr carries
+	// the first attempt's error instead of pi sitting in a retry loop until
+	// the deadline kills it.
+	commander, dir := piNoRetry(backend)
+	output, err := classifyOneShot(ctx, commander, oneshot.Request{Prompt: classifyInput, Dir: dir})
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			if budget > 0 {
+				return nil, fmt.Errorf("classifier timed out after %v: %w", budget, err)
+			}
+			return nil, fmt.Errorf("classifier timed out: %w", err)
+		}
 		return nil, fmt.Errorf("classifier failed: %w", err)
 	}
 
-	return parseClassification(strings.TrimSpace(string(output)))
+	return parseClassification(output)
 }
 
 // parseClassification extracts the category from the classifier's JSON response
@@ -115,9 +153,9 @@ func parseClassification(response string) (*ClassificationResult, error) {
 }
 
 // RoutePrompt classifies a prompt using the given backend and returns the result.
-// Uses a 15-second timeout to avoid blocking indefinitely.
+// Bounded by classifierTimeout to avoid blocking indefinitely.
 func RoutePrompt(prompt string, backend Backend) (*ClassificationResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), classifierTimeout)
 	defer cancel()
 
 	return ClassifyPrompt(ctx, prompt, backend)

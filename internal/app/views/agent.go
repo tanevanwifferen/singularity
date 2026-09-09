@@ -73,6 +73,14 @@ type AgentView struct {
 	outputViewport   viewport.Model
 	outputAutoScroll bool
 
+	// Fold state for multi-line tool blocks in the output pane. Keys of
+	// outputExpanded are entry indices (entries are append-only, so they are
+	// stable); outputCursor indexes outputBlocks, -1 when no block is picked.
+	outputExpanded    map[int]bool
+	outputBlocks      []outputBlock
+	outputCursor      int
+	outputAllExpanded bool
+
 	// New agent input state
 	showNewAgent  bool
 	newAgentInput components.TextInput
@@ -141,6 +149,7 @@ func NewAgentView(repoPath string, contextFiles ...[]string) *AgentView {
 		contextFiles:     ctxFiles,
 		refreshInterval:  2 * time.Second,
 		outputAutoScroll: true,
+		outputCursor:     -1,
 		focus:            focusList,
 	}
 
@@ -456,90 +465,6 @@ func (v *AgentView) markdownRenderer(width int) *glamour.TermRenderer {
 	return v.mdRenderer
 }
 
-// rebuildOutputViewport rebuilds the viewport content from output entries.
-func (v *AgentView) rebuildOutputViewport() {
-	if v.width <= 0 {
-		return
-	}
-	th := theme.GetTheme()
-	var lines []string
-	w := v.width
-
-	for _, entry := range v.outputEntries {
-		switch entry.Source {
-		case "text":
-			if r := v.markdownRenderer(w); r != nil {
-				if rendered, err := r.Render(entry.Content); err == nil {
-					rendered = strings.TrimRight(rendered, "\n")
-					lines = append(lines, strings.Split(rendered, "\n")...)
-					break
-				}
-			}
-			for _, raw := range strings.Split(entry.Content, "\n") {
-				lines = append(lines, wrapLine(raw, w, "  ")...)
-			}
-
-		case "tool_use":
-			style := lipgloss.NewStyle().Foreground(th.Info).Bold(true)
-			for _, raw := range strings.Split(entry.Content, "\n") {
-				for _, wl := range wrapLine(fmt.Sprintf("  %s", raw), w, "    ") {
-					lines = append(lines, style.Render(wl))
-				}
-			}
-
-		case "tool_result":
-			style := th.MutedTextStyle
-			if entry.IsError {
-				style = th.DashboardErrorStyle
-			}
-			for _, rl := range strings.Split(entry.Content, "\n") {
-				for _, wl := range wrapLine(fmt.Sprintf("    %s", rl), w, "      ") {
-					lines = append(lines, style.Render(wl))
-				}
-			}
-
-		case "system":
-			for _, raw := range strings.Split(entry.Content, "\n") {
-				for _, wl := range wrapLine(fmt.Sprintf("  %s", raw), w, "    ") {
-					lines = append(lines, th.MutedTextStyle.Render(wl))
-				}
-			}
-
-		case "error":
-			for _, raw := range strings.Split(entry.Content, "\n") {
-				for _, wl := range wrapLine(fmt.Sprintf("  %s", raw), w, "    ") {
-					lines = append(lines, th.DashboardErrorStyle.Render(wl))
-				}
-			}
-
-		case "result":
-			style := lipgloss.NewStyle().Foreground(th.Info)
-			for _, raw := range strings.Split(entry.Content, "\n") {
-				for _, wl := range wrapLine(fmt.Sprintf("  %s", raw), w, "    ") {
-					lines = append(lines, style.Render(wl))
-				}
-			}
-
-		case "user_input":
-			style := lipgloss.NewStyle().Foreground(th.Accent).Bold(true)
-			for _, raw := range strings.Split(entry.Content, "\n") {
-				for _, wl := range wrapLine(fmt.Sprintf("  > %s", raw), w, "      ") {
-					lines = append(lines, style.Render(wl))
-				}
-			}
-		}
-	}
-
-	content := strings.Join(lines, "\n")
-	v.outputViewport.SetContent(content)
-	v.outputLastLen = len(v.outputEntries)
-	v.outputLastWidth = w
-
-	if v.outputAutoScroll {
-		v.outputViewport.GotoBottom()
-	}
-}
-
 // syncPreview updates the output pane to show the agent under the cursor.
 func (v *AgentView) syncPreview() {
 	if item, idx := v.filter.SelectedItem(); idx >= 0 {
@@ -553,6 +478,7 @@ func (v *AgentView) syncPreview() {
 func (v *AgentView) selectAgent(info AgentInfo) {
 	v.selectedAgent = &info
 	v.outputAutoScroll = true
+	v.resetOutputFolds()
 	v.outputLastLen = -1 // force rebuild for the newly selected agent
 	v.recalcLayout()
 	v.refreshSelectedAgentOutput()
@@ -578,6 +504,7 @@ func (v *AgentView) SelectAgentByID(id string) bool {
 func (v *AgentView) deselectAgent() {
 	v.selectedAgent = nil
 	v.outputEntries = nil
+	v.resetOutputFolds()
 	v.focus = focusList
 	v.recalcLayout()
 }
@@ -833,6 +760,18 @@ func (v *AgentView) handleOutputPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+u", "pgup":
 		v.outputAutoScroll = false
 		v.outputViewport.HalfViewUp()
+		return v, nil
+	case "enter", " ":
+		v.toggleOutputBlock()
+		return v, nil
+	case "n":
+		v.moveOutputCursor(1)
+		return v, nil
+	case "p":
+		v.moveOutputCursor(-1)
+		return v, nil
+	case "e":
+		v.toggleAllOutputBlocks()
 		return v, nil
 	case "A":
 		v.openApprovalView()
@@ -1338,6 +1277,9 @@ func (v *AgentView) View() string {
 			// hint already inside the modal
 		} else if v.focus == focusOutput {
 			hint := " j/k:scroll  g/G:top/bottom  ctrl+d/u:page  tab:list  esc:close"
+			if len(v.outputBlocks) > 0 {
+				hint += "  enter:fold/unfold  n/p:block  e:all"
+			}
 			if v.selectedAgent != nil &&
 				(v.selectedAgent.State == service.AgentRunning || v.selectedAgent.State == service.AgentStarting || v.selectedAgent.State == service.AgentComplete || v.selectedAgent.State == service.AgentKilled) {
 				hint += "  i:send message"
@@ -1417,6 +1359,9 @@ func (v *AgentView) KeyBindings() []components.KeyBinding {
 		{Key: "d/Esc", Description: "Close output pane"},
 		{Key: "c", Description: "Clear stopped agents"},
 		{Key: "Tab", Description: "Switch focus between list and output"},
+		{Key: "Enter/Space", Description: "Expand or collapse tool block (output pane)"},
+		{Key: "n/p", Description: "Next/previous tool block (output pane)"},
+		{Key: "e", Description: "Expand or collapse all tool blocks (output pane)"},
 		{Key: "i", Description: "Send message to running agent"},
 		{Key: "/", Description: "Search agents"},
 		{Key: "j/k", Description: "Navigate"},
