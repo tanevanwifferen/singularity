@@ -255,17 +255,24 @@ func TestHerdrUnattendedSessionCommandIsPi(t *testing.T) {
 	}
 }
 
-func TestHerdrOneShotCommandIsPi(t *testing.T) {
+func TestHerdrOneShotCommandUsesHerdrOneshot(t *testing.T) {
 	b := newHerdrTestBackend(t)
 	binary, args := b.OneShotCommand("hello")
-	// Never `claude --print`: headless claude is refused on the Max-plan
-	// auth this backend exists for, and a one-shot prompt needs no pane.
+	// Never `claude --print` (refused on the Max-plan auth this backend
+	// exists for) and never pi directly (same restriction, one layer down):
+	// a one-shot call goes through a throwaway herdr pane, same as a real
+	// session.
 	if binary == "claude" {
 		t.Fatalf("OneShotCommand = %q %v, must not use claude's print mode", binary, args)
 	}
-	wantBinary, wantArgs := NewPiBackend("").OneShotCommand("hello")
-	if binary != wantBinary || strings.Join(args, " ") != strings.Join(wantArgs, " ") {
-		t.Fatalf("OneShotCommand = %q %v, want pi's %q %v", binary, args, wantBinary, wantArgs)
+	if binary == "pi" {
+		t.Fatalf("OneShotCommand = %q %v, must not shell out to pi directly", binary, args)
+	}
+	if binary != b.Binary() {
+		t.Fatalf("OneShotCommand binary = %q, want the singularity binary %q (re-invoked as herdr-oneshot)", binary, b.Binary())
+	}
+	if len(args) != 2 || args[0] != "herdr-oneshot" || args[1] != "hello" {
+		t.Fatalf("OneShotCommand args = %v, want [herdr-oneshot hello]", args)
 	}
 }
 
