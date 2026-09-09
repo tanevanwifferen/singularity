@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+
+	"gitlab.com/tanevanwifferen1/singularity/internal/oneshot"
 )
 
 // piSessionInitID correlates the get_state command issued at start-up with its
@@ -446,4 +449,79 @@ func extractPiSessionCost(messages []interface{}) float64 {
 		total += t
 	}
 	return total
+}
+
+// piNoRetrySettings is the project-local pi settings file the classifier runs
+// under. It switches off both of pi's retry layers: the session-level loop in
+// agent-session.js (retry.enabled, 3 attempts at 2/4/8s) and pi-ai's provider
+// retry (retry.provider.maxRetries, which honours Retry-After for up to 60s
+// per attempt when a user has enabled it). A one-shot call wants neither: the
+// first 429 should land on stderr so the caller can show its body.
+const piNoRetrySettings = `{
+  "retry": {
+    "enabled": false,
+    "provider": { "maxRetries": 0 }
+  }
+}
+`
+
+var (
+	piNoRetryOnce sync.Once
+	piNoRetryDir  string
+)
+
+// piNoRetryWorkDir returns a directory whose .pi/settings.json disables pi's
+// retries, creating it on first use. It lives under the user cache dir (or
+// the OS temp dir when that is unavailable) so it is stable across daemon
+// restarts and never touches the user's global pi settings. An empty string
+// means the directory could not be prepared; callers then run pi as-is.
+func piNoRetryWorkDir() string {
+	piNoRetryOnce.Do(func() {
+		base, err := os.UserCacheDir()
+		if err != nil {
+			base = os.TempDir()
+		}
+		dir := filepath.Join(base, "singularity", "pi-oneshot")
+		settingsDir := filepath.Join(dir, ".pi")
+		if err := os.MkdirAll(settingsDir, 0o755); err != nil {
+			return
+		}
+		if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(piNoRetrySettings), 0o644); err != nil {
+			return
+		}
+		piNoRetryDir = dir
+	})
+	return piNoRetryDir
+}
+
+// noRetryCommander wraps a Commander whose binary is pi so the one-shot call
+// trusts the project-local settings in piNoRetryWorkDir. --approve is safe
+// here precisely because the working directory is one this process wrote:
+// there are no third-party extensions or skills in it to trust.
+type noRetryCommander struct {
+	oneshot.Commander
+}
+
+func (c noRetryCommander) OneShotCommand(prompt string) (string, []string) {
+	binary, args := c.Commander.OneShotCommand(prompt)
+	if binary != "pi" {
+		return binary, args
+	}
+	return binary, append([]string{"--approve"}, args...)
+}
+
+// piNoRetry prepares a one-shot call that fails fast instead of retrying.
+// For pi-backed commanders it returns a wrapper that passes --approve and the
+// working directory carrying the no-retry settings; other backends come back
+// unchanged with an empty dir (inherit the process cwd, as before).
+func piNoRetry(c oneshot.Commander) (oneshot.Commander, string) {
+	binary, _ := c.OneShotCommand("")
+	if binary != "pi" {
+		return c, ""
+	}
+	dir := piNoRetryWorkDir()
+	if dir == "" {
+		return c, ""
+	}
+	return noRetryCommander{c}, dir
 }

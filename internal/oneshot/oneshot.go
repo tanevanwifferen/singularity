@@ -107,7 +107,12 @@ func Run(ctx context.Context, c Commander, req Request) (string, error) {
 	out, err := run(ctx, req.Dir, binary, args, []string{"CLAUDE_NO_ANALYTICS=true"})
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return "", fmt.Errorf("oneshot: %s timed out after %v", binary, req.Timeout)
+			if req.Timeout > 0 {
+				return "", fmt.Errorf("oneshot: %s timed out after %v: %w", binary, req.Timeout, err)
+			}
+			// The deadline came from the caller's ctx, so we do not know
+			// its length here; the caller does and can say it.
+			return "", fmt.Errorf("oneshot: %s timed out: %w", binary, err)
 		}
 		return "", err
 	}
@@ -129,6 +134,12 @@ func execRunner(ctx context.Context, dir, binary string, args, env []string) ([]
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), env...)
+
+	// Once ctx expires the CLI is SIGKILLed, but a child it spawned (pi and
+	// claude both fork helpers) may still hold the stdout/stderr pipes; without
+	// a WaitDelay, Run would block on those pipes until the grandchild exits
+	// on its own, holding the caller well past its deadline.
+	cmd.WaitDelay = 2 * time.Second
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
