@@ -139,10 +139,21 @@ func (v *WorkflowsView) HasActiveWorkflow() bool {
 	return len(v.workflows) > 0
 }
 
+// SetServices wires the service container into the view and into the Jira
+// picker, which holds its own reference and would otherwise answer every
+// search with ErrUnavailable.
+func (v *WorkflowsView) SetServices(s *service.Services) {
+	v.viewBase.SetServices(s)
+	v.jiraPicker.SetServices(s)
+}
+
 // SetJiraConfig wires Jira configuration so the Jira ticket picker is available.
+// It rebuilds the picker, so the current services container has to be pushed
+// into the new one — app init calls this after the router wired services.
 func (v *WorkflowsView) SetJiraConfig(cfg config.JiraConfig) {
 	v.jiraPicker = NewJiraPickerState(cfg)
 	if v.jiraPicker != nil {
+		v.jiraPicker.SetServices(v.services)
 		v.jiraPicker.SetSize(v.width, v.height)
 	}
 }
