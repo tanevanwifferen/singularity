@@ -422,6 +422,76 @@ func TestCancelFlowBehindConfirm(t *testing.T) {
 	}
 }
 
+// 'D' removes behind a confirmation, and only the confirmed path calls the
+// service. A running flow is cancelled first, and then removed.
+func TestRemoveFlowBehindConfirm(t *testing.T) {
+	v, stub := loadedFlowsView(t)
+	removed := ""
+	cancelled := ""
+	stub.CancelFn = func(_ context.Context, id string) error {
+		cancelled = id
+		return nil
+	}
+	stub.RemoveFn = func(_ context.Context, id string) error {
+		removed = id
+		return nil
+	}
+
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	if !v.removeConfirm.Visible {
+		t.Fatal("'D' did not raise the confirmation")
+	}
+
+	// The prompt title must be rendered to the view so the user sees it.
+	view := v.View()
+	if !strings.Contains(view, "Remove Flow") {
+		t.Errorf("view does not contain the prompt title 'Remove Flow':\n%s", view)
+	}
+
+	// Declining removes nothing.
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if v.removeConfirm.Visible || removed != "" || cancelled != "" {
+		t.Fatal("declining the confirmation must remove nothing")
+	}
+
+	// Confirming removes the flow.
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	_, cmd := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if cmd == nil {
+		t.Fatal("confirming produced no remove command")
+	}
+	msg, ok := cmd().(flowActionMsg)
+	if !ok || msg.err != nil || removed != "f1" {
+		t.Fatalf("remove result = %#v, removed = %q", msg, removed)
+	}
+
+	// For a running flow, cancellation happens before removal.
+	running := testFlow()
+	running.State = service.FlowRunning
+	running.Rounds = running.Rounds[:2]
+	removed = ""
+	cancelled = ""
+	stub.ListFn = func(context.Context, []service.FlowState) ([]service.Flow, error) {
+		return []service.Flow{running}, nil
+	}
+	v.Update(v.RefreshCmd()())
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	_, cmd = v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if cmd == nil {
+		t.Fatal("confirming produced no remove command")
+	}
+	msg, ok = cmd().(flowActionMsg)
+	if !ok || msg.err != nil {
+		t.Fatalf("remove result = %#v", msg)
+	}
+	if cancelled != "f1" {
+		t.Fatalf("running flow was not cancelled, cancelled = %q", cancelled)
+	}
+	if removed != "f1" {
+		t.Fatalf("flow was not removed, removed = %q", removed)
+	}
+}
+
 // A refresh keeps the cursor on the flow it was on and picks up the state
 // the daemon now reports — this is what the app's tick and agent-event
 // chains deliver.

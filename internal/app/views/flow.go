@@ -122,6 +122,7 @@ type FlowsView struct {
 	workflowPicker     *components.Filter[flowWorkflowOption]
 
 	cancelConfirm components.ConfirmPrompt
+	removeConfirm components.ConfirmPrompt
 
 	// Continue modal: the one-field form 'C' opens over a flow that
 	// finished without being accepted. continueTarget is the row the modal
@@ -230,7 +231,7 @@ func (v *FlowsView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return v.handleFlowKeyMsg(msg)
 
 	case flowsLoadedMsg:
-		v.applyFlows(msg)
+		return v, v.applyFlows(msg)
 
 	case flowTreeLoadedMsg:
 		if msg.flowID == v.selectedID {
@@ -248,7 +249,10 @@ func (v *FlowsView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, nil
 		}
 		v.statusMsg = msg.note
-		if msg.flowID != "" {
+		if msg.action == "remove" {
+			v.setTreeNodes(nil)
+			v.treeCursor = 0
+		} else if msg.flowID != "" {
 			v.selectedID = msg.flowID
 		}
 		return v, v.RefreshCmd()
@@ -265,12 +269,14 @@ func (v *FlowsView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // applyFlows installs a refresh pass's result, keeping the cursor on the
-// flow it was on.
-func (v *FlowsView) applyFlows(msg flowsLoadedMsg) {
+// flow it was on. When that flow is gone — removed, typically — the cursor
+// lands on a neighbour whose tree the refresh did not fetch, so the stale
+// tree is dropped and a fetch for the new selection is returned.
+func (v *FlowsView) applyFlows(msg flowsLoadedMsg) tea.Cmd {
 	v.loading = false
 	v.err = msg.err
 	if msg.err != nil {
-		return
+		return nil
 	}
 	flows := make([]FlowInfo, 0, len(msg.flows))
 	for _, f := range msg.flows {
@@ -279,14 +285,24 @@ func (v *FlowsView) applyFlows(msg flowsLoadedMsg) {
 	v.flows = flows
 	v.filter.SetItems(v.flows)
 
-	if v.selectedID == "" && len(flows) > 0 {
+	before := v.selectedID
+	if len(flows) == 0 {
+		v.selectedID = ""
+	} else if v.selectedID == "" {
 		v.selectedID = flows[0].ID
 	}
 	v.syncListCursor()
 
 	if msg.tree != nil && msg.treeID == v.selectedID {
 		v.setTreeNodes(msg.tree.Nodes)
+		return nil
 	}
+	if v.selectedID != before {
+		v.setTreeNodes(nil)
+		v.treeCursor = 0
+		return v.treeCmd(v.selectedID)
+	}
+	return nil
 }
 
 // flowInfoFrom projects a flow record onto its list row. The label mirrors
@@ -386,7 +402,7 @@ func (v *FlowsView) SetSize(width, height int) {
 
 // CapturesInput reports the modes in which global keys must not be stolen.
 func (v *FlowsView) CapturesInput() bool {
-	return v.showStart || v.showContinue || v.cancelConfirm.Visible || v.filter.IsActive()
+	return v.showStart || v.showContinue || v.cancelConfirm.Visible || v.removeConfirm.Visible || v.filter.IsActive()
 }
 
 // CapturesKey claims tab, which toggles pane focus rather than cycling views.
@@ -394,7 +410,7 @@ func (v *FlowsView) CapturesKey(key string) bool { return key == "tab" }
 
 // ShortHelp returns the status-bar help line.
 func (v *FlowsView) ShortHelp() string {
-	return "n:start  C:continue  c:cancel  a:agent  tab:pane  l/h:expand  r:refresh  /:filter"
+	return "n:start  C:continue  c:cancel  D:remove  a:agent  tab:pane  l/h:expand  r:refresh  /:filter"
 }
 
 // KeyBindings returns the view's bindings for the help overlay.
@@ -403,6 +419,7 @@ func (v *FlowsView) KeyBindings() []components.KeyBinding {
 		{Key: "n", Description: "Start a flow"},
 		{Key: "C", Description: "Continue the selected flow with more rounds (rejected/errored/cancelled only)"},
 		{Key: "c", Description: "Cancel the selected flow"},
+		{Key: "D", Description: "Remove the selected flow (cancels it first if still running, closing its agents)"},
 		{Key: "a", Description: "Open the selected step's agent"},
 		{Key: "r", Description: "Refresh flows"},
 		{Key: "Tab", Description: "Switch focus between list and tree"},
