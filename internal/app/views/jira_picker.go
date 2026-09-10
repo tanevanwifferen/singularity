@@ -120,7 +120,10 @@ func (p *JiraPickerState) fetchCmd(query string) tea.Cmd {
 	svc := p.services
 	return func() tea.Msg {
 		if svc == nil {
-			return jiraPickerLoadedMsg{err: service.ErrUnavailable}
+			// A bare ErrUnavailable here is indistinguishable from a daemon
+			// that is genuinely down, which is how an unwired picker managed
+			// to look like a Jira outage for every search. Name the cause.
+			return jiraPickerLoadedMsg{err: fmt.Errorf("jira picker not wired to the service layer: %w", service.ErrUnavailable)}
 		}
 		ctx := context.Background()
 		if issueKeyRe.MatchString(strings.TrimSpace(query)) {
