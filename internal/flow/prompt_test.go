@@ -82,6 +82,38 @@ func TestImplementPrompt(t *testing.T) {
 	}
 }
 
+func TestCommitPrompt(t *testing.T) {
+	const wantCommit = "" +
+		"A change in this repository was just reviewed and accepted. Your job is only\n" +
+		"to commit it — do not modify the code.\n" +
+		"\n" +
+		"## Goal\n" +
+		"\n" +
+		"Make internal/http retry on 429 responses, honouring Retry-After.\n" +
+		"\n" +
+		"## Working directory\n" +
+		"\n" +
+		"/srv/work/singularity\n" +
+		"\n" +
+		"## Your task\n" +
+		"\n" +
+		"Run `git status` and `git diff` to see what changed. Stage everything relevant\n" +
+		"to the goal above and commit it with a message that describes what changed and\n" +
+		"why, in your own words — do not just repeat the goal verbatim. Do not push, and\n" +
+		"do not create or switch branches.\n" +
+		"\n" +
+		"If the working tree is already clean — nothing to commit — say so and stop;\n" +
+		"that is not an error.\n" +
+		"\n" +
+		"## When you are done\n" +
+		"\n" +
+		"Report the commit you made (or that there was nothing to commit).\n" +
+		""
+	if got := CommitPrompt(testFlow()); got != wantCommit {
+		t.Errorf("CommitPrompt():\n%s\nwant:\n%s", got, wantCommit)
+	}
+}
+
 func TestFixPromptRound3(t *testing.T) {
 	const wantFix = "" +
 		"You are fixing review findings on a change in an existing codebase. This is round 3.\n" +
