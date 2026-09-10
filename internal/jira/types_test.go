@@ -60,6 +60,78 @@ func TestExtractADFText_MultiParagraph(t *testing.T) {
 	}
 }
 
+// A paragraph split into several text nodes by formatting marks — how Jira
+// stores any sentence containing inline code or bold — must come back as one
+// sentence, not one line per run.
+func TestExtractADFText_MarkedRunsStayOnOneLine(t *testing.T) {
+	raw := json.RawMessage(`{
+		"type": "doc",
+		"content": [{
+			"type": "paragraph",
+			"content": [
+				{"type": "text", "text": "test_rls", "marks": [{"type": "code"}]},
+				{"type": "text", "text": " faalt: "},
+				{"type": "text", "text": "account_invites", "marks": [{"type": "code"}]},
+				{"type": "text", "text": "."}
+			]
+		}]
+	}`)
+	want := "test_rls faalt: account_invites."
+	if got := extractADFText(raw); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExtractADFText_HeadingThenParagraph(t *testing.T) {
+	raw := json.RawMessage(`{
+		"type": "doc",
+		"content": [
+			{"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "Beschrijving"}]},
+			{"type": "paragraph", "content": [{"type": "text", "text": "Body text"}]}
+		]
+	}`)
+	want := "Beschrijving\nBody text"
+	if got := extractADFText(raw); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExtractADFText_BulletList(t *testing.T) {
+	raw := json.RawMessage(`{
+		"type": "doc",
+		"content": [{
+			"type": "bulletList",
+			"content": [
+				{"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "one"}]}]},
+				{"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "two"}]}]}
+			]
+		}]
+	}`)
+	want := "- one\n- two"
+	if got := extractADFText(raw); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExtractADFText_HardBreakAndMention(t *testing.T) {
+	raw := json.RawMessage(`{
+		"type": "doc",
+		"content": [{
+			"type": "paragraph",
+			"content": [
+				{"type": "text", "text": "hi "},
+				{"type": "mention", "attrs": {"text": "@Jane"}},
+				{"type": "hardBreak"},
+				{"type": "text", "text": "next line"}
+			]
+		}]
+	}`)
+	want := "hi @Jane\nnext line"
+	if got := extractADFText(raw); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 func TestExtractADFText_InvalidJSON(t *testing.T) {
 	raw := json.RawMessage(`{not valid json`)
 	got := extractADFText(raw)
@@ -85,7 +157,7 @@ func TestExtractADFNodeText_EmptyChildren(t *testing.T) {
 	}
 }
 
-func TestExtractADFNodeText_SkipsEmptyChildren(t *testing.T) {
+func TestExtractADFNodeText_EmptyChildrenDoNotSplitText(t *testing.T) {
 	node := adfNode{
 		Type: "paragraph",
 		Content: []adfNode{
@@ -95,9 +167,9 @@ func TestExtractADFNodeText_SkipsEmptyChildren(t *testing.T) {
 		},
 	}
 	got := extractADFNodeText(node)
-	// Empty text nodes are skipped; paragraph uses \n separator
-	if got != "A\nB" {
-		t.Errorf("got %q, want %q", got, "A\nB")
+	// Inline runs concatenate, so an empty one changes nothing.
+	if got != "AB" {
+		t.Errorf("got %q, want %q", got, "AB")
 	}
 }
 
@@ -115,7 +187,7 @@ func TestToIssue_BasicFields(t *testing.T) {
 		},
 	}
 
-	issue := toIssue(a)
+	issue := toIssue(a, "")
 
 	if issue.Key != "PROJ-1" {
 		t.Errorf("Key: got %q", issue.Key)
@@ -139,7 +211,7 @@ func TestToIssue_BasicFields(t *testing.T) {
 
 func TestToIssue_NilAssignee(t *testing.T) {
 	a := apiIssue{Key: "X-1", Fields: apiIssueFields{Assignee: nil}}
-	issue := toIssue(a)
+	issue := toIssue(a, "")
 	if issue.Assignee != "" {
 		t.Errorf("nil assignee: got %q, want empty", issue.Assignee)
 	}
@@ -152,22 +224,47 @@ func TestToIssue_WithAssignee(t *testing.T) {
 			Assignee: &apiDisplayName{DisplayName: "Jane Doe"},
 		},
 	}
-	issue := toIssue(a)
+	issue := toIssue(a, "")
 	if issue.Assignee != "Jane Doe" {
 		t.Errorf("Assignee: got %q, want %q", issue.Assignee, "Jane Doe")
 	}
 }
 
 func TestToIssue_WithSprint(t *testing.T) {
-	a := apiIssue{
-		Key: "X-3",
-		Fields: apiIssueFields{
-			Sprint: &apiSprint{Name: "Sprint 5"},
-		},
+	var a apiIssue
+	body := `{"key":"X-3","fields":{"summary":"s","customfield_10020":[
+		{"name":"Sprint 4","state":"closed"},
+		{"name":"Sprint 5","state":"active"}
+	]}}`
+	if err := json.Unmarshal([]byte(body), &a); err != nil {
+		t.Fatalf("unmarshal: %v", err)
 	}
-	issue := toIssue(a)
+	issue := toIssue(a, "customfield_10020")
 	if issue.Sprint != "Sprint 5" {
 		t.Errorf("Sprint: got %q, want %q", issue.Sprint, "Sprint 5")
+	}
+	// Without a resolved field id there is nothing to read.
+	if got := toIssue(a, "").Sprint; got != "" {
+		t.Errorf("unresolved sprint field: got %q, want empty", got)
+	}
+}
+
+func TestSprintName_FallsBackToLastWhenNoneActive(t *testing.T) {
+	raw := json.RawMessage(`[{"name":"Sprint 1","state":"closed"},{"name":"Sprint 2","state":"closed"}]`)
+	if got := sprintName(raw); got != "Sprint 2" {
+		t.Errorf("got %q, want %q", got, "Sprint 2")
+	}
+}
+
+func TestSprintName_EmptyAndInvalid(t *testing.T) {
+	if got := sprintName(nil); got != "" {
+		t.Errorf("nil: got %q, want empty", got)
+	}
+	if got := sprintName(json.RawMessage(`[]`)); got != "" {
+		t.Errorf("empty array: got %q, want empty", got)
+	}
+	if got := sprintName(json.RawMessage(`"not an array"`)); got != "" {
+		t.Errorf("non-array: got %q, want empty", got)
 	}
 }
 
@@ -178,7 +275,7 @@ func TestToIssue_PlainStringDescription(t *testing.T) {
 			Description: json.RawMessage(`"Plain text description"`),
 		},
 	}
-	issue := toIssue(a)
+	issue := toIssue(a, "")
 	if issue.Description != "Plain text description" {
 		t.Errorf("Description: got %q", issue.Description)
 	}
