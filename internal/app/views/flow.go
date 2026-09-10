@@ -417,8 +417,21 @@ func (v *FlowsView) CapturesInput() bool {
 	return v.showStart || v.showContinue || v.cancelConfirm.Visible || v.removeConfirm.Visible || v.filter.IsActive()
 }
 
-// CapturesKey claims tab, which toggles pane focus rather than cycling views.
-func (v *FlowsView) CapturesKey(key string) bool { return key == "tab" }
+// CapturesKey claims tab, which toggles pane focus rather than cycling
+// views, and — only while a request or findings block is actually expanded
+// on screen — g/G/ctrl+d/ctrl+u/pgup/pgdown, which page that block. g and G
+// must stay conditional: they are also the router's Git submenu trigger
+// (Stashes/Jira/Diff), and claiming them unconditionally would make that
+// submenu unreachable from the Flows view.
+func (v *FlowsView) CapturesKey(key string) bool {
+	switch key {
+	case "tab":
+		return true
+	case "g", "G", "ctrl+d", "ctrl+u", "pgdown", "pgup":
+		return v.expandedShown()
+	}
+	return false
+}
 
 // ShortHelp returns the status-bar help line.
 func (v *FlowsView) ShortHelp() string {
@@ -438,7 +451,8 @@ func (v *FlowsView) KeyBindings() []components.KeyBinding {
 		{Key: "j/k", Description: "Navigate"},
 		{Key: "l/→/Enter", Description: "Expand tree node (or focus tree)"},
 		{Key: "h/←", Description: "Collapse tree node"},
-		{Key: "f", Description: "Expand the findings block, then the request block, over the tree (j/k scroll it)"},
+		{Key: "f", Description: "Expand the findings block, then the request block, over the tree"},
+		{Key: "j/k/g/G/ctrl+d/ctrl+u/pgdn/pgup", Description: "Scroll the expanded block (g/G: top/bottom, ctrl+d/u/pgdn/pgup: half page)"},
 		{Key: "/", Description: "Filter flows"},
 		{Key: "Esc", Description: "Back to the flow list"},
 	}
