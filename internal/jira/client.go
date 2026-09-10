@@ -8,14 +8,29 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
+	"sync"
 	"time"
 )
+
+// sprintCustomFieldType identifies the Jira Software sprint field in the field
+// catalogue. The field's id (customfield_NNNNN) differs per instance.
+const sprintCustomFieldType = "com.pyxis.greenhopper.jira:gh-sprint"
+
+// searchPath is the JQL search endpoint. The old /rest/api/2/search was removed
+// by Atlassian (CHANGE-2046); this is its replacement. It stays on API v2 so
+// descriptions come back as wiki markup — the same format the write methods
+// below send — rather than as v3's ADF.
+const searchPath = "/rest/api/2/search/jql"
 
 // Client is an HTTP client for the Jira REST API v2.
 type Client struct {
 	baseURL    string
 	authHeader string
 	http       *http.Client
+
+	sprintOnce  sync.Once
+	sprintField string
 }
 
 // NewClient creates a new Jira client.
@@ -29,7 +44,7 @@ func NewClient(baseURL, email, apiToken string) *Client {
 		auth = "Bearer " + apiToken
 	}
 	return &Client{
-		baseURL:    baseURL,
+		baseURL:    strings.TrimRight(baseURL, "/"),
 		authHeader: auth,
 		http:       &http.Client{Timeout: 15 * time.Second},
 	}
@@ -37,13 +52,16 @@ func NewClient(baseURL, email, apiToken string) *Client {
 
 // SearchIssues executes a JQL query and returns up to maxResults issues.
 func (c *Client) SearchIssues(jql string, maxResults int) (*SearchResult, error) {
+	sprintField := c.sprintFieldID()
 	body := map[string]interface{}{
-		"jql":        jql,
-		"maxResults": maxResults,
-		"fields":     []string{"summary", "description", "status", "priority", "assignee", "labels", "issuetype", "sprint"},
+		"jql":    jql,
+		"fields": issueFields(sprintField),
+	}
+	if maxResults > 0 {
+		body["maxResults"] = maxResults
 	}
 
-	raw, err := c.post("/rest/api/3/search/jql", body)
+	raw, err := c.post(searchPath, body)
 	if err != nil {
 		return nil, err
 	}
@@ -55,15 +73,21 @@ func (c *Client) SearchIssues(jql string, maxResults int) (*SearchResult, error)
 
 	result := &SearchResult{Total: resp.Total}
 	for _, a := range resp.Issues {
-		result.Issues = append(result.Issues, toIssue(a))
+		result.Issues = append(result.Issues, toIssue(a, sprintField))
+	}
+	// /search/jql returns one cursor page and no grand total, so report the
+	// page size rather than a constant zero.
+	if result.Total == 0 {
+		result.Total = len(result.Issues)
 	}
 	return result, nil
 }
 
 // GetIssue fetches a single issue by key (e.g. "PROJ-123").
 func (c *Client) GetIssue(key string) (*Issue, error) {
+	sprintField := c.sprintFieldID()
 	params := url.Values{}
-	params.Set("fields", "summary,description,status,priority,assignee,labels,issuetype,sprint")
+	params.Set("fields", strings.Join(issueFields(sprintField), ","))
 
 	raw, err := c.get("/rest/api/2/issue/" + url.PathEscape(key) + "?" + params.Encode())
 	if err != nil {
@@ -75,8 +99,46 @@ func (c *Client) GetIssue(key string) (*Issue, error) {
 		return nil, fmt.Errorf("jira: failed to parse issue response: %w", err)
 	}
 
-	issue := toIssue(a)
+	issue := toIssue(a, sprintField)
 	return &issue, nil
+}
+
+// issueFields is the field set every read asks for. Jira silently drops names
+// it does not recognise, so the sprint id is only appended once resolved.
+func issueFields(sprintFieldID string) []string {
+	fields := []string{"summary", "description", "status", "priority", "assignee", "labels", "issuetype"}
+	if sprintFieldID != "" {
+		fields = append(fields, sprintFieldID)
+	}
+	return fields
+}
+
+// sprintFieldID resolves the sprint custom-field id from the field catalogue,
+// once per client. A failed lookup is not fatal: issues then simply come back
+// without sprint information.
+func (c *Client) sprintFieldID() string {
+	c.sprintOnce.Do(func() {
+		raw, err := c.get("/rest/api/2/field")
+		if err != nil {
+			return
+		}
+		var fields []struct {
+			ID     string `json:"id"`
+			Schema struct {
+				Custom string `json:"custom"`
+			} `json:"schema"`
+		}
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			return
+		}
+		for _, f := range fields {
+			if f.Schema.Custom == sprintCustomFieldType {
+				c.sprintField = f.ID
+				return
+			}
+		}
+	})
+	return c.sprintField
 }
 
 // GetMyIssues returns open issues assigned to the current user in the given project.

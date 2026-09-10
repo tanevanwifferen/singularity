@@ -101,7 +101,7 @@ func runJiraSearch(ctx context.Context, args []string) int {
 	if globals.json {
 		return printJSON(res)
 	}
-	md := fmt.Sprintf("## Jira search (%d of %d)\n\n", len(res.Issues), res.Total)
+	md := fmt.Sprintf("## Jira search (%d)\n\n", len(res.Issues))
 	if len(res.Issues) == 0 {
 		md += "_No issues found._\n"
 		return renderMarkdown(md)
