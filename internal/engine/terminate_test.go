@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -591,5 +592,71 @@ func TestShutdownWhileRoutingStartsNoProcess(t *testing.T) {
 	}
 	if e.WorkDirOccupied(dir) {
 		t.Error("WorkDirOccupied = true after Shutdown fired mid-routing with no process ever started")
+	}
+}
+
+// sigtermIgnoringBackend's subprocess blocks SIGTERM, so Agent.kill always
+// burns the full TerminationGrace before SIGKILL settles it — standing in
+// for a herdr driver that is slow to close its workspace on the way out.
+type sigtermIgnoringBackend struct{ grace time.Duration }
+
+func (sigtermIgnoringBackend) Name() string   { return "sigterm-ignoring-stub" }
+func (sigtermIgnoringBackend) Binary() string { return "sh" }
+func (sigtermIgnoringBackend) Args(string, string, int, []string) []string {
+	return []string{"-c", `trap '' TERM; while :; do sleep 0.05; done`}
+}
+func (sigtermIgnoringBackend) Env() []string                               { return nil }
+func (sigtermIgnoringBackend) InitialInput(task, _ string) ([]byte, error) { return []byte(task), nil }
+func (sigtermIgnoringBackend) PostStartCommands(string) [][]byte           { return nil }
+func (sigtermIgnoringBackend) ParseEvent(line []byte) ([]*BackendEvent, error) {
+	return []*BackendEvent{}, nil
+}
+func (sigtermIgnoringBackend) OneShotCommand(prompt string) (string, []string) {
+	return "true", nil
+}
+func (sigtermIgnoringBackend) UnattendedSessionCommand(prompt string) (string, []string, error) {
+	return "true", nil, nil
+}
+func (sigtermIgnoringBackend) FollowUpInput(message, _ string, _ bool) ([]byte, error) {
+	return []byte(message), nil
+}
+func (b sigtermIgnoringBackend) TerminationGrace() time.Duration { return b.grace }
+
+// TestShutdownTerminatesAgentsInParallel guards against Shutdown regressing
+// to a sequential kill-and-wait loop. Agent.kill for a GracefulBackend
+// blocks for up to TerminationGrace (SIGTERM, then a wait, then SIGKILL);
+// sequentially that cost is the *sum* across every agent, and for a fleet of
+// herdr-backed agents it routinely exceeds the 10s SIGKILL budget
+// `singularity daemon stop` allows the whole daemon process
+// (internal/daemon/cmd.go) — so the daemon gets SIGKILLed mid-loop and every
+// agent terminate() had not yet reached is orphaned, herdr pane and all.
+// Terminating in parallel bounds Shutdown by the *slowest single* agent
+// instead.
+func TestShutdownTerminatesAgentsInParallel(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SIGTERM handling is not portable to windows")
+	}
+	const grace = 300 * time.Millisecond
+	const n = 4
+
+	e := New(10)
+	backend := sigtermIgnoringBackend{grace: grace}
+	for i := 0; i < n; i++ {
+		if _, err := e.StartAgent(t.TempDir(), "task", AgentOptions{Backend: backend}); err != nil {
+			t.Fatalf("StartAgent %d: %v", i, err)
+		}
+	}
+	// Give every subprocess time to actually exec sh and install its trap;
+	// signalling before that would just terminate it, proving nothing about
+	// parallelism.
+	time.Sleep(200 * time.Millisecond)
+
+	start := time.Now()
+	e.Shutdown()
+	elapsed := time.Since(start)
+
+	if elapsed > grace*2 {
+		t.Errorf("Shutdown of %d agents (grace=%s) took %s — looks sequential (~%s expected), want close to one grace period",
+			n, grace, elapsed, grace*n)
 	}
 }
