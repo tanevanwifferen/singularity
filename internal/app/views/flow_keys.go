@@ -30,6 +30,9 @@ func (v *FlowsView) handleFlowKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if handled, cmd := v.cancelConfirm.HandleKey(msg); handled {
 		return v, cmd
 	}
+	if handled, cmd := v.removeConfirm.HandleKey(msg); handled {
+		return v, cmd
+	}
 	if v.filter.IsActive() {
 		v.filter.Update(msg)
 		return v, v.syncSelectionFromCursor()
@@ -63,6 +66,12 @@ func (v *FlowsView) handleFlowKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "C":
 		v.openContinueModal()
 		return v, nil
+
+	// Shift-d for the same reason: it mirrors the agent view's remove key
+	// (there "c" once the agent is stopped; here "c" is taken by cancel) and
+	// collides with nothing else this view or the app claims.
+	case "D":
+		return v, v.confirmRemove()
 
 	case "a":
 		return v, v.openSelectedAgent()
@@ -185,6 +194,48 @@ func (v *FlowsView) confirmCancel() tea.Cmd {
 				}
 				return flowActionMsg{action: "cancel", flowID: flowID,
 					note: fmt.Sprintf("Flow %s cancelled", flowID)}
+			}
+		})
+	return nil
+}
+
+// confirmRemove puts flow removal behind a ConfirmPrompt: it deletes the
+// flow's record. Flow.Remove refuses a flow that has not reached a terminal
+// state (service.ErrConflict), so a still-running flow is cancelled first —
+// which stops its tasks and terminates their agent processes, the same way
+// confirmCancel does — before the record is removed.
+func (v *FlowsView) confirmRemove() tea.Cmd {
+	f, ok := v.selectedFlow()
+	if !ok {
+		v.statusMsg = "No flow selected"
+		return nil
+	}
+	svc := v.services
+	if svc == nil {
+		v.statusMsg = "Flow service unavailable"
+		return nil
+	}
+	msg := fmt.Sprintf("Flow: %s — %s\nState: %s  %s\n", f.ID, f.Label, f.State, f.rounds())
+	if !f.State.Terminal() {
+		msg += "This stops the tasks and closes their agents, then deletes the flow."
+	} else {
+		msg += "This deletes the flow's record. Processes for settled tasks are already terminated."
+	}
+	v.removeConfirm.Show("Remove Flow", msg,
+		func() tea.Cmd {
+			flowID, state := f.ID, f.State
+			return func() tea.Msg {
+				ctx := v.ctx()
+				if !state.Terminal() {
+					if err := svc.Flow.Cancel(ctx, flowID); err != nil {
+						return flowActionMsg{action: "remove", err: err}
+					}
+				}
+				if err := svc.Flow.Remove(ctx, flowID); err != nil {
+					return flowActionMsg{action: "remove", err: err}
+				}
+				return flowActionMsg{action: "remove",
+					note: fmt.Sprintf("Flow %s removed", flowID)}
 			}
 		})
 	return nil
