@@ -96,6 +96,10 @@ type TaskQueue interface {
 // refused, not ignored, see Start.
 type StartRequest struct {
 	Title string `json:"title,omitempty"`
+	// IssueKey records which Jira issue Goal was built from, when the
+	// caller resolved one via GoalFromIssue before calling Start. Purely
+	// informational — Start does not fetch or validate it.
+	IssueKey string `json:"issue_key,omitempty"`
 	// Goal is the implementer's task and is repeated verbatim to every
 	// later fixer and to the reviewer. Required.
 	Goal string `json:"goal"`
@@ -255,6 +259,7 @@ func (m *Manager) Start(req StartRequest) (Flow, error) {
 		ID:         id,
 		QueueID:    "flow-" + id,
 		Title:      strings.TrimSpace(req.Title),
+		IssueKey:   strings.TrimSpace(req.IssueKey),
 		Goal:       goal,
 		ReviewGoal: strings.TrimSpace(req.ReviewGoal),
 		WorkDir:    workDir,

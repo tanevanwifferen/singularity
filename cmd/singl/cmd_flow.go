@@ -6,8 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/api"
+	"gitlab.com/tanevanwifferen1/singularity/internal/flow"
 	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 )
 
@@ -43,7 +45,8 @@ func cmdFlow(ctx context.Context, verb string, args []string) int {
 func runFlowStart(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("flow-start", flag.ContinueOnError)
 	workdir := fs.String("workdir", "", "working directory every round runs in (required)")
-	prompt := fs.String("prompt", "", "the implementer's goal, repeated verbatim to every fixer (required)")
+	prompt := fs.String("prompt", "", "the implementer's goal, repeated verbatim to every fixer (required unless --jira is given)")
+	jiraKey := fs.String("jira", "", "Jira issue key (e.g. PROJ-123) to build the goal from instead of --prompt")
 	reviewPrompt := fs.String("review-prompt", "", "extra instructions for the reviewer")
 	maxRounds := fs.Int("max-rounds", 0, "give up after N rejected rounds, 1..20 (0 = daemon default of 3)")
 	title := fs.String("title", "", "short label for the flow")
@@ -67,8 +70,12 @@ func runFlowStart(ctx context.Context, args []string) int {
 	if code, done := parseArgs(fs, args); done {
 		return code
 	}
-	if *workdir == "" || *prompt == "" {
-		fmt.Fprintln(os.Stderr, "error: --workdir and --prompt are required")
+	if *workdir == "" {
+		fmt.Fprintln(os.Stderr, "error: --workdir is required")
+		return 2
+	}
+	if *prompt == "" && *jiraKey == "" {
+		fmt.Fprintln(os.Stderr, "error: --prompt or --jira is required")
 		return 2
 	}
 	// Rejected rather than ignored, the rule `queue add --file` established:
@@ -99,9 +106,20 @@ func runFlowStart(ctx context.Context, args []string) int {
 	}
 	tctx, cancel := withTimeout(ctx)
 	defer cancel()
+
+	issueTitle, goal, err := resolveFlowGoal(tctx, c.JiraGetIssue, *jiraKey, *prompt)
+	if err != nil {
+		return die(err)
+	}
+	flowTitle := *title
+	if flowTitle == "" {
+		flowTitle = issueTitle
+	}
+
 	f, err := c.FlowStart(tctx, api.FlowStartRequest{
-		Title:      *title,
-		Goal:       *prompt,
+		Title:      flowTitle,
+		IssueKey:   *jiraKey,
+		Goal:       goal,
 		ReviewGoal: *reviewPrompt,
 		WorkDir:    *workdir,
 		MaxRounds:  *maxRounds,
@@ -118,11 +136,39 @@ func runFlowStart(ctx context.Context, args []string) int {
 	if f.Title != "" {
 		md += fmt.Sprintf("Title: %s  \n", f.Title)
 	}
+	if f.IssueKey != "" {
+		md += fmt.Sprintf("Jira: %s  \n", f.IssueKey)
+	}
 	md += fmt.Sprintf("State: `%s`  \nQueue: `%s`  \nWorkdir: `%s`  \nMax rounds: %d  \n",
 		f.State, f.QueueID, f.WorkDir, f.MaxRounds)
 	md += fmt.Sprintf("\nWait for it: `singl flow wait --id %s`  \n", f.ID)
 	md += fmt.Sprintf("Watch its tasks: `singl queue list --queue %s`\n", f.QueueID)
 	return renderMarkdown(md)
+}
+
+// jiraIssueFetcher matches (*client.Client).JiraGetIssue's shape, so
+// resolveFlowGoal is testable against a fake without a live daemon.
+type jiraIssueFetcher func(ctx context.Context, key string) (*api.Issue, error)
+
+// resolveFlowGoal picks `flow start`'s title and goal: --prompt verbatim
+// when no --jira is given, or a Jira issue's summary and description via
+// flow.GoalFromIssue otherwise. An --prompt given alongside --jira is not
+// discarded — it is appended after the issue's own text as extra
+// instructions, the way --review-prompt narrows a reviewer without
+// replacing the rest of its brief.
+func resolveFlowGoal(ctx context.Context, fetch jiraIssueFetcher, jiraKey, explicitPrompt string) (title, goal string, err error) {
+	if jiraKey == "" {
+		return "", explicitPrompt, nil
+	}
+	issue, err := fetch(ctx, jiraKey)
+	if err != nil {
+		return "", "", fmt.Errorf("fetching jira issue %s: %w", jiraKey, err)
+	}
+	title, goal = flow.GoalFromIssue(issue)
+	if explicitPrompt != "" {
+		goal = strings.TrimSpace(goal) + "\n\n## Additional instructions\n\n" + explicitPrompt
+	}
+	return title, goal, nil
 }
 
 // runFlowContinue gives a flow that finished unaccepted more rounds against

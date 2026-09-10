@@ -120,6 +120,9 @@ func flowStepAgents(ctx context.Context, c *client.Client, flowID string) map[st
 // IDs. steps may be nil, in which case the agent lines are simply absent.
 func fmtFlow(f api.Flow, steps map[string]api.FlowTreeNode) string {
 	s := fmt.Sprintf("### `%s` %s\n\n", f.ID, flowLabel(f))
+	if f.IssueKey != "" {
+		s += fmt.Sprintf("Jira: %s  \n", f.IssueKey)
+	}
 	s += fmt.Sprintf("State: `%s`  \nQueue: `%s`  \nWorkdir: `%s`  \nRounds: %s  \n",
 		f.State, f.QueueID, f.WorkDir, flowRounds(f))
 	if line := fmtFlowOpts(f.Opts); line != "" {
