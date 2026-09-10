@@ -82,6 +82,84 @@ func TestImplementPrompt(t *testing.T) {
 	}
 }
 
+func TestImplementPromptWithPlan(t *testing.T) {
+	f := testFlow()
+	f.Plan = "1. Add a retry-after parser.\n2. Wire it into the client's retry loop."
+	const wantImplement = "" +
+		"You are implementing a change in an existing codebase.\n" +
+		"\n" +
+		"## Goal\n" +
+		"\n" +
+		"Make internal/http retry on 429 responses, honouring Retry-After.\n" +
+		"\n" +
+		"## Plan\n" +
+		"\n" +
+		"1. Add a retry-after parser.\n" +
+		"2. Wire it into the client's retry loop.\n" +
+		"\n" +
+		"## Working directory\n" +
+		"\n" +
+		"/srv/work/singularity\n" +
+		"\n" +
+		"All work happens in that directory. Do not create a branch, a worktree or a\n" +
+		"commit unless the goal asks for one.\n" +
+		"\n" +
+		"## When you are done\n" +
+		"\n" +
+		"Report what you changed: the files you touched and, for each, what changed and\n" +
+		"why. Say plainly what you did not do, and name anything you left unfinished or\n" +
+		"were unsure about.\n" +
+		""
+	if got := ImplementPrompt(f); got != wantImplement {
+		t.Errorf("ImplementPrompt() with plan:\n%s\nwant:\n%s", got, wantImplement)
+	}
+}
+
+const planPath = "/var/lib/singularity/flows/f3/plan.md"
+
+func TestPlanPrompt(t *testing.T) {
+	const wantPlan = "" +
+		"You are planning a change to an existing codebase, before any of it is\n" +
+		"written. Your job is to refine the goal below into a concrete implementation\n" +
+		"approach — not to make the change yourself.\n" +
+		"\n" +
+		"## Goal\n" +
+		"\n" +
+		"Make internal/http retry on 429 responses, honouring Retry-After.\n" +
+		"\n" +
+		"## Working directory\n" +
+		"\n" +
+		"/srv/work/singularity\n" +
+		"\n" +
+		"Read the codebase as needed to ground the plan in what is actually there: the\n" +
+		"files and functions involved, existing patterns to follow, and any constraints\n" +
+		"or edge cases the goal does not spell out. Do not modify any files.\n" +
+		"\n" +
+		"## Output — this is mandatory\n" +
+		"\n" +
+		"Write your plan, in markdown, to this absolute path:\n" +
+		"\n" +
+		planPath + "\n" +
+		"\n" +
+		"Write it with the Bash tool:\n" +
+		"\n" +
+		"```\n" +
+		"cat > " + planPath + " << 'PLAN_EOF'\n" +
+		"...\n" +
+		"PLAN_EOF\n" +
+		"```\n" +
+		"\n" +
+		"Cover the approach, the files you expect to touch and what changes in each,\n" +
+		"and any open questions or risks the implementer should watch for.\n" +
+		"\n" +
+		"Writing this file is the only way your plan reaches the implementer — nothing\n" +
+		"else you write is read.\n" +
+		""
+	if got := PlanPrompt(testFlow(), planPath); got != wantPlan {
+		t.Errorf("PlanPrompt():\n%s\nwant:\n%s", got, wantPlan)
+	}
+}
+
 func TestCommitPrompt(t *testing.T) {
 	const wantCommit = "" +
 		"A change in this repository was just reviewed and accepted. Your job is only\n" +

@@ -603,3 +603,65 @@ unemitted.
 [--rounds N]`, and `C` in the TUI's Flows view — which offers it only for a
 continuable flow and otherwise says why in the flash line, and shows the current
 round count, the cap it would reach and the round it resumes at before acting.
+
+## 12. A planning phase before round 1 — a second addition after the original design
+
+**Like §11, this was not part of the design above.** A flow's round 1 goes
+straight from `Goal` to an implementer. In practice a goal is often written
+before anyone has read the code it touches, and the implementer is the cheapest
+model in the loop — the one place a wrong assumption is most expensive to make
+and least likely to be caught, because nothing downstream of it re-derives the
+approach; a reviewer only judges the diff against the goal, not the plan the
+diff should have followed. `EnablePlanning` (`internal/flow/plan.go`) adds an
+optional refinement step, on a model the caller can point at something bigger
+than the implementer, between `Start` and round 1.
+
+**Decision: one task, not a round.** A round (§1.1) is an implement/fix →
+review cycle with its own accept/reject verdict; planning has neither a review
+step nor a decision to record; it either produces a plan or the flow errors.
+Giving it a `Round` would mean inventing a verdict for something nobody is
+asked to grade. Instead its liveness lives directly on `Flow` — `PlanTaskID`
+while the task is in flight, `Plan` once it is read — the same way a round's
+task IDs live on `Round`, one level up.
+
+**The gate in `advanceOnce`.** A flow with `EnablePlanning` set and `Plan == ""`
+is gated before the `len(Rounds) == 0` check that opens round 1: `PlanTaskID ==
+""` submits the plan task, and a `PlanTaskID` already recorded polls it. Once
+`Plan` is non-empty the gate never fires again — the plan is written once, the
+way `Goal` is fixed at `Start` and repeated verbatim rather than re-fetched —
+and every later pass falls through to the ordinary round logic unchanged. A
+flow that does not set `EnablePlanning` never enters this branch at all, so its
+behaviour is exactly what it was before this section existed.
+
+**Output contract.** `PlanPrompt` tells the planner to explore the codebase —
+explicitly not to modify it — and write free-form markdown to a path beside the
+verdict files (`Store.VerdictDir(id)/plan.md`), the same "not the work tree"
+reasoning `verdictPath` follows, for the same reason: an agent told to commit
+its work must not also be told to commit the state the daemon reads back. There
+is no schema to parse, unlike a verdict — the planner's output is prose, not a
+decision — so the only failure this fails closed on is the file being missing
+or empty when the task reaches `done`; a missing plan errors the flow rather
+than proceeding with an empty one, the same "never infer success from a task
+exiting cleanly" rule §3.2 states for a verdict. A plan task that fails,
+is cancelled, or is skipped is handled exactly as a round's step is (`step` in
+`reconcile_helpers.go`), with the same three outcomes.
+
+**Folding the plan in.** `ImplementPrompt` and `FixPrompt` both render `## Plan`
+right after `## Goal` when `Plan` is non-empty (`writePlan`), so an implementer
+and every later fixer read the identical refinement — the same verbatim
+repetition `writeGoal` already does for the goal itself.
+
+**Options.** `PlanOpts` defaults to `Opts` when left entirely unset, the rule
+`ReviewOpts` already follows, and is refused with `use_worktree` set for the
+reason every step's options are (§2). The CLI adds `--planning` (off by
+default — an existing flow's behaviour is unchanged unless asked),
+`--planner-model` and `--planner-effort`, composed the same three-way way
+`--reviewer-*` is (`planOptsFromFlags` beside `composeFlowOpts`,
+`cmd/singl/cmd_flow.go`).
+
+**Surfaces.** `Flow.EnablePlanning` / `Flow.PlanOpts` / `Flow.PlanTaskID` /
+`Flow.Plan` on the existing `api.Flow`/`api.FlowStartRequest` aliases — no new
+route, since planning rides `POST /api/flow/start` (row 126) like every other
+per-flow option. `PlanPrompt` (`internal/flow/prompt.go`), and a `plan` step
+node in `Flow.Tree`, parented directly under the flow root rather than under a
+round, since it runs before any round exists.

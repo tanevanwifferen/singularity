@@ -196,6 +196,80 @@ func TestPendingFlowSubmitsRoundOne(t *testing.T) {
 	}
 }
 
+// TestPlanningSubmitsPlanBeforeRoundOne drives a flow with EnablePlanning
+// set through the plan task, in place of the immediate round-1 submission
+// TestPendingFlowSubmitsRoundOne covers, and checks round 1 only opens once
+// the plan is on record and folded into the implement prompt.
+func TestPlanningSubmitsPlanBeforeRoundOne(t *testing.T) {
+	m, q := newDriven(t)
+	req := startReq(t)
+	req.EnablePlanning = true
+	req.PlanOpts = TaskOptions{Model: "opus"}
+	f, err := m.Start(req)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	m.tick()
+
+	if len(q.batches) != 1 || len(q.batches[0]) != 1 {
+		t.Fatalf("submitted batches = %+v, want one batch of one plan task", q.batches)
+	}
+	planSpec := q.batches[0][0]
+	if planSpec.Title != "f1 plan" {
+		t.Errorf("plan task title = %q, want \"f1 plan\"", planSpec.Title)
+	}
+	if planSpec.Opts.Model != "opus" {
+		t.Errorf("plan task model = %q, want opus", planSpec.Opts.Model)
+	}
+
+	got, err := m.Get(f.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.State != StateRunning || got.PlanTaskID != "t1" || len(got.Rounds) != 0 {
+		t.Fatalf("flow after plan submitted = %+v, want running with plan_task_id t1 and no rounds", got)
+	}
+
+	// Round 1 does not open while the plan task is still running.
+	q.setState(t, "t1", queue.StateRunning)
+	m.tick()
+	if len(q.batches) != 1 {
+		t.Fatalf("submitted %d batches while the plan task was running, want 1", len(q.batches))
+	}
+
+	planPath := m.planPath(f.ID)
+	if err := os.MkdirAll(filepath.Dir(planPath), 0o700); err != nil {
+		t.Fatalf("mkdir plan dir: %v", err)
+	}
+	if err := os.WriteFile(planPath, []byte("1. Parse Retry-After.\n2. Retry once it elapses.\n"), 0o600); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+	q.setState(t, "t1", queue.StateDone)
+	m.tick()
+
+	got, err = m.Get(f.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Plan != "1. Parse Retry-After.\n2. Retry once it elapses." {
+		t.Errorf("flow.Plan = %q, want the trimmed plan file contents", got.Plan)
+	}
+	if len(got.Rounds) != 1 {
+		t.Fatalf("flow has %d rounds after the plan settled, want round 1 opened", len(got.Rounds))
+	}
+	if len(q.batches) != 2 {
+		t.Fatalf("submitted %d batches, want a second batch for round 1", len(q.batches))
+	}
+	work := q.batches[1][0]
+	if work.Prompt != ImplementPrompt(&got) {
+		t.Errorf("round 1 work prompt does not include the plan:\n%s", work.Prompt)
+	}
+	if !strings.Contains(work.Prompt, "## Plan") {
+		t.Errorf("round 1 work prompt has no ## Plan section:\n%s", work.Prompt)
+	}
+}
+
 func TestWorkTaskDoneAloneChangesNothing(t *testing.T) {
 	m, q := newDriven(t)
 	f := startFlow(t, m, 0)

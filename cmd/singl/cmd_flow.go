@@ -67,6 +67,9 @@ func runFlowStart(ctx context.Context, args []string) int {
 	maxRetries := fs.Int("max-retries", 0, "unsupported: the flow wire contract carries no per-task retry count")
 	reviewerModel := fs.String("reviewer-model", "", "model for the review step only (default: --model)")
 	reviewerEffort := fs.String("reviewer-effort", "", "effort for the review step only (default: --effort)")
+	planning := fs.Bool("planning", false, "run a planning phase before round 1, refining the goal before the implementer starts")
+	plannerModel := fs.String("planner-model", "", "model for the planning step only (default: --model)")
+	plannerEffort := fs.String("planner-effort", "", "effort for the planning step only (default: --effort)")
 	if code, done := parseArgs(fs, args); done {
 		return code
 	}
@@ -91,14 +94,16 @@ func runFlowStart(ctx context.Context, args []string) int {
 		return 2
 	}
 
-	work, review := composeFlowOpts(api.TaskOptions{
+	base := api.TaskOptions{
 		Model:        *model,
 		Effort:       *effort,
 		Backend:      *backend,
 		TimeoutSecs:  *timeout,
 		ContextFiles: contextFiles,
 		AllowedTools: allowedTools,
-	}, *reviewerModel, *reviewerEffort, smartRoute)
+	}
+	work, review := composeFlowOpts(base, *reviewerModel, *reviewerEffort, smartRoute)
+	plan := planOptsFromFlags(base, *plannerModel, *plannerEffort, smartRoute)
 
 	c, err := newClient()
 	if err != nil {
@@ -117,14 +122,16 @@ func runFlowStart(ctx context.Context, args []string) int {
 	}
 
 	f, err := c.FlowStart(tctx, api.FlowStartRequest{
-		Title:      flowTitle,
-		IssueKey:   *jiraKey,
-		Goal:       goal,
-		ReviewGoal: *reviewPrompt,
-		WorkDir:    *workdir,
-		MaxRounds:  *maxRounds,
-		Opts:       work,
-		ReviewOpts: review,
+		Title:          flowTitle,
+		IssueKey:       *jiraKey,
+		Goal:           goal,
+		ReviewGoal:     *reviewPrompt,
+		WorkDir:        *workdir,
+		MaxRounds:      *maxRounds,
+		Opts:           work,
+		ReviewOpts:     review,
+		EnablePlanning: *planning,
+		PlanOpts:       plan,
 	})
 	if err != nil {
 		return die(err)
@@ -141,6 +148,9 @@ func runFlowStart(ctx context.Context, args []string) int {
 	}
 	md += fmt.Sprintf("State: `%s`  \nQueue: `%s`  \nWorkdir: `%s`  \nMax rounds: %d  \n",
 		f.State, f.QueueID, f.WorkDir, f.MaxRounds)
+	if f.EnablePlanning {
+		md += "Planning: enabled  \n"
+	}
 	md += fmt.Sprintf("\nWait for it: `singl flow wait --id %s`  \n", f.ID)
 	md += fmt.Sprintf("Watch its tasks: `singl queue list --queue %s`\n", f.QueueID)
 	return renderMarkdown(md)
@@ -277,6 +287,24 @@ func composeFlowOpts(base api.TaskOptions, reviewerModel, reviewerEffort string,
 	reviewRoute := resolve(review.Model, review.Effort)
 	review.SmartRoute = &reviewRoute
 	return work, review
+}
+
+// planOptsFromFlags builds the planning step's options: base with
+// --planner-model/--planner-effort overrides, routed on its own pins the
+// same way composeFlowOpts routes the reviewer's. Kept as its own function
+// rather than a third return value off composeFlowOpts because planning is
+// optional and most flows pass none of this.
+func planOptsFromFlags(base api.TaskOptions, plannerModel, plannerEffort string, resolve func(model, effort string) bool) api.TaskOptions {
+	plan := base
+	if plannerModel != "" {
+		plan.Model = plannerModel
+	}
+	if plannerEffort != "" {
+		plan.Effort = plannerEffort
+	}
+	route := resolve(plan.Model, plan.Effort)
+	plan.SmartRoute = &route
+	return plan
 }
 
 // flagTyped reports whether the user actually passed the named flag.
