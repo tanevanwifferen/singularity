@@ -15,12 +15,14 @@ import (
 // projected off a service.Flow so the list survives a refresh that replaces
 // every flow record.
 type FlowInfo struct {
-	ID        string
-	Label     string
-	State     service.FlowState
-	Round     int
-	MaxRounds int
-	WorkDir   string
+	ID         string
+	Label      string
+	State      service.FlowState
+	Round      int
+	MaxRounds  int
+	WorkDir    string
+	Goal       string
+	ReviewGoal string
 }
 
 // String is what components.Filter matches "/" input against, so filtering
@@ -100,6 +102,11 @@ type FlowsView struct {
 	treeNodes  []service.FlowTreeNode
 	treeCursor int
 	collapsed  map[string]bool
+
+	// findingsExpanded gives the findings block the height the tree would
+	// otherwise have, and findingsScroll is its first visible line then.
+	findingsExpanded bool
+	findingsScroll   int
 
 	focus     flowFocus
 	loading   bool
@@ -300,12 +307,14 @@ func flowInfoFrom(f service.Flow) FlowInfo {
 		}
 	}
 	return FlowInfo{
-		ID:        f.ID,
-		Label:     label,
-		State:     f.State,
-		Round:     len(f.Rounds),
-		MaxRounds: f.MaxRounds,
-		WorkDir:   f.WorkDir,
+		ID:         f.ID,
+		Label:      label,
+		State:      f.State,
+		Round:      len(f.Rounds),
+		MaxRounds:  f.MaxRounds,
+		WorkDir:    f.WorkDir,
+		Goal:       f.Goal,
+		ReviewGoal: f.ReviewGoal,
 	}
 }
 
@@ -366,6 +375,8 @@ func (v *FlowsView) syncSelectionFromCursor() tea.Cmd {
 	v.selectedID = item.ID
 	v.setTreeNodes(nil)
 	v.treeCursor = 0
+	v.findingsExpanded = false
+	v.findingsScroll = 0
 	return v.treeCmd(item.ID)
 }
 
@@ -394,7 +405,7 @@ func (v *FlowsView) CapturesKey(key string) bool { return key == "tab" }
 
 // ShortHelp returns the status-bar help line.
 func (v *FlowsView) ShortHelp() string {
-	return "n:start  C:continue  c:cancel  a:agent  tab:pane  l/h:expand  r:refresh  /:filter"
+	return "n:start  C:continue  c:cancel  a:agent  tab:pane  l/h:expand  f:findings  r:refresh  /:filter"
 }
 
 // KeyBindings returns the view's bindings for the help overlay.
@@ -409,6 +420,7 @@ func (v *FlowsView) KeyBindings() []components.KeyBinding {
 		{Key: "j/k", Description: "Navigate"},
 		{Key: "l/→/Enter", Description: "Expand tree node (or focus tree)"},
 		{Key: "h/←", Description: "Collapse tree node"},
+		{Key: "f", Description: "Expand the findings block over the tree (j/k scroll it)"},
 		{Key: "/", Description: "Filter flows"},
 		{Key: "Esc", Description: "Back to the flow list"},
 	}

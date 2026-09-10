@@ -67,11 +67,22 @@ func (v *FlowsView) handleFlowKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "a":
 		return v, v.openSelectedAgent()
 
+	// The findings block expanded takes the tree's height and its j/k: it
+	// is a second thing to scroll, and one pane scrolls at a time.
+	case "f":
+		v.findingsExpanded = !v.findingsExpanded
+		v.findingsScroll = 0
+		return v, nil
+
 	case "/":
 		v.filter.Update(msg)
 		return v, nil
 
 	case "j", "down":
+		if v.findingsExpanded {
+			v.findingsScroll++
+			return v, nil
+		}
 		if v.focus == focusFlowTree {
 			v.moveTreeCursor(1)
 			return v, nil
@@ -80,6 +91,10 @@ func (v *FlowsView) handleFlowKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return v, v.syncSelectionFromCursor()
 
 	case "k", "up":
+		if v.findingsExpanded {
+			v.findingsScroll = max(v.findingsScroll-1, 0)
+			return v, nil
+		}
 		if v.focus == focusFlowTree {
 			v.moveTreeCursor(-1)
 			return v, nil
@@ -102,6 +117,7 @@ func (v *FlowsView) handleFlowKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return v, nil
 
 	case "esc":
+		v.findingsExpanded = false
 		v.focus = focusFlowList
 		return v, nil
 	}

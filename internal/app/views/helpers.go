@@ -74,29 +74,39 @@ func wrapText(text string, width int) []string {
 	return lines
 }
 
-// wordWrap wraps text to the specified width, breaking at word boundaries.
+// wordWrap wraps text to the specified width in runes, breaking at word
+// boundaries. A token wider than the width is hard-split with wrapText so
+// no returned line exceeds it.
 func wordWrap(text string, width int) []string {
-	words := strings.Fields(text)
+	if width <= 0 {
+		width = 40
+	}
 	var lines []string
-	var currentLine strings.Builder
-
-	for _, word := range words {
-		if currentLine.Len()+len(word)+1 > width {
-			if currentLine.Len() > 0 {
-				lines = append(lines, currentLine.String())
-				currentLine.Reset()
-			}
+	var current []rune
+	flush := func() {
+		if len(current) > 0 {
+			lines = append(lines, string(current))
+			current = current[:0]
 		}
-		if currentLine.Len() > 0 {
-			currentLine.WriteString(" ")
+	}
+	for _, word := range strings.Fields(text) {
+		w := []rune(word)
+		if len(w) > width {
+			flush()
+			parts := wrapText(word, width)
+			lines = append(lines, parts[:len(parts)-1]...)
+			current = append(current, []rune(parts[len(parts)-1])...)
+			continue
 		}
-		currentLine.WriteString(word)
+		if len(current) > 0 && len(current)+1+len(w) > width {
+			flush()
+		}
+		if len(current) > 0 {
+			current = append(current, ' ')
+		}
+		current = append(current, w...)
 	}
-
-	if currentLine.Len() > 0 {
-		lines = append(lines, currentLine.String())
-	}
-
+	flush()
 	return lines
 }
 

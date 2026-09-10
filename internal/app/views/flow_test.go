@@ -2,10 +2,12 @@ package views
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/service/fake"
 )
@@ -665,5 +667,242 @@ func TestContinueServiceRefusalGoesToFlashLine(t *testing.T) {
 	v.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if v.showContinue {
 		t.Error("Esc must abandon the modal")
+	}
+}
+
+// flowsViewFor is loadedFlowsView for an arbitrary flow and tree at a given
+// size, for the tests that shape the request and findings blocks.
+func flowsViewFor(t *testing.T, f service.Flow, tree *service.FlowTree, width, height int) *FlowsView {
+	t.Helper()
+	stub := fake.NewFlowStub()
+	stub.ListFn = func(context.Context, []service.FlowState) ([]service.Flow, error) {
+		return []service.Flow{f}, nil
+	}
+	stub.TreeFn = func(_ context.Context, id string) (*service.FlowTree, error) {
+		if id != f.ID {
+			return nil, service.ErrNotFound
+		}
+		return tree, nil
+	}
+	svcs := fake.New()
+	svcs.Flow = stub
+	v := NewFlowsView("/home/dev/singularity")
+	v.SetServices(svcs)
+	v.SetSize(width, height)
+	v.Update(v.Init()())
+	if v.selectedID != f.ID {
+		t.Fatalf("selected %q, want %s", v.selectedID, f.ID)
+	}
+	return v
+}
+
+// verboseTree is testTree with the last round rejected by a verdict that
+// carries a sentence of detail and a file:line per finding — the shape a
+// real reviewer produces, and the one a short pane cannot show in full.
+func verboseTree(n int) *service.FlowTree {
+	tree := testTree()
+	verdict := &service.FlowVerdict{
+		Decision: service.FlowReject,
+		Summary:  "The helper caps the delay but the jitter is applied after the cap, so the cap is not a cap.",
+	}
+	for i := 0; i < n; i++ {
+		verdict.Findings = append(verdict.Findings, service.FlowFinding{
+			Severity: service.FlowSeverityMajor,
+			File:     fmt.Sprintf("internal/retry/backoff_%d.go", i),
+			Line:     10 + i,
+			Detail:   fmt.Sprintf("finding %d: the jitter term is added after the cap is applied, so a large jitter escapes it", i),
+		})
+	}
+	last := &tree.Nodes[len(tree.Nodes)-3]
+	last.State = "rejected"
+	last.Verdict = verdict
+	return tree
+}
+
+// The request block shows the goal, and the review focus under it when the
+// flow narrowed one.
+func TestRequestBlockShowsGoalAndReviewFocus(t *testing.T) {
+	v, _ := loadedFlowsView(t)
+	pane := v.renderTreePane(90)
+	if !strings.Contains(pane, " Request\n") || !strings.Contains(pane, "add a retry backoff helper") {
+		t.Errorf("tree pane must lead with the request block and the goal:\n%s", pane)
+	}
+	if strings.Contains(pane, "Review focus") {
+		t.Errorf("no review focus was set, none must show:\n%s", pane)
+	}
+
+	f := testFlow()
+	f.ReviewGoal = "focus on overflow cases"
+	v = flowsViewFor(t, f, testTree(), 140, 30)
+	pane = v.renderTreePane(90)
+	if !strings.Contains(pane, "Review focus: focus on overflow cases") {
+		t.Errorf("tree pane missing the review focus:\n%s", pane)
+	}
+	if strings.Index(pane, "Request") > strings.Index(pane, "Findings") {
+		t.Errorf("the request block must sit above the findings block:\n%s", pane)
+	}
+}
+
+// The findings block shows the latest round's decision, summary and every
+// finding with its severity, location and detail.
+func TestFindingsBlockShowsLatestVerdict(t *testing.T) {
+	v, _ := loadedFlowsView(t)
+	pane := v.renderTreePane(90)
+	for _, want := range []string{" Findings\n", "round 3: ", "accept", "holds up under adversarial probing"} {
+		if !strings.Contains(pane, want) {
+			t.Errorf("tree pane missing %q:\n%s", want, pane)
+		}
+	}
+	if strings.Contains(pane, "jitter escapes the cap") {
+		t.Errorf("the block shows the latest round only, not round 1's findings:\n%s", pane)
+	}
+
+	v = flowsViewFor(t, testFlow(), verboseTree(2), 140, 40)
+	pane = v.renderTreePane(90)
+	for _, want := range []string{
+		"round 3: ", "reject",
+		"so the cap is not a cap.",
+		"[major] internal/retry/backoff_0.go:10: finding 0:",
+		"[major] internal/retry/backoff_1.go:11: finding 1:",
+		"so a large jitter escapes it",
+	} {
+		if !strings.Contains(pane, want) {
+			t.Errorf("tree pane missing %q:\n%s", want, pane)
+		}
+	}
+	if strings.Contains(pane, "… +") {
+		t.Errorf("the verdict fits at height 40, nothing must be cut:\n%s", pane)
+	}
+}
+
+// When the full verdict does not fit, the block falls back to one line per
+// finding so every finding is at least visible, and f expands it over the
+// tree, where j/k scroll it and every line is reachable.
+func TestFindingsBlockCompactsThenExpands(t *testing.T) {
+	v := flowsViewFor(t, testFlow(), verboseTree(6), 100, 20)
+	pane := v.renderTreePane(60)
+	for i := 0; i < 6; i++ {
+		if want := fmt.Sprintf("[major] internal/retry/backoff_%d.go:%d:", i, 10+i); !strings.Contains(pane, want) {
+			t.Errorf("compact findings block missing %q:\n%s", want, pane)
+		}
+	}
+	if !strings.Contains(pane, "f to expand") {
+		t.Errorf("compact block must say how to expand:\n%s", pane)
+	}
+	if strings.Contains(pane, "so a large jitter escapes it") {
+		t.Errorf("compact lines are clipped, not wrapped:\n%s", pane)
+	}
+
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	pane = v.renderTreePane(60)
+	if !v.findingsExpanded || !strings.Contains(pane, "f: collapse") {
+		t.Fatalf("f must expand the findings block:\n%s", pane)
+	}
+	if !strings.Contains(pane, "so a large jitter escapes it") {
+		t.Errorf("expanded block must show the wrapped detail:\n%s", pane)
+	}
+	if !strings.Contains(pane, "more line(s) below") {
+		t.Errorf("six wrapped findings exceed height 20 even expanded, so a below marker is due:\n%s", pane)
+	}
+	var seen strings.Builder
+	for i := 0; i < 40; i++ {
+		seen.WriteString(v.renderTreePane(60))
+		v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	}
+	if !strings.Contains(seen.String(), "backoff_5.go:15: finding 5:") {
+		t.Errorf("scrolling with j must reach the last finding")
+	}
+	if v.findingsScroll > 40 {
+		t.Errorf("scroll offset %d was not clamped to the block", v.findingsScroll)
+	}
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if v.findingsExpanded || v.findingsScroll != 0 {
+		t.Error("f again must collapse the block and reset its scroll")
+	}
+}
+
+// Before any review lands the block says so; a verdict with neither summary
+// nor findings gets a placeholder that does not contradict its decision.
+func TestFindingsBlockPlaceholders(t *testing.T) {
+	f := testFlow()
+	f.Rounds = nil
+	root := &service.FlowTree{FlowID: "f1", Nodes: []service.FlowTreeNode{
+		{ID: "f1", Kind: service.FlowNodeFlow, Label: "smoke: retry backoff helper", State: "running"},
+	}}
+	pane := flowsViewFor(t, f, root, 140, 30).renderTreePane(90)
+	if !strings.Contains(pane, "(no review verdict yet)") {
+		t.Errorf("no verdict: want the placeholder:\n%s", pane)
+	}
+
+	tree := testTree()
+	tree.Nodes[len(tree.Nodes)-3].Verdict = &service.FlowVerdict{Decision: service.FlowReject}
+	pane = flowsViewFor(t, testFlow(), tree, 140, 30).renderTreePane(90)
+	if !strings.Contains(pane, "round 3: ") || !strings.Contains(pane, "(no summary or findings)") {
+		t.Errorf("bare reject: want the decision and a neutral placeholder:\n%s", pane)
+	}
+	if strings.Contains(pane, "accepted") {
+		t.Errorf("a reject must not read as accepted:\n%s", pane)
+	}
+}
+
+// The blocks come out of the tree's height budget: the whole view stays
+// within v.height at every size, the tree keeps its minimum rows, and the
+// viewport shrinks by exactly the lines the blocks take.
+func TestTreePaneFitsHeightWithBlocks(t *testing.T) {
+	f := testFlow()
+	f.Goal = strings.Repeat("add a retry backoff helper with a cap and jitter, ", 6)
+	f.ReviewGoal = "focus on overflow cases"
+	for _, h := range []int{12, 16, 20, 24, 30} {
+		for _, expanded := range []bool{false, true} {
+			v := flowsViewFor(t, f, verboseTree(6), 100, h)
+			v.findingsExpanded = expanded
+			out := v.View()
+			if got := lipgloss.Height(out); got > h {
+				t.Errorf("height %d expanded=%v: view is %d lines tall:\n%s", h, expanded, got, out)
+			}
+			pane := v.renderTreePane(60)
+			treeRows := strings.Count(pane, "├──") + strings.Count(pane, "└──") + strings.Count(pane, " f1  ")
+			minRows := flowTreeMinRows
+			if expanded {
+				minRows = flowTreeMinRowsExpanded
+			}
+			if treeRows < minRows {
+				t.Errorf("height %d expanded=%v: tree shows %d rows, want at least %d:\n%s", h, expanded, treeRows, minRows, pane)
+			}
+		}
+	}
+
+	v := flowsViewFor(t, f, verboseTree(6), 100, 30)
+	pane := v.renderTreePane(60)
+	requestMax, findingsMax := v.blockBudget(len(v.treeRows()), v.flows[0], 60)
+	blockLines := 2 + requestMax + findingsMax
+	wantRows := 30 - flowTreeChromeLines - blockLines
+	treeRows := strings.Count(pane, "├──") + strings.Count(pane, "└──") + 1
+	if treeRows != wantRows {
+		t.Errorf("tree shows %d rows, want %d = height - chrome - %d block lines:\n%s", treeRows, wantRows, blockLines, pane)
+	}
+	if !strings.Contains(pane, fmt.Sprintf("of %d nodes", len(v.treeRows()))) {
+		t.Errorf("a clipped tree must carry the footer:\n%s", pane)
+	}
+}
+
+// A token wider than the pane — a path, a URL — is hard-split rather than
+// left to lipgloss, so the line count the viewport is charged is the count
+// on screen.
+func TestBlockHardSplitsLongTokens(t *testing.T) {
+	tree := testTree()
+	tree.Nodes[len(tree.Nodes)-3].Verdict = &service.FlowVerdict{
+		Decision: service.FlowAccept,
+		Summary:  "see https://example.invalid/" + strings.Repeat("segment/", 12) + "readme",
+	}
+	v := flowsViewFor(t, testFlow(), tree, 100, 30)
+	pane := v.renderTreePane(40)
+	for _, line := range strings.Split(pane, "\n") {
+		if w := lipgloss.Width(line); w > 40 {
+			t.Errorf("line %q is %d wide in a 40-column pane", line, w)
+		}
+	}
+	if got := wordWrap("ab "+strings.Repeat("é", 25)+" cd", 10); len(got) != 4 || got[1] != strings.Repeat("é", 10) {
+		t.Errorf("wordWrap counts runes, got %q", got)
 	}
 }
