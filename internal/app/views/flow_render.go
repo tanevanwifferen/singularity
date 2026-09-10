@@ -384,19 +384,29 @@ func (v *FlowsView) settleBlockBudget(rowCount int, sel FlowInfo, width int) (re
 // a pane too short for the blocks drops them, and then j/k belong to the
 // tree again — an invisible block must not swallow them.
 func (v *FlowsView) expandedShown() bool {
+	return v.expandedMaxLines() > 0
+}
+
+// expandedMaxLines is the line budget the currently expanded block is
+// drawing under, zero when nothing is expanded or the pane is too short to
+// show it — the same number scroll keys page by.
+func (v *FlowsView) expandedMaxLines() int {
 	if v.expanded == flowBlockNone {
-		return false
+		return 0
 	}
 	sel, ok := v.selectedFlow()
 	if !ok {
-		return false
+		return 0
 	}
 	treeW := max(v.width-v.listWidth()-1, 20)
 	requestMax, findingsMax, _ := v.settleBlockBudget(len(v.treeRows()), sel, treeW)
 	if v.expanded == flowBlockFindings {
-		return findingsMax > 0
+		// The decision line takes the first budgeted line (see
+		// renderFlowFindingsBlock and clampBlockScroll); scroll keys must
+		// page the same body height the clamp uses, not the raw budget.
+		return max(findingsMax-1, 0)
 	}
-	return requestMax > 0
+	return requestMax
 }
 
 // blockBudget splits the tree pane's height between the request and the
@@ -485,21 +495,21 @@ func (v *FlowsView) renderFlowRequestBlock(sel FlowInfo, width, maxLines int) st
 
 	lines := v.requestLines(sel, width)
 	expanded := v.expanded == flowBlockRequest
-	hint := ""
+	hints := []string{""}
 	switch {
 	case expanded:
-		hint = "  (f: collapse  j/k: scroll)"
+		hints = []string{"  (f: collapse  j/k/g/G/ctrl+d/u/pgdn/pgup: scroll)", "  (f: collapse  j/k/g/G/ctrl+d/u: scroll)", "  (f: collapse  j/k: scroll)", "  (f: collapse)"}
 	case len(lines) > maxLines && v.expanded == flowBlockFindings:
-		hint = "  (f: expand)"
+		hints = []string{"  (f: expand)"}
 	case len(lines) > maxLines:
 		_, verdict := v.latestVerdict()
 		if verdict != nil {
-			hint = "  (f f: expand)"
+			hints = []string{"  (f f: expand)"}
 		} else {
-			hint = "  (f: expand)"
+			hints = []string{"  (f: expand)"}
 		}
 	}
-	s.WriteString(th.MutedTextStyle.Render(blockHeader(" Request", hint, width)))
+	s.WriteString(th.MutedTextStyle.Render(blockHeader(" Request", width, hints...)))
 	s.WriteString("\n")
 
 	if len(lines) == 0 {
@@ -550,7 +560,7 @@ func (v *FlowsView) renderFlowFindingsBlock(width, maxLines int) string {
 
 	round, verdict := v.latestVerdict()
 	if verdict == nil {
-		s.WriteString(th.MutedTextStyle.Render(blockHeader(" Findings", "", width)))
+		s.WriteString(th.MutedTextStyle.Render(blockHeader(" Findings", width, "")))
 		s.WriteString("\n")
 		s.WriteString(th.MutedTextStyle.Render(clipText(" (no review verdict yet)", blockTextWidth(width))))
 		s.WriteString("\n")
@@ -563,14 +573,16 @@ func (v *FlowsView) renderFlowFindingsBlock(width, maxLines int) string {
 	expanded := v.expanded == flowBlockFindings
 	compact := !expanded && len(lines) > budget
 
-	hint := ""
+	hints := []string{""}
 	switch {
+	case expanded && budget > 0:
+		hints = []string{"  (f: collapse  j/k/g/G/ctrl+d/u/pgdn/pgup: scroll)", "  (f: collapse  j/k/g/G/ctrl+d/u: scroll)", "  (f: collapse  j/k: scroll)", "  (f: collapse)"}
 	case expanded:
-		hint = "  (f: collapse  j/k: scroll)"
+		hints = []string{"  (f: collapse)"}
 	case compact:
-		hint = "  (f: expand)"
+		hints = []string{"  (f: expand)"}
 	}
-	s.WriteString(th.MutedTextStyle.Render(blockHeader(" Findings", hint, width)))
+	s.WriteString(th.MutedTextStyle.Render(blockHeader(" Findings", width, hints...)))
 	s.WriteString("\n")
 
 	// Each piece is clipped to what is left of the line before it is
@@ -667,14 +679,20 @@ func (v *FlowsView) latestVerdict() (int, *service.FlowVerdict) {
 // with a margin so lipgloss never has to wrap what it is handed.
 func blockTextWidth(width int) int { return max(width-2, 10) }
 
-// blockHeader is a block's header line: the name with its key hint when
-// the hint fits the pane, the name alone when it does not — a hint cut to
-// "(f: co…" says less than no hint — and the name clipped as a last resort.
-func blockHeader(name, hint string, width int) string {
-	if room := blockTextWidth(width); len(name)+len(hint) > room {
-		return clipText(name, room)
+// blockHeader is a block's header line: the name with its key hint when the
+// hint fits the pane. hints are tried widest first; the first one that fits
+// wins, so a pane too narrow for the full hint still gets a shorter one
+// rather than none — a hint cut to "(f: co…" says less than no hint, but no
+// hint at all makes the collapse key undiscoverable. The name clipped is the
+// last resort, once no hint fits.
+func blockHeader(name string, width int, hints ...string) string {
+	room := blockTextWidth(width)
+	for _, hint := range hints {
+		if len(name)+len(hint) <= room {
+			return name + hint
+		}
 	}
-	return name + hint
+	return clipText(name, room)
 }
 
 // fitText is clipText for a room that may be too small for anything: it
