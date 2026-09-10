@@ -111,6 +111,10 @@ func (m *Manager) buildTree(f *Flow) Tree {
 		State: string(f.State),
 	})
 
+	if f.PlanTaskID != "" {
+		out.Nodes = append(out.Nodes, m.stepNode(f.ID, "plan", 0, f.PlanTaskID))
+	}
+
 	for _, r := range f.Rounds {
 		roundID := fmt.Sprintf("%s/r%d", f.ID, r.N)
 		out.Nodes = append(out.Nodes, TreeNode{

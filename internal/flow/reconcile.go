@@ -223,6 +223,16 @@ func (m *Manager) advanceOnce(flowID string) (Flow, bool) {
 	if !ok {
 		return Flow{}, false
 	}
+	// Planning, when enabled, runs to completion before round 1 is ever
+	// considered: a flow with EnablePlanning set has nothing else to do
+	// until its Plan is on record, the same one-pass-wide reasoning that
+	// makes StatePending safe for round 1 below.
+	if snap.EnablePlanning && snap.Plan == "" {
+		if snap.PlanTaskID == "" {
+			return m.submitPlan(&snap)
+		}
+		return m.advancePlan(&snap)
+	}
 	// No rounds means either a brand-new flow (StatePending, one pass wide)
 	// or a record whose round 1 submission did not survive the daemon that
 	// made it. Both want the same thing.

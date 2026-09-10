@@ -234,9 +234,29 @@ type Flow struct {
 	Opts       TaskOptions `json:"opts,omitempty"`
 	// ReviewOpts defaults to Opts; --reviewer-* overrides only what it names.
 	ReviewOpts TaskOptions `json:"review_opts,omitempty"`
+	// PlanOpts defaults to Opts, the same rule ReviewOpts follows;
+	// --planner-* overrides only what it names. A flow that wants its
+	// planning done on a bigger model than its implementer points this at
+	// one, e.g. --planner-model opus.
+	PlanOpts TaskOptions `json:"plan_opts,omitempty"`
+	// EnablePlanning submits a one-off planning task (PlanPrompt) before
+	// round 1, on PlanOpts. Its output becomes Plan once the task settles
+	// done, and ImplementPrompt/FixPrompt fold Plan in under their own
+	// heading. Off by default: a flow that does not ask for planning behaves
+	// exactly as it did before this field existed.
+	EnablePlanning bool `json:"enable_planning,omitempty"`
 
 	State State  `json:"state"`
 	Error string `json:"error,omitempty"`
+
+	// PlanTaskID is the planning task, once submitted. Empty until then, and
+	// always empty when EnablePlanning is false.
+	PlanTaskID string `json:"plan_task_id,omitempty"`
+	// Plan is the planner's output, read from its plan file once the
+	// planning task settles done. Empty until then; written once and never
+	// re-derived per round, the way Goal is repeated verbatim rather than
+	// re-fetched.
+	Plan string `json:"plan,omitempty"`
 
 	Rounds    []*Round   `json:"rounds"`
 	CreatedAt time.Time  `json:"created_at"`
@@ -252,6 +272,8 @@ func (f *Flow) Clone() Flow {
 	out.Opts.AllowedTools = append([]string(nil), f.Opts.AllowedTools...)
 	out.ReviewOpts.ContextFiles = append([]string(nil), f.ReviewOpts.ContextFiles...)
 	out.ReviewOpts.AllowedTools = append([]string(nil), f.ReviewOpts.AllowedTools...)
+	out.PlanOpts.ContextFiles = append([]string(nil), f.PlanOpts.ContextFiles...)
+	out.PlanOpts.AllowedTools = append([]string(nil), f.PlanOpts.AllowedTools...)
 	if f.Opts.SmartRoute != nil {
 		v := *f.Opts.SmartRoute
 		out.Opts.SmartRoute = &v
@@ -259,6 +281,10 @@ func (f *Flow) Clone() Flow {
 	if f.ReviewOpts.SmartRoute != nil {
 		v := *f.ReviewOpts.SmartRoute
 		out.ReviewOpts.SmartRoute = &v
+	}
+	if f.PlanOpts.SmartRoute != nil {
+		v := *f.PlanOpts.SmartRoute
+		out.PlanOpts.SmartRoute = &v
 	}
 	out.Rounds = make([]*Round, 0, len(f.Rounds))
 	for _, r := range f.Rounds {
