@@ -256,7 +256,7 @@ func (v *ProjectStashView) handleScrollKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd)
 
 // stashLogMaxLines returns how many log lines to show.
 func (v *ProjectStashView) stashLogMaxLines() int {
-	listHeight := len(v.stashNames) + 4
+	listHeight := v.stashListVisibleHeight()
 	available := v.height - listHeight - 12
 	if available < 3 {
 		available = 3
@@ -340,7 +340,12 @@ func (v *ProjectStashView) renderStashList(s *strings.Builder, th theme.Theme) {
 		maxNameWidth = 20
 	}
 
-	for i, name := range v.stashNames {
+	start, end := v.stashListViewport()
+	if start > 0 {
+		s.WriteString(th.MutedTextStyle.Render(fmt.Sprintf("  ↑ %d more above", start)) + "\n")
+	}
+	for i := start; i < end; i++ {
+		name := v.stashNames[i]
 		count := 0
 		for _, rl := range v.repoStashLists {
 			for _, e := range rl.Entries {
@@ -374,6 +379,23 @@ func (v *ProjectStashView) renderStashList(s *strings.Builder, th theme.Theme) {
 		}
 		s.WriteString("\n")
 	}
+	if end < len(v.stashNames) {
+		s.WriteString(th.MutedTextStyle.Render(fmt.Sprintf("  ↓ %d more below", len(v.stashNames)-end)) + "\n")
+	}
+}
+
+// stashListViewport returns the visible [start, end) range of stash names,
+// scrolled to keep the cursor visible.
+func (v *ProjectStashView) stashListViewport() (start, end int) {
+	return calcViewport(v.height, 20, v.selectedIdx, len(v.stashNames))
+}
+
+// stashListVisibleHeight returns how many lines the (possibly scrolled)
+// stash list actually occupies, for stashLogMaxLines' budget.
+func (v *ProjectStashView) stashListVisibleHeight() int {
+	start, end := v.stashListViewport()
+	h := end - start + 4 // +4 for header/separator and the scroll hints
+	return h
 }
 
 func (v *ProjectStashView) renderRepoCoverage(s *strings.Builder, th theme.Theme, name string) {

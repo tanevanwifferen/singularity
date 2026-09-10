@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"gitlab.com/tanevanwifferen1/singularity/internal/app/clipboard"
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
 	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
@@ -51,6 +52,10 @@ type WorktreeView struct {
 	// Detach all worktrees state
 	showDetachAllConfirm bool
 	detachAllResult      string
+
+	// flashMsg is a transient ✓/✗-prefixed result line, cleared on the next
+	// keypress like detachAllResult (e.g. after copying a worktree path).
+	flashMsg string
 }
 
 // NewWorktreeView creates a new worktree view.
@@ -109,9 +114,12 @@ func (v *WorktreeView) loadData() {
 func (v *WorktreeView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// Clear flash result on any key
+		// Clear flash results on any key
 		if v.detachAllResult != "" {
 			v.detachAllResult = ""
+		}
+		if v.flashMsg != "" {
+			v.flashMsg = ""
 		}
 		// Handle modal states first
 		if v.showDetachAllConfirm {
@@ -173,12 +181,12 @@ func (v *WorktreeView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "L":
 			// Lock selected worktree
 			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				v.lockWorktree(item.Path)
+				return v, v.lockWorktreeCmd(item.Path)
 			}
 		case "u":
 			// Unlock selected worktree
 			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				v.unlockWorktree(item.Path)
+				return v, v.unlockWorktreeCmd(item.Path)
 			}
 		case "p":
 			// Show prune confirmation
@@ -206,9 +214,9 @@ func (v *WorktreeView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "enter":
-			// Navigate to worktree path
+			// Copy worktree path to clipboard (see copyWorktreePath)
 			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				v.navigateToWorktree(item.Path)
+				v.copyWorktreePath(item.Path)
 			}
 		case "esc":
 			// Clear filter if active, otherwise do nothing
@@ -224,6 +232,11 @@ func (v *WorktreeView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case RefreshDoneMsg:
 		v.loading = false
+
+	case worktreeLockDoneMsg:
+		if msg.err != nil {
+			v.err = msg.err
+		}
 
 	case tea.WindowSizeMsg:
 		v.width = msg.Width
@@ -571,33 +584,43 @@ func (v *WorktreeView) pruneWorktrees() {
 }
 
 // lockWorktree locks a worktree.
-func (v *WorktreeView) lockWorktree(worktreePath string) {
-	err := v.services.Worktree.Lock(v.ctx(), v.repoPath, worktreePath)
-	if err != nil {
-		v.err = fmt.Errorf("failed to lock worktree: %w", err)
-		return
+func (v *WorktreeView) lockWorktreeCmd(worktreePath string) tea.Cmd {
+	return func() tea.Msg {
+		if err := v.services.Worktree.Lock(v.ctx(), v.repoPath, worktreePath); err != nil {
+			return worktreeLockDoneMsg{err: fmt.Errorf("failed to lock worktree: %w", err)}
+		}
+		v.loadData()
+		return worktreeLockDoneMsg{}
 	}
-	// Refresh data after lock
-	v.loadData()
 }
 
-// unlockWorktree unlocks a worktree.
-func (v *WorktreeView) unlockWorktree(worktreePath string) {
-	err := v.services.Worktree.Unlock(v.ctx(), v.repoPath, worktreePath)
-	if err != nil {
-		v.err = fmt.Errorf("failed to unlock worktree: %w", err)
-		return
+// unlockWorktreeCmd unlocks a worktree.
+func (v *WorktreeView) unlockWorktreeCmd(worktreePath string) tea.Cmd {
+	return func() tea.Msg {
+		if err := v.services.Worktree.Unlock(v.ctx(), v.repoPath, worktreePath); err != nil {
+			return worktreeLockDoneMsg{err: fmt.Errorf("failed to unlock worktree: %w", err)}
+		}
+		v.loadData()
+		return worktreeLockDoneMsg{}
 	}
-	// Refresh data after unlock
-	v.loadData()
 }
 
-// navigateToWorktree attempts to navigate to the worktree path.
-func (v *WorktreeView) navigateToWorktree(path string) {
-	cmd := exec.Command("cd", path)
-	if err := cmd.Run(); err != nil {
-		v.err = fmt.Errorf("failed to navigate to worktree: %w", err)
+// worktreeLockDoneMsg reports the outcome of an async lock/unlock operation.
+type worktreeLockDoneMsg struct {
+	err error
+}
+
+// copyWorktreePath copies the worktree path to the local clipboard. A TUI
+// process can't change its parent shell's working directory (exec.Command
+// spawns a child process, which has no effect on the caller once it exits),
+// so the closest useful "navigate to worktree" action is putting the path
+// where the user can paste it into their own shell.
+func (v *WorktreeView) copyWorktreePath(path string) {
+	if err := clipboard.Copy(path); err != nil {
+		v.flashMsg = fmt.Sprintf("✗ %v", err)
+		return
 	}
+	v.flashMsg = fmt.Sprintf("✓ Copied path to clipboard: %s", path)
 }
 
 // renderWorktreeItem renders a single worktree item in the list.
@@ -684,7 +707,7 @@ func (v *WorktreeView) View() string {
 		s.WriteString(v.filter.View())
 	} else {
 		// Show filter hint first line
-		s.WriteString(th.Help.Render(" Press / to search • ↑/k: Select • Enter: Navigate • n: Create • d: Remove • a: Merge (agent) • R: Rebase (agent) • m: MR • p: Prune • D: Detach All "))
+		s.WriteString(th.Help.Render(" Press / to search • ↑/k: Select • Enter: Copy path • n: Create • d: Remove • a: Merge (agent) • R: Rebase (agent) • m: MR • p: Prune • D: Detach All "))
 		s.WriteString("\n\n")
 		s.WriteString(v.filter.View())
 	}
@@ -708,6 +731,17 @@ func (v *WorktreeView) View() string {
 			s.WriteString(th.DashboardAccentStyle.Render(" " + v.detachAllResult))
 		} else {
 			s.WriteString(th.DashboardErrorStyle.Render(" " + v.detachAllResult))
+		}
+		s.WriteString("\n")
+	}
+
+	// Generic flash (e.g. clipboard copy result)
+	if v.flashMsg != "" {
+		s.WriteString("\n")
+		if strings.HasPrefix(v.flashMsg, "✓") {
+			s.WriteString(th.DashboardAccentStyle.Render(" " + v.flashMsg))
+		} else {
+			s.WriteString(th.DashboardErrorStyle.Render(" " + v.flashMsg))
 		}
 		s.WriteString("\n")
 	}
@@ -805,7 +839,7 @@ func (v *WorktreeView) ShortHelp() string {
 	if v.showDetachAllConfirm {
 		return "y: Confirm  n/Esc: Cancel"
 	}
-	return "/: Search  ↑↓: Navigate  Enter: Navigate  n: Create  d: Remove  a: Merge (agent)  R: Rebase (agent)  m: Create MR  p: Prune  D: Detach All"
+	return "/: Search  ↑↓: Navigate  Enter: Copy path  n: Create  d: Remove  a: Merge (agent)  R: Rebase (agent)  m: Create MR  p: Prune  D: Detach All"
 }
 
 // fitStr pads or truncates s to exactly n runes.
@@ -841,7 +875,7 @@ func (v *WorktreeView) KeyBindings() []components.KeyBinding {
 		{Key: "/", Description: "Activate search filter"},
 		{Key: "↑/k", Description: "Navigate up"},
 		{Key: "↓/j", Description: "Navigate down"},
-		{Key: "Enter", Description: "Navigate to worktree"},
+		{Key: "Enter", Description: "Copy worktree path to clipboard"},
 		{Key: "n", Description: "Create new worktree"},
 		{Key: "d", Description: "Remove selected worktree"},
 		{Key: "L", Description: "Lock selected worktree"},

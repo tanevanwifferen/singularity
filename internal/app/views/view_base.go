@@ -53,17 +53,6 @@ func (b *viewBase) ctx() context.Context {
 	return context.Background()
 }
 
-// maxAgents returns the engine's configured max-concurrent cap or 0 when
-// the service layer is unavailable. Lets view code stay compact at call
-// sites that previously had `eng.MaxAgents()` returning just an int.
-func (b *viewBase) maxAgents() int {
-	if b.services == nil {
-		return 0
-	}
-	n, _ := b.services.Agent.MaxAgents(b.ctx())
-	return n
-}
-
 // agentStats returns the engine-wide stats snapshot or a zero value on
 // error. Mirrors the historic `eng.Stats()` int-returning shape.
 func (b *viewBase) agentStats() service.EngineStats {

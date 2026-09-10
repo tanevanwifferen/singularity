@@ -60,6 +60,7 @@ type AgentView struct {
 	viewBase
 	contextFiles []string // Files to inject into agent prompts
 	agents       []AgentInfo
+	maxAgentsCap int // cached engine max-concurrent cap, refreshed alongside agents
 	filter       *components.Filter[AgentInfo]
 	loading      bool
 	err          error
@@ -310,6 +311,9 @@ func (v *AgentView) loadAgentsOnce() {
 		v.err = err
 		v.loading = false
 		return
+	}
+	if n, err := v.services.Agent.MaxAgents(v.ctx()); err == nil {
+		v.maxAgentsCap = n
 	}
 	v.agents = make([]AgentInfo, 0, len(agentList))
 
@@ -1118,7 +1122,7 @@ func (v *AgentView) View() string {
 			}
 		}
 		s.WriteString(th.StatsStyle.Render(fmt.Sprintf(" Agents: %d/%d active  %d done  %d errors",
-			active, v.maxAgents(), done, errored)))
+			active, v.maxAgentsCap, done, errored)))
 	}
 
 	// Help hint

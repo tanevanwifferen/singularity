@@ -23,6 +23,11 @@ type RebaseView struct {
 	loading bool
 	err     error
 
+	// rebaseInProgress caches Rebase.Status, refreshed in loadData —
+	// View() and key handlers must never make a live daemon call, or they
+	// block the UI goroutine.
+	rebaseInProgress bool
+
 	// Branch selection state
 	showBranchSelect bool
 	branches         []service.BranchInfo
@@ -85,6 +90,7 @@ func (v *RebaseView) loadData() {
 	}
 	v.repo = repo
 	v.branches = repo.Branches
+	v.rebaseInProgress = v.rebaseInProgressLive()
 
 	// If we have a base branch, load commits
 	if v.baseBranch != "" && v.repo.CurrentBranch != "" {
@@ -228,10 +234,16 @@ func (v *RebaseView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			v.err = msg.Error
 		}
-		// Refresh data after rebase
-		go func() {
+		// Refresh data after rebase. Must run as a tea.Cmd (not a bare
+		// goroutine) — loadData mutates view fields that Update/View also
+		// read on the main goroutine, and a bare goroutine would race them.
+		// Deliberately does not set v.loading — this is a silent background
+		// refresh, and flipping loading would hide the just-shown
+		// success/error message behind the "Loading..." placeholder.
+		return v, func() tea.Msg {
 			v.loadData()
-		}()
+			return RefreshDoneMsg{}
+		}
 
 	case tea.WindowSizeMsg:
 		v.width = msg.Width
@@ -360,8 +372,16 @@ func (v *RebaseView) moveCommitDown() {
 	v.cursor++
 }
 
-// isRebaseInProgress checks if a rebase is currently in progress.
+// isRebaseInProgress returns the cached rebase-in-progress state, refreshed
+// by loadData. Safe to call from View() and synchronous key handlers.
 func (v *RebaseView) isRebaseInProgress() bool {
+	return v.rebaseInProgress
+}
+
+// rebaseInProgressLive makes a live Rebase.Status call. Only ever call this
+// from inside a tea.Cmd closure (already running off the UI goroutine) —
+// never from Update() or View() directly.
+func (v *RebaseView) rebaseInProgressLive() bool {
 	inProgress, _, err := v.services.Rebase.Status(v.ctx(), v.repoPath)
 	if err != nil {
 		return false
@@ -405,8 +425,10 @@ func (v *RebaseView) executeRebase() tea.Cmd {
 				return RebaseCompleteMsg{Success: false, Error: fmt.Errorf("conflict detected")}
 			}
 
-			// Check if rebase is already in progress
-			if v.isRebaseInProgress() {
+			// Check if rebase is already in progress. This runs inside the
+			// async closure (off the UI goroutine), so a live check is safe
+			// and gives an accurate answer instead of the pre-attempt cache.
+			if v.rebaseInProgressLive() {
 				// There's already a rebase in progress, maybe from a previous session
 				tea.Println(RebaseOutputMsg{Output: "A rebase is already in progress..."})
 				return RebaseCompleteMsg{Success: false, Error: fmt.Errorf("rebase already in progress")}

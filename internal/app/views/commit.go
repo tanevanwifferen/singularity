@@ -1000,6 +1000,26 @@ func (v *CommitView) View() string {
 	return v.renderStagingView(&s, th)
 }
 
+// fileSectionViewport returns the visible [start, end) range for one of the
+// two file lists (section 0 = staged, 1 = unstaged) so neither list can grow
+// past the terminal height. The active section (the one the cursor is in)
+// scrolls to keep the cursor visible; the inactive section is capped to a
+// small fixed window since it has no cursor of its own to track.
+func (v *CommitView) fileSectionViewport(section, count int) (start, end int) {
+	const inactiveMax = 6
+	if v.activeSection != section {
+		if count > inactiveMax {
+			return 0, inactiveMax
+		}
+		return 0, count
+	}
+	// Chrome covers everything else in renderStagingView: header, summary,
+	// separators, both section headers, the other section's capped list,
+	// and the footer.
+	const chrome = 18
+	return calcViewport(v.height, chrome, v.selectedIndex, count)
+}
+
 // renderStagingView renders the staging area view
 func (v *CommitView) renderStagingView(s *strings.Builder, th theme.Theme) string {
 	// Calculate summary stats
@@ -1055,7 +1075,12 @@ func (v *CommitView) renderStagingView(s *strings.Builder, th theme.Theme) strin
 	if stagedCount == 0 {
 		s.WriteString(th.Help.Render(" No staged changes - use Space to stage files"))
 	} else {
-		for i, f := range v.stagedFiles {
+		stagedStart, stagedEnd := v.fileSectionViewport(0, stagedCount)
+		if stagedStart > 0 {
+			s.WriteString(th.Help.Render(fmt.Sprintf("  ↑ %d more above", stagedStart)) + "\n")
+		}
+		for i := stagedStart; i < stagedEnd; i++ {
+			f := v.stagedFiles[i]
 			selected := v.activeSection == 0 && i == v.selectedIndex
 			prefix := "  "
 			if selected {
@@ -1087,6 +1112,9 @@ func (v *CommitView) renderStagingView(s *strings.Builder, th theme.Theme) strin
 
 			s.WriteString(line + "\n")
 		}
+		if stagedEnd < stagedCount {
+			s.WriteString(th.Help.Render(fmt.Sprintf("  ↓ %d more below", stagedCount-stagedEnd)) + "\n")
+		}
 	}
 
 	s.WriteString("\n")
@@ -1097,7 +1125,12 @@ func (v *CommitView) renderStagingView(s *strings.Builder, th theme.Theme) strin
 	if unstagedCount == 0 {
 		s.WriteString(th.Help.Render(" No unstaged changes - working tree is clean"))
 	} else {
-		for i, f := range v.unstagedFiles {
+		unstagedStart, unstagedEnd := v.fileSectionViewport(1, unstagedCount)
+		if unstagedStart > 0 {
+			s.WriteString(th.Help.Render(fmt.Sprintf("  ↑ %d more above", unstagedStart)) + "\n")
+		}
+		for i := unstagedStart; i < unstagedEnd; i++ {
+			f := v.unstagedFiles[i]
 			selected := v.activeSection == 1 && i == v.selectedIndex
 			prefix := "  "
 			if selected {
@@ -1128,6 +1161,9 @@ func (v *CommitView) renderStagingView(s *strings.Builder, th theme.Theme) strin
 			}
 
 			s.WriteString(line + "\n")
+		}
+		if unstagedEnd < unstagedCount {
+			s.WriteString(th.Help.Render(fmt.Sprintf("  ↓ %d more below", unstagedCount-unstagedEnd)) + "\n")
 		}
 	}
 
