@@ -464,7 +464,7 @@ func (v *ApprovalView) executeActions() tea.Cmd {
 
 	return func() tea.Msg {
 		if svc == nil {
-			return approvalExecDoneMsg{err: service.ErrUnavailable}
+			return approvalExecDoneMsg{err: fmt.Errorf("jira approval view not wired to the service layer: %w", service.ErrUnavailable)}
 		}
 		results := make([]ActionResult, 0, len(selected))
 

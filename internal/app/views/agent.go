@@ -194,12 +194,28 @@ func (v *AgentView) outputHeight() int {
 	return h
 }
 
+// SetServices wires the service container into the view and into every child
+// component that makes its own service calls. viewBase.SetServices alone is
+// not enough: the Jira picker and the approval view hold their own reference,
+// and a picker left unwired answers every search with ErrUnavailable.
+func (v *AgentView) SetServices(s *service.Services) {
+	v.viewBase.SetServices(s)
+	v.jiraPicker.SetServices(s)
+	if v.approvalView != nil {
+		v.approvalView.SetServices(s)
+	}
+}
+
 // SetJiraConfig wires Jira configuration so the Jira ticket picker is available.
+// The picker is rebuilt here, which happens after the router has already wired
+// services (app init) and again on every config reload, so it has to be handed
+// the current services container each time.
 func (v *AgentView) SetJiraConfig(cfg config.JiraConfig) {
 	v.jiraCfg = cfg
 	v.jiraAgentMeta = make(map[string]*jiraAgentMeta)
 	v.jiraPicker = NewJiraPickerState(cfg)
 	if v.jiraPicker != nil {
+		v.jiraPicker.SetServices(v.services)
 		v.jiraPicker.SetSize(v.width, v.height)
 	}
 }
@@ -808,6 +824,7 @@ func (v *AgentView) openApprovalView() {
 		return
 	}
 	v.approvalView = NewApprovalView(actions)
+	v.approvalView.SetServices(v.services)
 	v.approvalView.SetSize(v.width, v.height)
 	v.approvalAgent = v.selectedAgent.ID
 }

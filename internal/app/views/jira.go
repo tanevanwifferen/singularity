@@ -165,7 +165,7 @@ func (v *JiraView) defaultJQL() string {
 func (v *JiraView) fetchCmd(query string) tea.Cmd {
 	return func() tea.Msg {
 		if v.services == nil {
-			return jiraLoadedMsg{err: service.ErrUnavailable}
+			return jiraLoadedMsg{err: fmt.Errorf("jira view not wired to the service layer: %w", service.ErrUnavailable)}
 		}
 		if issueKeyRe.MatchString(strings.TrimSpace(query)) {
 			issue, err := v.services.Jira.GetIssue(v.ctx(), strings.TrimSpace(query))
@@ -265,6 +265,7 @@ func (v *JiraView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if len(msg.actions) > 0 {
 				v.approvalView = NewApprovalView(msg.actions)
+				v.approvalView.SetServices(v.services)
 				v.approvalView.SetSize(v.width, v.height)
 				return v, nil
 			}
