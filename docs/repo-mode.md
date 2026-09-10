@@ -193,6 +193,7 @@ All keybindings can be overridden in `~/.config/singularity/keybinds.json`.
 | `M` | Create MRs for all repos in workflow |
 | `d` | Open diff view for selected workflow |
 | `D` | Delete / clean up selected workflow |
+| `f` | Start an adversarial review flow for selected workflow |
 | `I` | Import workflow |
 | `r` | Refresh |
 | `/` | Filter |
