@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/oneshot"
@@ -232,8 +233,38 @@ func tailOutput(out []byte) string {
 // a real git repository to exercise cleanupWorktree's own effect.
 var cleanupWorktreeFn = cleanupWorktree
 
+// repoLocks serializes git worktree/branch mutations per source repo. Shutdown
+// (engine.go) now terminates every agent concurrently, and agents commonly
+// share a sourceRepoPath (setupWorktree above sets it from whatever repo the
+// caller pointed the agent at, and nothing stops two agents pointing at the
+// same one). Without this lock, concurrent `git worktree remove` / `worktree
+// prune` / `branch -D` invocations against the same .git directory race on
+// git's own lock files (index.lock, HEAD.lock) and on prune racing a
+// sibling's in-flight remove; the failure is swallowed by the ignored
+// *Cmd.Run() errors below, so the only symptom is an intermittently orphaned
+// worktree or stray branch after what looked like a clean shutdown.
+var repoLocksMu sync.Mutex
+var repoLocks = map[string]*sync.Mutex{}
+
+// lockRepo returns the mutex serializing git mutations for repoPath, creating
+// it on first use.
+func lockRepo(repoPath string) *sync.Mutex {
+	repoLocksMu.Lock()
+	defer repoLocksMu.Unlock()
+	l, ok := repoLocks[repoPath]
+	if !ok {
+		l = &sync.Mutex{}
+		repoLocks[repoPath] = l
+	}
+	return l
+}
+
 // cleanupWorktree removes the worktree and deletes the temporary branch.
 func cleanupWorktree(repoPath, wtPath, branch string) {
+	l := lockRepo(repoPath)
+	l.Lock()
+	defer l.Unlock()
+
 	// Remove the worktree (force in case of uncommitted files)
 	rmCmd := exec.Command("git", "-C", repoPath, "worktree", "remove", "--force", wtPath)
 	rmCmd.Run()
