@@ -761,7 +761,7 @@ func TestFindingsBlockShowsLatestVerdict(t *testing.T) {
 	pane = v.renderTreePane(90)
 	for _, want := range []string{
 		"round 3: ", "reject",
-		"so the cap is not a cap.",
+		"the jitter is applied after the cap",
 		"[major] internal/retry/backoff_0.go:10: finding 0:",
 		"[major] internal/retry/backoff_1.go:11: finding 1:",
 		"so a large jitter escapes it",
@@ -778,15 +778,68 @@ func TestFindingsBlockShowsLatestVerdict(t *testing.T) {
 // When the full verdict does not fit, the block falls back to one line per
 // finding so every finding is at least visible, and f expands it over the
 // tree, where j/k scroll it and every line is reachable.
+// noVerdictTree is testTree with every verdict removed: the tree of a
+// flow whose first review has not landed yet.
+func noVerdictTree() *service.FlowTree {
+	tree := testTree()
+	for i := range tree.Nodes {
+		tree.Nodes[i].Verdict = nil
+	}
+	return tree
+}
+
+// A pane too short for the blocks drops them, and with them their claim on
+// j/k: the keys move the tree cursor as if nothing were expanded, rather
+// than scrolling a block that is not on screen.
+func TestExpandedBlockDroppedReleasesKeys(t *testing.T) {
+	v := flowsViewFor(t, testFlow(), testTree(), 100, 24)
+	v.focus = focusFlowTree
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if v.expanded != flowBlockFindings {
+		t.Fatalf("f must expand the findings block")
+	}
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if v.blockScroll != 1 || v.treeCursor != 0 {
+		t.Fatalf("with the block shown j scrolls it: scroll %d, cursor %d", v.blockScroll, v.treeCursor)
+	}
+
+	// Shrink the terminal until the blocks are gone.
+	v.Update(tea.WindowSizeMsg{Width: 100, Height: 8})
+	if strings.Contains(v.renderTreePane(60), "Findings") {
+		t.Fatalf("at height 8 the blocks must be dropped:\n%s", v.renderTreePane(60))
+	}
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if v.treeCursor != 1 {
+		t.Errorf("with the block dropped j must move the tree cursor, got cursor %d scroll %d", v.treeCursor, v.blockScroll)
+	}
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if v.treeCursor != 0 {
+		t.Errorf("with the block dropped k must move the tree cursor, got cursor %d", v.treeCursor)
+	}
+
+	// Drawing the pane without the blocks collapsed them for good: grown
+	// back, nothing is expanded until f is pressed again, and then the
+	// block takes j/k back.
+	v.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	if v.expanded != flowBlockNone {
+		t.Fatalf("a dropped block stays collapsed, got expanded=%v", v.expanded)
+	}
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if v.expanded != flowBlockFindings || v.blockScroll != 1 || v.treeCursor != 0 {
+		t.Errorf("re-expanded, j scrolls the block: expanded=%v scroll %d cursor %d", v.expanded, v.blockScroll, v.treeCursor)
+	}
+}
+
 func TestFindingsBlockCompactsThenExpands(t *testing.T) {
-	v := flowsViewFor(t, testFlow(), verboseTree(6), 100, 20)
+	v := flowsViewFor(t, testFlow(), verboseTree(6), 100, 24)
 	pane := v.renderTreePane(60)
 	for i := 0; i < 6; i++ {
 		if want := fmt.Sprintf("[major] internal/retry/backoff_%d.go:%d:", i, 10+i); !strings.Contains(pane, want) {
 			t.Errorf("compact findings block missing %q:\n%s", want, pane)
 		}
 	}
-	if !strings.Contains(pane, "f to expand") {
+	if !strings.Contains(pane, "(f: expand)") {
 		t.Errorf("compact block must say how to expand:\n%s", pane)
 	}
 	if strings.Contains(pane, "so a large jitter escapes it") {
@@ -795,10 +848,10 @@ func TestFindingsBlockCompactsThenExpands(t *testing.T) {
 
 	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
 	pane = v.renderTreePane(60)
-	if !v.findingsExpanded || !strings.Contains(pane, "f: collapse") {
+	if v.expanded != flowBlockFindings || !strings.Contains(pane, "f: collapse") {
 		t.Fatalf("f must expand the findings block:\n%s", pane)
 	}
-	if !strings.Contains(pane, "so a large jitter escapes it") {
+	if !strings.Contains(pane, "jitter term is added after the cap is applied") {
 		t.Errorf("expanded block must show the wrapped detail:\n%s", pane)
 	}
 	if !strings.Contains(pane, "more line(s) below") {
@@ -812,12 +865,134 @@ func TestFindingsBlockCompactsThenExpands(t *testing.T) {
 	if !strings.Contains(seen.String(), "backoff_5.go:15: finding 5:") {
 		t.Errorf("scrolling with j must reach the last finding")
 	}
-	if v.findingsScroll > 40 {
-		t.Errorf("scroll offset %d was not clamped to the block", v.findingsScroll)
+	if v.blockScroll > 40 {
+		t.Errorf("scroll offset %d was not clamped to the block", v.blockScroll)
+	}
+	// At the end of the scroll the block is full: the last page draws every
+	// budgeted line, with no marker and no blank slot.
+	pane = v.renderTreePane(60)
+	if strings.Contains(pane, "more line(s) below") {
+		t.Errorf("scrolled to the end, no below marker is due:\n%s", pane)
+	}
+	if !strings.Contains(pane, "backoff_5.go:15: finding 5:") {
+		t.Errorf("scrolled to the end, the last finding must be on screen:\n%s", pane)
+	}
+	for _, l := range strings.Split(strings.TrimSuffix(pane, "\n"), "\n") {
+		if strings.TrimSpace(l) == "" {
+			t.Errorf("scrolled to the end, no slot of the block is blank:\n%s", pane)
+			break
+		}
 	}
 	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
-	if v.findingsExpanded || v.findingsScroll != 0 {
-		t.Error("f again must collapse the block and reset its scroll")
+	if v.expanded != flowBlockRequest || v.blockScroll != 0 {
+		t.Error("f again must move on to the request block and reset the scroll")
+	}
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if v.expanded != flowBlockNone {
+		t.Error("f a third time must collapse both blocks")
+	}
+}
+
+// The request block can be read in full too: f a second time expands it
+// over the tree, where j/k scroll it, and its header says so while it is
+// clipped.
+func TestRequestBlockExpandsAndScrolls(t *testing.T) {
+	f := testFlow()
+	f.Goal = strings.Repeat("add a retry backoff helper with a cap and jitter, ", 24) + "done."
+	v := flowsViewFor(t, f, verboseTree(6), 100, 20)
+	pane := v.renderTreePane(60)
+	if !strings.Contains(pane, "Request  (f f: expand)") {
+		t.Errorf("a clipped request must say how to expand:\n%s", pane)
+	}
+	if strings.Contains(pane, "done.") {
+		t.Errorf("the goal does not fit at height 20 with the tree in place:\n%s", pane)
+	}
+
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	pane = v.renderTreePane(60)
+	if !strings.Contains(pane, "Request  (f: expand)") {
+		t.Errorf("with the findings expanded, one more f expands the request:\n%s", pane)
+	}
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	pane = v.renderTreePane(60)
+	if v.expanded != flowBlockRequest || !strings.Contains(pane, "Request  (f: collapse  j/k: scroll)") {
+		t.Fatalf("f f must expand the request block:\n%s", pane)
+	}
+	if !strings.Contains(pane, "more line(s) below") {
+		t.Errorf("the goal exceeds the pane even expanded, so a below marker is due:\n%s", pane)
+	}
+	if !strings.Contains(pane, "round 3: ") || !strings.Contains(pane, "6 finding(s)") {
+		t.Errorf("the findings block keeps its decision line and count while the request is expanded:\n%s", pane)
+	}
+	for i := 0; i < 40; i++ {
+		v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	}
+	pane = v.renderTreePane(60)
+	if !strings.Contains(pane, "done.") || strings.Contains(pane, "more line(s) below") {
+		t.Errorf("scrolling with j must reach the end of the goal:\n%s", pane)
+	}
+	if got := lipgloss.Height(v.View()); got > 20 {
+		t.Errorf("expanded request: view is %d lines tall:\n%s", got, v.View())
+	}
+}
+
+// Before a verdict lands, f skips the empty findings block and expands the
+// request directly, so the request's hint says one f, not two.
+func TestRequestHintBeforeFirstVerdict(t *testing.T) {
+	f := testFlow()
+	f.Goal = strings.Repeat("add a retry backoff helper with a cap and jitter, ", 24) + "done."
+	f.Rounds = nil
+	root := &service.FlowTree{FlowID: "f1", Nodes: []service.FlowTreeNode{
+		{ID: "f1", Kind: service.FlowNodeFlow, Label: "smoke: retry backoff helper", State: "running"},
+	}}
+	v := flowsViewFor(t, f, root, 100, 20)
+	pane := v.renderTreePane(60)
+	if !strings.Contains(pane, "Request  (f: expand)") || strings.Contains(pane, "f f: expand") {
+		t.Errorf("without a verdict a single f expands the request:\n%s", pane)
+	}
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if v.expanded != flowBlockRequest {
+		t.Errorf("one f expanded %v, want the request block", v.expanded)
+	}
+}
+
+// In a pane too narrow for a header's key hint the hint is dropped rather
+// than clipped mid-word or wrapped onto a second row, and the decision line
+// with its styled decision still fits.
+func TestBlockHeadersFitNarrowPane(t *testing.T) {
+	f := testFlow()
+	f.Goal = strings.Repeat("add a retry backoff helper with a cap and jitter, ", 6)
+	v := flowsViewFor(t, f, verboseTree(6), 50, 20)
+	for _, expanded := range []flowBlock{flowBlockNone, flowBlockFindings, flowBlockRequest} {
+		v.expanded = expanded
+		pane := v.renderTreePane(20)
+		for _, l := range strings.Split(pane, "\n") {
+			if lw := lipgloss.Width(l); lw > 20 {
+				t.Errorf("expanded=%v: line %q is %d wide in a 20-column pane", expanded, l, lw)
+			}
+		}
+		if !strings.Contains(pane, " Findings\n") || !strings.Contains(pane, " Request\n") {
+			t.Errorf("expanded=%v: a hint that cannot fit is dropped, not clipped:\n%s", expanded, pane)
+		}
+		if !strings.Contains(pane, "round 3: reject") {
+			t.Errorf("expanded=%v: the decision line survives the narrow pane:\n%s", expanded, pane)
+		}
+	}
+	v.expanded = flowBlockFindings
+	if !strings.Contains(v.renderTreePane(60), "Findings  (f: collapse  j/k: scroll)") {
+		t.Errorf("the hint returns where it fits:\n%s", v.renderTreePane(60))
+	}
+}
+
+// A flow that recorded no goal but narrowed a review focus still shows the
+// focus, rather than the missing-goal placeholder.
+func TestRequestBlockShowsFocusWithoutGoal(t *testing.T) {
+	f := testFlow()
+	f.Goal = ""
+	f.ReviewGoal = "focus on overflow cases"
+	pane := flowsViewFor(t, f, testTree(), 140, 30).renderTreePane(90)
+	if !strings.Contains(pane, "Review focus: focus on overflow cases") || strings.Contains(pane, "(no goal recorded)") {
+		t.Errorf("the review focus is the request when there is no goal:\n%s", pane)
 	}
 }
 
@@ -840,49 +1015,208 @@ func TestFindingsBlockPlaceholders(t *testing.T) {
 	if !strings.Contains(pane, "round 3: ") || !strings.Contains(pane, "(no summary or findings)") {
 		t.Errorf("bare reject: want the decision and a neutral placeholder:\n%s", pane)
 	}
-	if strings.Contains(pane, "accepted") {
+	if strings.Contains(pane, "accepted with no findings") {
 		t.Errorf("a reject must not read as accepted:\n%s", pane)
 	}
 }
 
 // The blocks come out of the tree's height budget: the whole view stays
-// within v.height at every size, the tree keeps its minimum rows, and the
-// viewport shrinks by exactly the lines the blocks take.
+// within v.height at every size the view supports, fills it exactly when
+// there is more to show than fits, the tree keeps its minimum rows, and a
+// budgeted line is a line of text — never a bare "+N more" marker on its
+// own.
 func TestTreePaneFitsHeightWithBlocks(t *testing.T) {
 	f := testFlow()
 	f.Goal = strings.Repeat("add a retry backoff helper with a cap and jitter, ", 6)
 	f.ReviewGoal = "focus on overflow cases"
-	for _, h := range []int{12, 16, 20, 24, 30} {
-		for _, expanded := range []bool{false, true} {
-			v := flowsViewFor(t, f, verboseTree(6), 100, h)
-			v.findingsExpanded = expanded
-			out := v.View()
-			if got := lipgloss.Height(out); got > h {
-				t.Errorf("height %d expanded=%v: view is %d lines tall:\n%s", h, expanded, got, out)
-			}
-			pane := v.renderTreePane(60)
-			treeRows := strings.Count(pane, "├──") + strings.Count(pane, "└──") + strings.Count(pane, " f1  ")
-			minRows := flowTreeMinRows
-			if expanded {
-				minRows = flowTreeMinRowsExpanded
-			}
-			if treeRows < minRows {
-				t.Errorf("height %d expanded=%v: tree shows %d rows, want at least %d:\n%s", h, expanded, treeRows, minRows, pane)
+	// The placeholder states have lines of their own — "No rounds yet",
+	// "(no review verdict yet)", "(no summary or findings)" — that must
+	// fit the pane like everything else: a flow that has just started, or
+	// is in round 1, is a normal thing to look at.
+	trees := map[string]*service.FlowTree{
+		"verdict":    verboseTree(6),
+		"no-verdict": noVerdictTree(),
+		"empty":      {FlowID: "f1"},
+	}
+	// Height 8 is the floor the list pane sets, with its four-row minimum.
+	// Width 40 pins the tree pane at its 20-column floor, 55 has it at 22.
+	for h := 8; h <= 30; h++ {
+		for _, w := range []int{40, 55, 60, 70, 76, 80, 100} {
+			for _, expanded := range []flowBlock{flowBlockNone, flowBlockFindings, flowBlockRequest} {
+				for name, tree := range trees {
+					v := flowsViewFor(t, f, tree, w, h)
+					v.expanded = expanded
+					out := v.View()
+					treeW := max(w-v.listWidth()-1, 20)
+					pane := v.renderTreePane(treeW)
+					// The view never exceeds the terminal.
+					if got := lipgloss.Height(out); got > h {
+						t.Errorf("%s tree, height %d width %d expanded=%v: view is %d lines tall:\n%s", name, h, w, expanded, got, out)
+					}
+					// Every line of the pane — header, block chrome, markers,
+					// placeholders, rows — is at most the pane wide, so View's
+					// Width(treeW) never wraps one into two rows the budget
+					// did not charge.
+					for _, l := range strings.Split(pane, "\n") {
+						if lw := lipgloss.Width(l); lw > treeW {
+							t.Errorf("%s tree, height %d width %d expanded=%v: line %q is %d wide in a %d-column pane", name, h, w, expanded, l, lw, treeW)
+						}
+					}
+				}
+				v := flowsViewFor(t, f, verboseTree(6), w, h)
+				v.expanded = expanded
+				out := v.View()
+				treeW := max(w-v.listWidth()-1, 20)
+				pane := v.renderTreePane(treeW)
+				// While anything is clipped, the view fills the terminal
+				// exactly: no rows left blank while the blocks are being cut
+				// for want of them.
+				clipped := strings.Contains(pane, "… +") || strings.Contains(pane, " nodes\n")
+				if got := lipgloss.Height(out); clipped && got != h {
+					t.Errorf("height %d width %d expanded=%v: view is %d lines tall:\n%s", h, w, expanded, got, out)
+				}
+				treeRows := strings.Count(pane, "├──") + strings.Count(pane, "└──") + strings.Count(pane, " f1  ")
+				// Below two headers and a line each the blocks cannot shrink
+				// further: they hand the tree rows back one at a time, and
+				// disappear before the tree loses its last row.
+				minRows := min(flowTreeMinRows, max(h-v.treeChromeLines(true)-4, 1))
+				if expanded != flowBlockNone {
+					minRows = flowTreeMinRowsExpanded
+				}
+				if treeRows < minRows {
+					t.Errorf("height %d width %d expanded=%v: tree shows %d rows, want at least %d:\n%s", h, w, expanded, treeRows, minRows, pane)
+				}
+				for _, l := range strings.Split(pane, "\n") {
+					if strings.HasPrefix(strings.TrimSpace(l), "…") && !strings.Contains(l, "more") {
+						t.Errorf("height %d width %d: a marker with nothing above it:\n%s", h, w, pane)
+					}
+				}
+				if strings.Contains(pane, " Request\n … +") || strings.Contains(pane, "expand)\n … +") {
+					t.Errorf("height %d width %d expanded=%v: a block shows a marker and no text:\n%s", h, w, expanded, pane)
+				}
+				if strings.Contains(pane, "reject\n … +") {
+					t.Errorf("height %d width %d expanded=%v: the findings body is a marker and no text:\n%s", h, w, expanded, pane)
+				}
 			}
 		}
 	}
 
-	v := flowsViewFor(t, f, verboseTree(6), 100, 30)
-	pane := v.renderTreePane(60)
-	requestMax, findingsMax := v.blockBudget(len(v.treeRows()), v.flows[0], 60)
-	blockLines := 2 + requestMax + findingsMax
-	wantRows := 30 - flowTreeChromeLines - blockLines
-	treeRows := strings.Count(pane, "├──") + strings.Count(pane, "└──") + 1
-	if treeRows != wantRows {
-		t.Errorf("tree shows %d rows, want %d = height - chrome - %d block lines:\n%s", treeRows, wantRows, blockLines, pane)
+	// Empty FlowTree (no rounds yet) with narrow pane: the "No rounds yet"
+	// placeholder must fit and not wrap the view past v.height.
+	for h := 8; h <= 20; h++ {
+		for _, w := range []int{50, 55, 60} {
+			emptyTree := &service.FlowTree{FlowID: "f1", Nodes: []service.FlowTreeNode{
+				{ID: "f1", Kind: service.FlowNodeFlow, Label: "test flow", State: "running"},
+			}}
+			v := flowsViewFor(t, f, emptyTree, w, h)
+			out := v.View()
+			treeW := max(w-v.listWidth()-1, 20)
+			pane := v.renderTreePane(treeW)
+			if got := lipgloss.Height(out); got > h {
+				t.Errorf("empty tree: height %d width %d: view is %d lines tall:\n%s", h, w, got, out)
+			}
+			for _, l := range strings.Split(pane, "\n") {
+				if lw := lipgloss.Width(l); lw > treeW {
+					t.Errorf("empty tree: height %d width %d: line %q is %d wide in a %d-column pane", h, w, l, lw, treeW)
+				}
+			}
+		}
 	}
-	if !strings.Contains(pane, fmt.Sprintf("of %d nodes", len(v.treeRows()))) {
-		t.Errorf("a clipped tree must carry the footer:\n%s", pane)
+
+	// FlowTree with rounds but no verdict (no review verdict yet) with narrow
+	// pane: the "(no review verdict yet)" placeholder must fit and not wrap
+	// the view past v.height.
+	noVerdictTree := testTree()
+	for _, node := range noVerdictTree.Nodes {
+		if node.Kind == service.FlowNodeRound {
+			node.Verdict = nil
+		}
+	}
+	for h := 8; h <= 20; h++ {
+		for _, w := range []int{50, 55, 60} {
+			v := flowsViewFor(t, f, noVerdictTree, w, h)
+			out := v.View()
+			treeW := max(w-v.listWidth()-1, 20)
+			pane := v.renderTreePane(treeW)
+			if got := lipgloss.Height(out); got > h {
+				t.Errorf("no verdict: height %d width %d: view is %d lines tall:\n%s", h, w, got, out)
+			}
+			for _, l := range strings.Split(pane, "\n") {
+				if lw := lipgloss.Width(l); lw > treeW {
+					t.Errorf("no verdict: height %d width %d: line %q is %d wide in a %d-column pane", h, w, l, lw, treeW)
+				}
+			}
+		}
+	}
+
+	// With a flash line on screen the view still fits, one row shorter.
+	v := flowsViewFor(t, f, verboseTree(6), 100, 16)
+	v.statusMsg = "Flow f1 refused: busy"
+	if got := lipgloss.Height(v.View()); got != 16 {
+		t.Errorf("with a flash line the view is %d lines tall:\n%s", got, v.View())
+	}
+
+	// The viewport shrinks by exactly the lines the blocks take, and the
+	// footer is charged only when the rows overflow: at height 24 they do,
+	// at 30 they all fit and no row is wasted on it.
+	for _, h := range []int{24, 30} {
+		v = flowsViewFor(t, f, verboseTree(6), 100, h)
+		pane := v.renderTreePane(60)
+		lines := strings.Split(strings.TrimSuffix(pane, "\n"), "\n")
+		rootAt := -1
+		for i, l := range lines {
+			if strings.Contains(l, "▾ f1 ") {
+				rootAt = i
+				break
+			}
+		}
+		if rootAt < 0 {
+			t.Fatalf("height %d: no tree root in pane:\n%s", h, pane)
+		}
+		blockLines := rootAt - 1
+		total := len(v.treeRows())
+		footer := strings.Contains(lines[len(lines)-1], fmt.Sprintf("of %d nodes", total))
+		treeRows := len(lines) - rootAt
+		if footer {
+			treeRows--
+		}
+		wantRows := h - v.treeChromeLines(footer) - blockLines
+		if !footer && wantRows < total {
+			t.Errorf("height %d: %d rows in %d lines of room, but no footer:\n%s", h, total, wantRows, pane)
+		}
+		if footer && treeRows != wantRows {
+			t.Errorf("height %d: tree shows %d rows, want %d = height - chrome - %d block lines:\n%s", h, treeRows, wantRows, blockLines, pane)
+		}
+		if !footer && treeRows != total {
+			t.Errorf("height %d: tree shows %d of %d rows with no footer:\n%s", h, treeRows, total, pane)
+		}
+		if (h == 24) != footer {
+			t.Errorf("height %d: footer=%v:\n%s", h, footer, pane)
+		}
+	}
+}
+
+// At the heights a laptop terminal actually has, both blocks show text at
+// every one of them: the request's first line and the reviewer's decision
+// with its finding count at the least, and as the height grows, findings.
+func TestBlocksShowTextAtShortHeights(t *testing.T) {
+	f := testFlow()
+	f.Goal = strings.Repeat("add a retry backoff helper with a cap and jitter, ", 6)
+	for h := 10; h <= 17; h++ {
+		pane := flowsViewFor(t, f, verboseTree(6), 120, h).renderTreePane(80)
+		if !strings.Contains(pane, "add a retry backoff helper") {
+			t.Errorf("height %d: no line of the request is shown:\n%s", h, pane)
+		}
+		if !strings.Contains(pane, "round 3: ") {
+			t.Errorf("height %d: the decision is not shown:\n%s", h, pane)
+		}
+		if !strings.Contains(pane, "jitter") && !strings.Contains(pane, "6 finding(s)") {
+			t.Errorf("height %d: neither a finding nor the count is shown:\n%s", h, pane)
+		}
+	}
+	pane := flowsViewFor(t, f, verboseTree(6), 120, 16).renderTreePane(80)
+	if !strings.Contains(pane, "[major] internal/retry/backoff_0.go:10:") {
+		t.Errorf("height 16 has room for at least one finding:\n%s", pane)
 	}
 }
 
@@ -897,7 +1231,8 @@ func TestBlockHardSplitsLongTokens(t *testing.T) {
 	}
 	v := flowsViewFor(t, testFlow(), tree, 100, 30)
 	pane := v.renderTreePane(40)
-	for _, line := range strings.Split(pane, "\n") {
+	// The pane header is not the block's to keep within the width.
+	for _, line := range strings.Split(pane, "\n")[1:] {
 		if w := lipgloss.Width(line); w > 40 {
 			t.Errorf("line %q is %d wide in a 40-column pane", line, w)
 		}

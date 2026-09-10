@@ -67,11 +67,13 @@ func (v *FlowsView) handleFlowKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "a":
 		return v, v.openSelectedAgent()
 
-	// The findings block expanded takes the tree's height and its j/k: it
-	// is a second thing to scroll, and one pane scrolls at a time.
+	// An expanded block takes the tree's height and its j/k: it is a
+	// second thing to scroll, and one pane scrolls at a time. f cycles
+	// findings → request → collapsed, findings first because what the
+	// reviewer said is what the view is opened for.
 	case "f":
-		v.findingsExpanded = !v.findingsExpanded
-		v.findingsScroll = 0
+		v.expanded = v.nextExpanded()
+		v.blockScroll = 0
 		return v, nil
 
 	case "/":
@@ -79,8 +81,8 @@ func (v *FlowsView) handleFlowKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return v, nil
 
 	case "j", "down":
-		if v.findingsExpanded {
-			v.findingsScroll++
+		if v.expandedShown() {
+			v.blockScroll++
 			return v, nil
 		}
 		if v.focus == focusFlowTree {
@@ -91,8 +93,8 @@ func (v *FlowsView) handleFlowKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return v, v.syncSelectionFromCursor()
 
 	case "k", "up":
-		if v.findingsExpanded {
-			v.findingsScroll = max(v.findingsScroll-1, 0)
+		if v.expandedShown() {
+			v.blockScroll = max(v.blockScroll-1, 0)
 			return v, nil
 		}
 		if v.focus == focusFlowTree {
@@ -117,7 +119,7 @@ func (v *FlowsView) handleFlowKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return v, nil
 
 	case "esc":
-		v.findingsExpanded = false
+		v.expanded = flowBlockNone
 		v.focus = focusFlowList
 		return v, nil
 	}
