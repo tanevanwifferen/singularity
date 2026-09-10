@@ -72,17 +72,25 @@ func TestDecideFlowWait(t *testing.T) {
 }
 
 // TestComposeFlowOpts covers the reviewer-defaulting rule: the reviewer
-// inherits the work options and --reviewer-* overrides only what it names.
+// inherits the work options (except the model, which always defaults to
+// sonnet) and --reviewer-* overrides only what it names.
 func TestComposeFlowOpts(t *testing.T) {
 	base := api.TaskOptions{
-		Model: "sonnet", Effort: "medium", Backend: "claude", TimeoutSecs: 1800,
+		Model: "opus", Effort: "medium", Backend: "claude", TimeoutSecs: 1800,
 		ContextFiles: []string{"/w/notes.md"}, AllowedTools: []string{"Read", "Edit"},
 	}
 	always := func(string, string) bool { return true }
-	// Nothing named: the reviewer runs exactly like the implementer.
+	// Nothing named: the reviewer inherits the work options except the
+	// model, which always defaults to sonnet regardless of --model.
 	work, review := composeFlowOpts(base, "", "", always)
-	if review.Model != work.Model || review.Effort != work.Effort {
-		t.Errorf("reviewer did not default to the work options: %+v vs %+v", review, work)
+	if review.Model != "sonnet" {
+		t.Errorf("reviewer did not default to sonnet: got %q", review.Model)
+	}
+	if review.Effort != work.Effort {
+		t.Errorf("reviewer did not default to the work effort: %+v vs %+v", review, work)
+	}
+	if work.Model != "opus" {
+		t.Errorf("reviewer default leaked into the work options: %q", work.Model)
 	}
 
 	// Only the model named. The effort, backend, timeout, context files and
@@ -94,11 +102,11 @@ func TestComposeFlowOpts(t *testing.T) {
 		len(review.ContextFiles) != 1 || len(review.AllowedTools) != 2 {
 		t.Errorf("--reviewer-model overrode more than the model: %+v", review)
 	}
-	if work.Model != "sonnet" {
+	if work.Model != "opus" {
 		t.Errorf("--reviewer-model leaked into the work options: %q", work.Model)
 	}
 
-	// Only the effort named.
+	// Only the effort named: the model still defaults to sonnet.
 	work, review = composeFlowOpts(base, "", "high", always)
 	if review.Effort != "high" || review.Model != "sonnet" {
 		t.Errorf("--reviewer-effort should override the effort alone: %+v", review)
