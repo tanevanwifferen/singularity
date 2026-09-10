@@ -133,6 +133,11 @@ func (v *FlowsView) View() string {
 		s.WriteString(v.cancelConfirm.Render(modalWidth(v.width)))
 		return s.String()
 	}
+	if v.removeConfirm.Visible {
+		s.WriteString("\n")
+		s.WriteString(v.removeConfirm.Render(modalWidth(v.width)))
+		return s.String()
+	}
 
 	s.WriteString(v.renderFlowFlash())
 
