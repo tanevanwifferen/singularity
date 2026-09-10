@@ -471,6 +471,22 @@ func (e *Engine) WaitFor(sessionID string, timeout time.Duration) (AgentState, e
 }
 
 // Shutdown kills all agents and cleans up their worktrees.
+//
+// Termination runs in parallel, one goroutine per agent, not a sequential
+// loop: agent.terminate() blocks until the subprocess is actually reaped
+// (kill's <-a.done), which for a graceful backend (herdr above all) is up to
+// its TerminationGrace on top of however long git worktree cleanup takes.
+// Sequentially, that cost is the *sum* over every agent — with a handful of
+// herdr-backed agents alone it routinely exceeds the 10s SIGKILL budget
+// `singularity daemon stop` allows the whole process (internal/daemon/cmd.go),
+// so the daemon gets SIGKILLed mid-loop and every agent terminate() had not
+// yet reached never receives so much as a SIGTERM. Its herdr-driver process
+// — and the herdr pane and claude session it owns — is then orphaned and
+// keeps running with no supervisor, which is exactly what leaves live
+// processes behind in herdr after the daemon is gone. Running the loop in
+// parallel bounds the wait by the *slowest single* agent instead, which is
+// what the shutdown budget was actually sized for (see the comment in
+// internal/daemon/cmd.go).
 func (e *Engine) Shutdown() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -478,9 +494,15 @@ func (e *Engine) Shutdown() {
 	// terminate(), not a bare kill(false) — see RemoveAgent's comment: a
 	// routing agent has no subprocess yet, and a bare kill leaves it able to
 	// spawn one after the daemon believes everything is torn down.
+	var wg sync.WaitGroup
 	for _, agent := range e.agents {
-		agent.terminate()
+		wg.Add(1)
+		go func(a *Agent) {
+			defer wg.Done()
+			a.terminate()
+		}(agent)
 	}
+	wg.Wait()
 	e.agents = make(map[string]*Agent)
 }
 
