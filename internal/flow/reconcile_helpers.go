@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/queue"
 )
@@ -64,6 +65,52 @@ func readVerdictFile(path string) (*Verdict, error) {
 		return nil, fmt.Errorf("%w: %v", ErrUnparseable, err)
 	}
 	return ParseVerdict(data)
+}
+
+// planPath is where the planner was told to write its plan document, beside
+// the verdict files rather than in the work tree, for the same reason
+// verdictPath is: an agent told to commit its work must not also be told to
+// commit the state the daemon reads back. Empty when the manager has no
+// state directory.
+func (m *Manager) planPath(flowID string) string {
+	dir := m.store.VerdictDir(flowID)
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "plan.md")
+}
+
+// preparePlanPath returns the path and makes sure its directory exists, the
+// same reason prepareVerdictPath does: the planner writes it with a shell
+// redirect that will not create one.
+func (m *Manager) preparePlanPath(flowID string) string {
+	path := m.planPath(flowID)
+	if path == "" {
+		return ""
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		log.Printf("flow: create plan dir for %s: %v", flowID, err)
+	}
+	return path
+}
+
+// readPlanFile reads the planner's output. Unlike a verdict there is no
+// schema to parse — the plan is prose — so the only failure is the file not
+// existing or being empty, which is read the same way a missing verdict is:
+// never inferred as "no plan needed" from a task that exited cleanly.
+func readPlanFile(path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("no state directory is configured, so no plan could have been written")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	plan := strings.TrimSpace(string(data))
+	if plan == "" {
+		return "", fmt.Errorf("plan file is empty")
+	}
+	return plan, nil
 }
 
 // stepOpts is a step's options with worktree isolation forced off. Start

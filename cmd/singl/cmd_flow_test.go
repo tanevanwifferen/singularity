@@ -108,6 +108,29 @@ func TestComposeFlowOpts(t *testing.T) {
 	}
 }
 
+// TestPlanOptsFromFlags covers the same defaulting rule composeFlowOpts
+// applies to the reviewer: the planning step inherits the work options and
+// --planner-* overrides only what it names.
+func TestPlanOptsFromFlags(t *testing.T) {
+	base := api.TaskOptions{
+		Model: "sonnet", Effort: "medium", Backend: "claude", TimeoutSecs: 1800,
+	}
+	always := func(string, string) bool { return true }
+
+	plan := planOptsFromFlags(base, "", "", always)
+	if plan.Model != base.Model || plan.Effort != base.Effort {
+		t.Errorf("planner did not default to the work options: %+v vs %+v", plan, base)
+	}
+
+	plan = planOptsFromFlags(base, "opus", "", always)
+	if plan.Model != "opus" || plan.Effort != "medium" || plan.Backend != "claude" {
+		t.Errorf("--planner-model overrode more than the model: %+v", plan)
+	}
+	if base.Model != "sonnet" {
+		t.Errorf("--planner-model leaked into the base options: %q", base.Model)
+	}
+}
+
 // TestComposeFlowOptsRoutingPrecedence is the reason composeFlowOpts takes
 // the resolver rather than a bool: routing is resolved through
 // smartRouteFlags/resolveSmartRoute — the one place the precedence lives, so

@@ -116,6 +116,12 @@ type StartRequest struct {
 	// override only what they name); an all-zero value here means "the
 	// reviewer runs like the implementer".
 	ReviewOpts TaskOptions `json:"review_opts,omitempty"`
+	// EnablePlanning submits a one-off planning task before round 1 — see
+	// Flow.EnablePlanning. Off by default.
+	EnablePlanning bool `json:"enable_planning,omitempty"`
+	// PlanOpts defaults to Opts when left entirely unset, the same rule
+	// ReviewOpts follows.
+	PlanOpts TaskOptions `json:"plan_opts,omitempty"`
 }
 
 // Manager owns every flow. All exported methods are safe for concurrent use
@@ -240,7 +246,7 @@ func (m *Manager) Start(req StartRequest) (Flow, error) {
 	// isolated agent merges back on its own, so a rejected round's work
 	// would already be merged (§2). Isolation is the caller's job, done
 	// before the flow starts — point the flow at a workflow's worktree.
-	if req.Opts.UseWorktree || req.ReviewOpts.UseWorktree {
+	if req.Opts.UseWorktree || req.ReviewOpts.UseWorktree || req.PlanOpts.UseWorktree {
 		return Flow{}, fmt.Errorf("%w: use_worktree is not supported by flows: "+
 			"every round must see the same tree, and an isolated agent both reviews a "+
 			"private checkout and merges it back independently. Create the worktree first "+
@@ -251,24 +257,30 @@ func (m *Manager) Start(req StartRequest) (Flow, error) {
 	if isZeroOpts(reviewOpts) {
 		reviewOpts = req.Opts
 	}
+	planOpts := req.PlanOpts
+	if isZeroOpts(planOpts) {
+		planOpts = req.Opts
+	}
 
 	m.mu.Lock()
 	m.seq++
 	id := "f" + strconv.FormatInt(m.seq, 10)
 	f := &Flow{
-		ID:         id,
-		QueueID:    "flow-" + id,
-		Title:      strings.TrimSpace(req.Title),
-		IssueKey:   strings.TrimSpace(req.IssueKey),
-		Goal:       goal,
-		ReviewGoal: strings.TrimSpace(req.ReviewGoal),
-		WorkDir:    workDir,
-		MaxRounds:  rounds,
-		Opts:       req.Opts,
-		ReviewOpts: reviewOpts,
-		State:      StatePending,
-		Rounds:     []*Round{},
-		CreatedAt:  time.Now(),
+		ID:             id,
+		QueueID:        "flow-" + id,
+		Title:          strings.TrimSpace(req.Title),
+		IssueKey:       strings.TrimSpace(req.IssueKey),
+		Goal:           goal,
+		ReviewGoal:     strings.TrimSpace(req.ReviewGoal),
+		WorkDir:        workDir,
+		MaxRounds:      rounds,
+		Opts:           req.Opts,
+		ReviewOpts:     reviewOpts,
+		PlanOpts:       planOpts,
+		EnablePlanning: req.EnablePlanning,
+		State:          StatePending,
+		Rounds:         []*Round{},
+		CreatedAt:      time.Now(),
 	}
 	m.flows[id] = f
 	m.saveLocked(f)
@@ -440,7 +452,10 @@ func (m *Manager) saveLocked(f *Flow) {
 // This is the whole of the flow's authority over the queue: an ID that is
 // not in here is not the flow's to touch.
 func recordedTaskIDs(f *Flow) []string {
-	out := make([]string, 0, len(f.Rounds)*2)
+	out := make([]string, 0, len(f.Rounds)*2+1)
+	if f.PlanTaskID != "" {
+		out = append(out, f.PlanTaskID)
+	}
 	for _, r := range f.Rounds {
 		if r.WorkTaskID != "" {
 			out = append(out, r.WorkTaskID)

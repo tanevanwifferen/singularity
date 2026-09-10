@@ -22,6 +22,7 @@ func ImplementPrompt(f *Flow) string {
 
 	b.WriteString("You are implementing a change in an existing codebase.\n\n")
 	writeGoal(&b, f.Goal)
+	writePlan(&b, f.Plan)
 	fmt.Fprintf(&b, "## Working directory\n\n%s\n\n", f.WorkDir)
 	b.WriteString("All work happens in that directory. Do not create a branch, a worktree or a\n")
 	b.WriteString("commit unless the goal asks for one.\n\n")
@@ -47,6 +48,7 @@ func FixPrompt(f *Flow, prior []*Round) string {
 	round := len(prior) + 1
 	fmt.Fprintf(&b, "You are fixing review findings on a change in an existing codebase. This is round %d.\n\n", round)
 	writeGoal(&b, f.Goal)
+	writePlan(&b, f.Plan)
 	fmt.Fprintf(&b, "## Working directory\n\n%s\n\n", f.WorkDir)
 	b.WriteString("The work from the previous rounds is already in that directory. Fix it in place.\n\n")
 
@@ -162,6 +164,36 @@ func ReviewPrompt(f *Flow, verdictPath string) string {
 	return b.String()
 }
 
+// PlanPrompt is the flow's one-off planning task, run before round 1 when
+// EnablePlanning is set. It runs read-mostly — refine the goal into a
+// concrete approach by reading the codebase, not by writing to it — and its
+// output becomes the ## Plan section ImplementPrompt and FixPrompt fold in,
+// so every later step sees the same refinement the same way every fixer sees
+// the same Goal.
+func PlanPrompt(f *Flow, planPath string) string {
+	var b strings.Builder
+
+	b.WriteString("You are planning a change to an existing codebase, before any of it is\n")
+	b.WriteString("written. Your job is to refine the goal below into a concrete implementation\n")
+	b.WriteString("approach — not to make the change yourself.\n\n")
+	writeGoal(&b, f.Goal)
+	fmt.Fprintf(&b, "## Working directory\n\n%s\n\n", f.WorkDir)
+	b.WriteString("Read the codebase as needed to ground the plan in what is actually there: the\n")
+	b.WriteString("files and functions involved, existing patterns to follow, and any constraints\n")
+	b.WriteString("or edge cases the goal does not spell out. Do not modify any files.\n\n")
+
+	b.WriteString("## Output — this is mandatory\n\n")
+	fmt.Fprintf(&b, "Write your plan, in markdown, to this absolute path:\n\n%s\n\n", planPath)
+	b.WriteString("Write it with the Bash tool:\n\n")
+	fmt.Fprintf(&b, "```\ncat > %s << 'PLAN_EOF'\n...\nPLAN_EOF\n```\n\n", planPath)
+	b.WriteString("Cover the approach, the files you expect to touch and what changes in each,\n")
+	b.WriteString("and any open questions or risks the implementer should watch for.\n\n")
+	b.WriteString("Writing this file is the only way your plan reaches the implementer — nothing\n")
+	b.WriteString("else you write is read.\n")
+
+	return b.String()
+}
+
 // CommitPrompt is the one-off task submitted the moment a round's verdict is
 // accept: the implement/fix prompts above tell every work step not to commit
 // (so a reviewer always reads a clean uncommitted diff), which means nothing
@@ -195,6 +227,19 @@ func CommitPrompt(f *Flow) string {
 func writeGoal(b *strings.Builder, goal string) {
 	b.WriteString("## Goal\n\n")
 	b.WriteString(strings.TrimSpace(goal))
+	b.WriteString("\n\n")
+}
+
+// writePlan renders the planner's output under its own heading, right after
+// the goal — verbatim, the same reasoning writeGoal follows, so an
+// implementer and every later fixer read the identical refinement. Omitted
+// entirely when planning was not enabled or has not produced one yet.
+func writePlan(b *strings.Builder, plan string) {
+	if strings.TrimSpace(plan) == "" {
+		return
+	}
+	b.WriteString("## Plan\n\n")
+	b.WriteString(strings.TrimSpace(plan))
 	b.WriteString("\n\n")
 }
 
