@@ -309,6 +309,7 @@ func TestStartTrimsAndKeepsGoalVerbatimOtherwise(t *testing.T) {
 	req.Goal = "  fix the parser\n\nit is wrong  "
 	req.Title = "  parser  "
 	req.ReviewGoal = "  be adversarial  "
+	req.IssueKey = "  PROJ-123  "
 
 	f, err := m.Start(req)
 	if err != nil {
@@ -319,6 +320,23 @@ func TestStartTrimsAndKeepsGoalVerbatimOtherwise(t *testing.T) {
 	}
 	if f.Title != "parser" || f.ReviewGoal != "be adversarial" {
 		t.Errorf("Title = %q, ReviewGoal = %q, want both trimmed", f.Title, f.ReviewGoal)
+	}
+	if f.IssueKey != "PROJ-123" {
+		t.Errorf("IssueKey = %q, want it trimmed", f.IssueKey)
+	}
+}
+
+// TestStartIssueKeyOptional pins IssueKey as purely informational: a flow
+// started without one — the ordinary --prompt path — records no key and
+// Start does not require or fetch one.
+func TestStartIssueKeyOptional(t *testing.T) {
+	m, _ := newManager(t)
+	f, err := m.Start(startReq(t))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if f.IssueKey != "" {
+		t.Errorf("IssueKey = %q, want empty when the request carries none", f.IssueKey)
 	}
 }
 

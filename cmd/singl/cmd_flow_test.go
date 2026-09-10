@@ -195,7 +195,8 @@ func TestFlowStartUsageErrors(t *testing.T) {
 		args []string
 	}{
 		{"no flags at all", nil},
-		{"--workdir without --prompt", []string{"--workdir", "/w"}},
+		{"--workdir without --prompt or --jira", []string{"--workdir", "/w"}},
+		{"--jira without --workdir", []string{"--jira", "PROJ-1"}},
 		// --use-worktree must not exist. §2: the engine rewrites an isolated
 		// agent's work dir, so the reviewer would review a different tree
 		// than the implementer wrote, and each isolated agent merges back on
@@ -217,6 +218,91 @@ func TestFlowStartUsageErrors(t *testing.T) {
 		if code := runFlowStart(context.Background(), tc.args); code != 2 {
 			t.Errorf("`flow start` with %s exited %d, want 2", tc.name, code)
 		}
+	}
+}
+
+// TestResolveFlowGoalMissingKey covers the plain --prompt path: with no
+// --jira, resolveFlowGoal must not call the fetcher at all — a flow that
+// never named a ticket has no key to resolve — and the prompt passes through
+// verbatim as the goal, with no title guessed.
+func TestResolveFlowGoalMissingKey(t *testing.T) {
+	calls := 0
+	fetch := func(context.Context, string) (*api.Issue, error) {
+		calls++
+		return nil, fmt.Errorf("should not be called")
+	}
+	title, goal, err := resolveFlowGoal(context.Background(), fetch, "", "fix the parser")
+	if err != nil {
+		t.Fatalf("resolveFlowGoal: %v", err)
+	}
+	if calls != 0 {
+		t.Errorf("fetch called %d times, want 0 when --jira is empty", calls)
+	}
+	if title != "" {
+		t.Errorf("title = %q, want empty without --jira", title)
+	}
+	if goal != "fix the parser" {
+		t.Errorf("goal = %q, want --prompt verbatim", goal)
+	}
+}
+
+// TestResolveFlowGoalUnreachableJira covers what an operator sees when the
+// daemon cannot reach Jira, or the key does not exist: the fetcher's error
+// must come back wrapped with the key that failed, not swallowed or
+// replaced by a generic message runFlowStart would then hand to die().
+func TestResolveFlowGoalUnreachableJira(t *testing.T) {
+	fetch := func(context.Context, string) (*api.Issue, error) {
+		return nil, fmt.Errorf("jira: connection refused")
+	}
+	_, _, err := resolveFlowGoal(context.Background(), fetch, "PROJ-1", "")
+	if err == nil {
+		t.Fatal("resolveFlowGoal: want an error when the fetch fails")
+	}
+	if !strings.Contains(err.Error(), "PROJ-1") || !strings.Contains(err.Error(), "connection refused") {
+		t.Errorf("error = %q, want it to name the key and wrap the fetch error", err)
+	}
+}
+
+// TestResolveFlowGoalFromIssue covers prompt construction: with --jira and
+// no --prompt, the goal and title come entirely from the fetched issue.
+func TestResolveFlowGoalFromIssue(t *testing.T) {
+	fetch := func(_ context.Context, key string) (*api.Issue, error) {
+		if key != "PROJ-9" {
+			t.Fatalf("fetch key = %q, want PROJ-9", key)
+		}
+		return &api.Issue{Key: "PROJ-9", Summary: "Retry on 429", Description: "Honour Retry-After."}, nil
+	}
+	title, goal, err := resolveFlowGoal(context.Background(), fetch, "PROJ-9", "")
+	if err != nil {
+		t.Fatalf("resolveFlowGoal: %v", err)
+	}
+	if title != "PROJ-9: Retry on 429" {
+		t.Errorf("title = %q", title)
+	}
+	for _, want := range []string{"PROJ-9", "Retry on 429", "Honour Retry-After."} {
+		if !strings.Contains(goal, want) {
+			t.Errorf("goal missing %q:\n%s", want, goal)
+		}
+	}
+}
+
+// TestResolveFlowGoalFromIssueWithExtraPrompt covers the --jira + --prompt
+// combination: the issue's own text must survive, with --prompt appended
+// rather than replacing it — the same "narrows, does not replace" rule
+// --review-prompt follows.
+func TestResolveFlowGoalFromIssueWithExtraPrompt(t *testing.T) {
+	fetch := func(context.Context, string) (*api.Issue, error) {
+		return &api.Issue{Key: "PROJ-9", Summary: "Retry on 429"}, nil
+	}
+	_, goal, err := resolveFlowGoal(context.Background(), fetch, "PROJ-9", "focus on the client, not the server")
+	if err != nil {
+		t.Fatalf("resolveFlowGoal: %v", err)
+	}
+	if !strings.Contains(goal, "PROJ-9") || !strings.Contains(goal, "Retry on 429") {
+		t.Errorf("goal dropped the issue's own text:\n%s", goal)
+	}
+	if !strings.Contains(goal, "focus on the client, not the server") {
+		t.Errorf("goal dropped the explicit --prompt:\n%s", goal)
 	}
 }
 
@@ -402,7 +488,8 @@ func TestFmtFlow(t *testing.T) {
 	ended := time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC)
 	f := api.Flow{
 		ID: "f3", QueueID: "flow-f3", Title: "retry-after handling",
-		Goal: "honour Retry-After", ReviewGoal: "check the 429 path",
+		IssueKey: "PROJ-9",
+		Goal:     "honour Retry-After", ReviewGoal: "check the 429 path",
 		WorkDir: "/w/api", MaxRounds: 3, State: service.FlowAccepted,
 		Opts:       api.TaskOptions{Model: "sonnet", Effort: "medium"},
 		ReviewOpts: api.TaskOptions{Model: "opus", Effort: "medium"},
@@ -426,7 +513,7 @@ func TestFmtFlow(t *testing.T) {
 	}
 	out := fmtFlow(f, steps)
 	for _, want := range []string{
-		"`f3` retry-after handling", "State: `accepted`", "Rounds: 2/3",
+		"`f3` retry-after handling", "Jira: PROJ-9", "State: `accepted`", "Rounds: 2/3",
 		"model `sonnet`", "model `opus`", "honour Retry-After", "check the 429 path",
 		"#### Round 1 — `rejected`", "implement: `t11`", "review: `t12`",
 		"agent `agent-1`", "singl agents output --id agent-2",

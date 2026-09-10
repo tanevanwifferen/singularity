@@ -105,11 +105,16 @@ It owns the queue "flow-<id>", so "queue list --queue flow-<id>" shows its
 tasks and "agents output --id <agent>" shows a step's transcript.
 
 Verbs:
-  start   --workdir <dir> --prompt <goal> [--review-prompt <text>] [--max-rounds N] [--title T]
+  start   --workdir <dir> (--prompt <goal> | --jira <issue-key>) [--review-prompt <text>]
+          [--max-rounds N] [--title T]
           [--model M] [--effort low|medium|high] [--timeout SECS] [--backend claude|pi|herdr]
           [--context-file P ...] [--allowed-tools a,b]
           [--reviewer-model M] [--reviewer-effort low|medium|high]
           [--smart-route[=bool]] [--no-smart-route]
+          --jira fetches the issue (e.g. PROJ-123) and builds the goal and
+          title from its summary and description; --prompt is required
+          without it, and given alongside it is appended as extra
+          instructions rather than replacing the issue's own text.
           Reviewer options default to the work options; --reviewer-* overrides
           only what it names. Smart routing is on by default, same as queue add,
           and is resolved separately for the work and the review step.

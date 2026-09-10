@@ -17,12 +17,16 @@ type (
 	FlowTreeNode = service.FlowTreeNode
 
 	// FlowStartRequest is the body for POST /api/flow/start:
-	// {title, goal, review_goal, work_dir, max_rounds, opts, review_opts}.
-	// It is an alias for the same reason the others are — flow.StartRequest
-	// was written as the wire shape, so a parallel struct here would be a
-	// second truth about it that only differs when someone forgets.
+	// {title, issue_key, goal, review_goal, work_dir, max_rounds, opts,
+	// review_opts}. It is an alias for the same reason the others are —
+	// flow.StartRequest was written as the wire shape, so a parallel struct
+	// here would be a second truth about it that only differs when someone
+	// forgets.
 	//
 	// Only `goal` and `work_dir` are required; `max_rounds` defaults to 3.
+	// `issue_key` is purely informational — set by a CLI that resolved
+	// `goal` from a Jira issue via flow.GoalFromIssue, so the flow remembers
+	// which ticket it came from — and is never fetched or validated here.
 	// The daemon cleans `work_dir` through Server.validateRepoPath before
 	// the service sees it, so a relative path is resolved and a traversal
 	// is rejected.
