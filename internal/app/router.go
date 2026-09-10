@@ -338,7 +338,19 @@ func (r *Router) handleHelpInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (r *Router) handleRouterKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
-	// Check submenu trigger keys first (e.g. "g" for Git Operations)
+	// Let views claim specific keys before router handles them, including
+	// before the submenu triggers below — otherwise a view that declares it
+	// wants e.g. "g"/"G" for its own use (vim-style scrolling) would never
+	// see them, the router's Git submenu swallowing them first.
+	// If a view implements KeyCapturer and claims this key, delegate directly.
+	if kc, ok := r.active.(KeyCapturer); ok {
+		if kc.CapturesKey(key) {
+			_, cmd := r.active.Update(msg)
+			return r, cmd
+		}
+	}
+
+	// Check submenu trigger keys (e.g. "g" for Git Operations)
 	// Use case-insensitive matching so both "g" and "G" trigger the submenu.
 	if sm, ok := r.submenus[strings.ToLower(key)]; ok {
 		r.showSubmenu = true
@@ -347,19 +359,14 @@ func (r *Router) handleRouterKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return r, nil
 	}
 
-	// Let views claim specific keys before router handles them.
-	// If a view implements KeyCapturer and claims this key, delegate directly.
 	// If a view does NOT implement KeyCapturer, assume it uses all plain
 	// single-letter keys (safe default) — only F-keys and special keys bypass this.
-	if kc, ok := r.active.(KeyCapturer); ok {
-		if kc.CapturesKey(key) {
+	if _, ok := r.active.(KeyCapturer); !ok {
+		if len(key) == 1 && key >= "a" && key <= "z" {
+			// View doesn't declare its keys — don't intercept plain letters
 			_, cmd := r.active.Update(msg)
 			return r, cmd
 		}
-	} else if len(key) == 1 && key >= "a" && key <= "z" {
-		// View doesn't declare its keys — don't intercept plain letters
-		_, cmd := r.active.Update(msg)
-		return r, cmd
 	}
 
 	switch key {

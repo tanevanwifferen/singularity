@@ -1,11 +1,40 @@
 package app
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
+	"gitlab.com/tanevanwifferen1/singularity/internal/app/views"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service"
+	"gitlab.com/tanevanwifferen1/singularity/internal/service/fake"
 )
+
+// flowsViewWithExpandableRequest returns a FlowsView loaded with one flow
+// that has a goal but no rounds, so 'f' expands the request block directly
+// (see FlowsView.nextExpanded) without needing a verdict.
+func flowsViewWithExpandableRequest(t *testing.T) *views.FlowsView {
+	t.Helper()
+	stub := fake.NewFlowStub()
+	stub.ListFn = func(context.Context, []service.FlowState) ([]service.Flow, error) {
+		return []service.Flow{{ID: "f1", Title: "t", Goal: "the goal", State: service.FlowRunning}}, nil
+	}
+	stub.TreeFn = func(context.Context, string) (*service.FlowTree, error) {
+		return &service.FlowTree{FlowID: "f1", Nodes: []service.FlowTreeNode{
+			{ID: "f1", Kind: service.FlowNodeFlow, Label: "t", State: "running"},
+		}}, nil
+	}
+	svcs := fake.New()
+	svcs.Flow = stub
+	v := views.NewFlowsView("/test/repo")
+	v.SetServices(svcs)
+	v.SetSize(100, 24)
+	v.Update(v.Init()())
+	return v
+}
 
 // --- Router Tests ---
 
@@ -129,6 +158,62 @@ func TestRouterKeybindOutOfRange(t *testing.T) {
 		t.Errorf("Expected active name 'stub1', got %q", router.ActiveName())
 	}
 	_ = cmd
+}
+
+// A view that claims a key via CapturesKey must get it even when the key is
+// also a submenu trigger — the router used to check submenu triggers first,
+// so FlowsView's g/G (vim-style block paging, see flow_keys.go), while a
+// block is actually expanded, never reached the view: the router opened the
+// Git submenu instead. This has to go through Router.Update, not
+// FlowsView.Update directly, since the bug is in the router's dispatch
+// order, not the view.
+func TestRouterKeyCapturerBeatsSubmenuTrigger(t *testing.T) {
+	flowsView := flowsViewWithExpandableRequest(t)
+	flowsView.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	router := NewRouter(flowsView, "Flows")
+	router.RegisterSubmenu("g", "Git", []components.SubmenuItem{
+		{Key: "s", Label: "Sync", ViewName: "Sync"},
+	})
+
+	for _, key := range []string{"g", "G"} {
+		router.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+		if router.showSubmenu {
+			t.Errorf("pressing %q opened the Git submenu even though FlowsView.CapturesKey(%q) claims it while a block is expanded", key, key)
+		}
+	}
+}
+
+// The submenu trigger must still fire for views that do not claim the key
+// themselves — the reorder in TestRouterKeyCapturerBeatsSubmenuTrigger must
+// not break the Git submenu for every other view.
+func TestRouterSubmenuTriggerStillOpensForOtherViews(t *testing.T) {
+	stub1 := NewStubView1("/test/repo")
+	router := NewRouter(stub1, "stub1")
+	router.RegisterSubmenu("g", "Git", []components.SubmenuItem{
+		{Key: "s", Label: "Sync", ViewName: "Sync"},
+	})
+
+	router.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if !router.showSubmenu {
+		t.Error("a view that does not claim 'g' via CapturesKey should still get the Git submenu")
+	}
+}
+
+// FlowsView only claims g/G while a block is expanded (see
+// TestRouterKeyCapturerBeatsSubmenuTrigger); with nothing expanded, g is the
+// only way to reach the Git submenu from a top-level F-key view, and it must
+// still work — this is the bug fixed in this round.
+func TestRouterSubmenuStillOpensFromFlowsWhenNothingExpanded(t *testing.T) {
+	flowsView := flowsViewWithExpandableRequest(t)
+	router := NewRouter(flowsView, "Flows")
+	router.RegisterSubmenu("g", "Git", []components.SubmenuItem{
+		{Key: "s", Label: "Sync", ViewName: "Sync"},
+	})
+
+	router.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if !router.showSubmenu {
+		t.Error("with nothing expanded in Flows, 'g' must still open the Git submenu")
+	}
 }
 
 func TestRouterHelpText(t *testing.T) {

@@ -60,9 +60,12 @@ func (v *FlowsView) handleFlowKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Shift-c rather than a plain letter: every plain one this view wants
 	// is taken (c is cancel, n start, a agent, r refresh, j/k/h/l/enter
-	// navigation, / the filter), and an uppercase C collides with nothing
-	// the app or the router claims either — their capitals are R, P, T and
-	// the g submenu.
+	// navigation, / the filter, and g/G when a block is expanded, see
+	// below), and an uppercase C collides with nothing the app or the
+	// router claims either — their capitals are R, P, T; g stays the
+	// router's Git submenu trigger except while this view has a block
+	// expanded, when CapturesKey hands it to the scroll handling below
+	// instead.
 	case "C":
 		v.openContinueModal()
 		return v, nil
@@ -112,6 +115,35 @@ func (v *FlowsView) handleFlowKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		v.filter.CursorUp()
 		return v, v.syncSelectionFromCursor()
+
+	// Vim-style paging for the expanded block: g/G jump to its top/bottom,
+	// ctrl+d/ctrl+u (and pgdown/pgup) scroll it by half a page. G's offset
+	// is left over-large on purpose — renderTreePane's clampBlockScroll
+	// pulls it back to the last full page every render, the same clamp j
+	// relies on to stop at the end.
+	case "g":
+		if v.expandedShown() {
+			v.blockScroll = 0
+		}
+		return v, nil
+
+	case "G":
+		if v.expandedShown() {
+			v.blockScroll = 1 << 30
+		}
+		return v, nil
+
+	case "ctrl+d", "pgdown":
+		if v.expandedShown() {
+			v.blockScroll += max(v.expandedMaxLines()/2, 1)
+		}
+		return v, nil
+
+	case "ctrl+u", "pgup":
+		if v.expandedShown() {
+			v.blockScroll = max(v.blockScroll-max(v.expandedMaxLines()/2, 1), 0)
+		}
+		return v, nil
 
 	case "l", "right", "enter":
 		if v.focus == focusFlowList {
