@@ -233,7 +233,10 @@ func (v *FlowsView) renderFlowItem(f FlowInfo, index int, selected bool) string 
 
 // renderTreePane renders the selected flow's agent tree, with the round
 // count repeated in the pane header — the second of the three places it
-// belongs, after the list row and before the tree root.
+// belongs, after the list row and before the tree root. Above the tree sit
+// two blocks: the request the flow was started with, and the latest round's
+// findings. Their height comes out of the same budget as the tree's, so the
+// pane as a whole never grows past v.height.
 func (v *FlowsView) renderTreePane(width int) string {
 	th := theme.GetTheme()
 	var s strings.Builder
@@ -252,13 +255,23 @@ func (v *FlowsView) renderTreePane(width int) string {
 	s.WriteString("\n")
 
 	rows := v.treeRows()
+	blockLines := 0
+	if haveSel {
+		requestMax, findingsMax := v.blockBudget(len(rows), sel, width)
+		requestBlock := v.renderFlowRequestBlock(sel, width, requestMax)
+		findingsBlock := v.renderFlowFindingsBlock(width, findingsMax)
+		s.WriteString(requestBlock)
+		s.WriteString(findingsBlock)
+		blockLines = strings.Count(requestBlock, "\n") + strings.Count(findingsBlock, "\n")
+	}
+
 	if len(rows) == 0 {
 		s.WriteString(th.MutedTextStyle.Render(" No rounds yet — the reconciler submits round 1."))
 		s.WriteString("\n")
 		return s.String()
 	}
 
-	start, end := calcViewport(v.height, flowChromeLines+1, v.treeCursor, len(rows))
+	start, end := calcViewport(v.height, flowTreeChromeLines+blockLines, v.treeCursor, len(rows))
 	for i := start; i < end && i < len(rows); i++ {
 		s.WriteString(v.renderTreeRow(rows[i], i == v.treeCursor, sel, width))
 		s.WriteString("\n")
@@ -268,6 +281,271 @@ func (v *FlowsView) renderTreePane(width int) string {
 		s.WriteString("\n")
 	}
 	return s.String()
+}
+
+// flowTreeChromeLines is what the tree pane's rows lose to the view chrome,
+// the pane's own header and the "%d-%d of %d nodes" footer. The footer is
+// always reserved: it appears exactly when the rows do not all fit, which is
+// exactly when a line it was not budgeted for would push the view past the
+// terminal.
+const flowTreeChromeLines = flowChromeLines + 2
+
+// flowTreeMinRows is the fewest tree rows the two blocks may leave visible
+// — a root and a round with its two steps — before they start giving up
+// lines of their own. With the findings expanded the tree keeps only the
+// root: the point of expanding is to read the verdict.
+const (
+	flowTreeMinRows         = 4
+	flowTreeMinRowsExpanded = 1
+)
+
+// blockBudget splits the tree pane's height between the request and the
+// findings blocks, returning how many content lines each may show under
+// its one-line header. The tree keeps flowTreeMinRows; the findings block
+// has first claim on the rest, because what the reviewer said is what the
+// user opens this view for; the request gets what the findings leave, and
+// at least a third of the space when both want more than there is.
+func (v *FlowsView) blockBudget(rowCount int, sel FlowInfo, width int) (requestMax, findingsMax int) {
+	treeReserve := min(rowCount, flowTreeMinRows)
+	if v.findingsExpanded {
+		treeReserve = min(rowCount, flowTreeMinRowsExpanded)
+	}
+	// Each block costs its header line plus at least one content line.
+	content := v.height - flowTreeChromeLines - treeReserve - 2
+	if content < 2 {
+		content = 2
+	}
+
+	requestNeed := len(v.requestLines(sel, width))
+	findingsNeed := len(v.findingsLines(width))
+	if v.findingsExpanded {
+		return 1, max(content-1, 1)
+	}
+	requestFloor := min(requestNeed, max(content/3, 1))
+	findingsMax = min(findingsNeed, max(content-requestFloor, 1))
+	requestMax = min(requestNeed, max(content-findingsMax, 1))
+	return requestMax, findingsMax
+}
+
+// renderFlowRequestBlock renders the flow's original goal — the request the
+// implementer was given — and the review focus, if the flow narrowed one,
+// as a wrapped multiline block above the tree: the first of the two blocks
+// the flow view leads with.
+func (v *FlowsView) renderFlowRequestBlock(sel FlowInfo, width, maxLines int) string {
+	th := theme.GetTheme()
+	var s strings.Builder
+
+	s.WriteString(th.MutedTextStyle.Render(" Request"))
+	s.WriteString("\n")
+
+	lines := v.requestLines(sel, width)
+	if len(lines) == 0 {
+		s.WriteString(th.MutedTextStyle.Render(" (no goal recorded)"))
+		s.WriteString("\n")
+		return s.String()
+	}
+	writeCappedLines(&s, lines, maxLines, lipgloss.NewStyle(), "line(s)")
+	return s.String()
+}
+
+// requestLines is the request block's body, wrapped to the pane: the goal,
+// then the review focus prefixed so the two cannot be mistaken for one
+// paragraph.
+func (v *FlowsView) requestLines(sel FlowInfo, width int) []string {
+	text := strings.TrimSpace(sel.Goal)
+	if text == "" {
+		return nil
+	}
+	if focus := strings.TrimSpace(sel.ReviewGoal); focus != "" {
+		text += "\nReview focus: " + focus
+	}
+	return wrapBlock(text, width)
+}
+
+// renderFlowFindingsBlock renders the most recent round's verdict — the
+// review agent's decision, summary and findings — as a wrapped multiline
+// block, so what the reviewer actually said is legible without expanding
+// the review step in the tree below.
+//
+// When the full text does not fit in maxLines the block falls back to one
+// clipped line per item — the summary, then severity, location and detail
+// of each finding — so every finding is at least visible, and says how to
+// expand. Expanded, the block takes the height the tree gave up and scrolls
+// with j/k.
+func (v *FlowsView) renderFlowFindingsBlock(width, maxLines int) string {
+	th := theme.GetTheme()
+	var s strings.Builder
+
+	s.WriteString(th.MutedTextStyle.Render(" Findings"))
+	if v.findingsExpanded {
+		s.WriteString(th.MutedTextStyle.Render("  (f: collapse  j/k: scroll)"))
+	}
+	s.WriteString("\n")
+
+	round, verdict := v.latestVerdict()
+	if verdict == nil {
+		s.WriteString(th.MutedTextStyle.Render(" (no review verdict yet)"))
+		s.WriteString("\n")
+		return s.String()
+	}
+
+	decisionStyle := flowStateStyle(string(verdict.Decision), th)
+	s.WriteString(fmt.Sprintf(" round %d: %s", round, decisionStyle.Render(string(verdict.Decision))))
+	s.WriteString("\n")
+	maxLines = max(maxLines-1, 1)
+
+	if verdict.Summary == "" && len(verdict.Findings) == 0 {
+		s.WriteString(th.MutedTextStyle.Render(" (no summary or findings)"))
+		s.WriteString("\n")
+		return s.String()
+	}
+
+	lines := v.findingsLines(width)
+	if v.findingsExpanded {
+		if len(lines) > maxLines {
+			v.findingsScroll = min(v.findingsScroll, len(lines)-maxLines)
+		} else {
+			v.findingsScroll = 0
+		}
+		writeScrolledLines(&s, lines, v.findingsScroll, maxLines, th.MutedTextStyle)
+		return s.String()
+	}
+	if len(lines) <= maxLines {
+		writeCappedLines(&s, lines, maxLines, th.MutedTextStyle, "line(s)")
+		return s.String()
+	}
+	// One clipped line per item, the marker line included in the budget
+	// when not every item fits.
+	items := findingsItemLines(verdict, width)
+	if len(items) > maxLines {
+		items = items[:max(maxLines-1, 1)]
+	}
+	for _, l := range items {
+		s.WriteString(" " + th.MutedTextStyle.Render(l))
+		s.WriteString("\n")
+	}
+	hiddenItems := len(findingsItemLines(verdict, width)) - len(items)
+	if hiddenItems > 0 {
+		s.WriteString(th.MutedTextStyle.Render(fmt.Sprintf(" … +%d more — f to expand", hiddenItems)))
+	} else {
+		s.WriteString(th.MutedTextStyle.Render(" … f to expand"))
+	}
+	s.WriteString("\n")
+	return s.String()
+}
+
+// findingsLines is the findings block's full body, wrapped to the pane: the
+// summary, then one paragraph per finding.
+func (v *FlowsView) findingsLines(width int) []string {
+	_, verdict := v.latestVerdict()
+	if verdict == nil {
+		return nil
+	}
+	var paras []string
+	if verdict.Summary != "" {
+		paras = append(paras, verdict.Summary)
+	}
+	for _, f := range verdict.Findings {
+		paras = append(paras, findingText(f))
+	}
+	return wrapBlock(strings.Join(paras, "\n"), width)
+}
+
+// findingsItemLines is the findings block's compact form: the summary and
+// each finding on one line each, clipped to the pane rather than wrapped.
+func findingsItemLines(verdict *service.FlowVerdict, width int) []string {
+	var lines []string
+	if verdict.Summary != "" {
+		lines = append(lines, clipText(verdict.Summary, blockTextWidth(width)))
+	}
+	for _, f := range verdict.Findings {
+		lines = append(lines, clipText(findingText(f), blockTextWidth(width)))
+	}
+	return lines
+}
+
+// findingText is one finding as a line: severity, file:line when it has
+// one, and the detail.
+func findingText(f service.FlowFinding) string {
+	loc := f.File
+	if f.Line > 0 {
+		loc = fmt.Sprintf("%s:%d", f.File, f.Line)
+	}
+	if loc != "" {
+		return fmt.Sprintf("[%s] %s: %s", f.Severity, loc, f.Detail)
+	}
+	return fmt.Sprintf("[%s] %s", f.Severity, f.Detail)
+}
+
+// latestVerdict returns the highest-numbered round that produced a verdict
+// for the selected flow, or (0, nil) before any review has landed.
+func (v *FlowsView) latestVerdict() (int, *service.FlowVerdict) {
+	var round int
+	var verdict *service.FlowVerdict
+	for _, n := range v.treeNodes {
+		if n.Kind == service.FlowNodeRound && n.Verdict != nil && n.Round >= round {
+			round = n.Round
+			verdict = n.Verdict
+		}
+	}
+	return round, verdict
+}
+
+// blockTextWidth is the room a block line has after its one-space indent,
+// with a margin so lipgloss never has to wrap what it is handed.
+func blockTextWidth(width int) int { return max(width-2, 10) }
+
+// wrapBlock word-wraps text to the pane, one paragraph per input line,
+// hard-splitting any token wider than the pane so every returned line
+// really is one terminal row.
+func wrapBlock(text string, width int) []string {
+	var lines []string
+	for _, para := range strings.Split(text, "\n") {
+		if strings.TrimSpace(para) == "" {
+			lines = append(lines, "")
+			continue
+		}
+		lines = append(lines, wordWrap(para, blockTextWidth(width))...)
+	}
+	return lines
+}
+
+// writeCappedLines writes lines indented by one space, at most maxLines of
+// them, with a "+N more <unit>" marker in the last budgeted slot when they
+// overflow.
+func writeCappedLines(s *strings.Builder, lines []string, maxLines int, style lipgloss.Style, unit string) {
+	th := theme.GetTheme()
+	shown := lines
+	if len(lines) > maxLines {
+		shown = lines[:max(maxLines-1, 0)]
+	}
+	for _, l := range shown {
+		s.WriteString(" " + style.Render(l))
+		s.WriteString("\n")
+	}
+	if hidden := len(lines) - len(shown); hidden > 0 {
+		s.WriteString(th.MutedTextStyle.Render(fmt.Sprintf(" … +%d more %s", hidden, unit)))
+		s.WriteString("\n")
+	}
+}
+
+// writeScrolledLines writes maxLines lines from offset, with a marker in
+// place of the last one when more follow below.
+func writeScrolledLines(s *strings.Builder, lines []string, offset, maxLines int, style lipgloss.Style) {
+	th := theme.GetTheme()
+	if len(lines) <= maxLines {
+		writeCappedLines(s, lines, maxLines, style, "line(s)")
+		return
+	}
+	end := min(offset+maxLines, len(lines))
+	for i := offset; i < end; i++ {
+		s.WriteString(" " + style.Render(lines[i]))
+		s.WriteString("\n")
+	}
+	if end < len(lines) {
+		s.WriteString(th.MutedTextStyle.Render(fmt.Sprintf(" … +%d more line(s) below", len(lines)-end)))
+		s.WriteString("\n")
+	}
 }
 
 // renderTreeRow renders one tree line: the cursor, the fold marker, the
