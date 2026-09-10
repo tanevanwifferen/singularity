@@ -250,11 +250,23 @@ func (v *WorkflowsView) removeCurrentWorkflow() {
 	v.rebuildFilter()
 }
 
-// spawnAgentForWorkflow spawns a single agent at the workflow's BaseDir.
-func (v *WorkflowsView) spawnAgentForWorkflow(task string) {
+// agentSpawnResultMsg carries the result of spawnAgentForWorkflowCmd's
+// off-thread capacity check and Agent.Start RPC back into Update().
+type agentSpawnResultMsg struct {
+	branchName string
+	agentID    string
+	statusMsg  string
+}
+
+// spawnAgentForWorkflowCmd returns a command that spawns a single agent at
+// the current workflow's BaseDir. The capacity check and Agent.Start RPC are
+// both daemon round-trips, so they run off the UI goroutine; view/workflow
+// state is only mutated when the result arrives (see agentSpawnResultMsg
+// handling), never from inside the command closure.
+func (v *WorkflowsView) spawnAgentForWorkflowCmd(task string) tea.Cmd {
 	wf := v.currentWorkflow()
 	if wf == nil || v.services == nil {
-		return
+		return nil
 	}
 
 	var ctxFiles []string
@@ -262,28 +274,59 @@ func (v *WorkflowsView) spawnAgentForWorkflow(task string) {
 		ctxFiles = v.proj.ContextFiles
 	}
 
-	stats := v.agentStats()
-	available := stats.MaxAgents - stats.Active
-	if available < 1 {
-		v.workflowStatusMsg = fmt.Sprintf("Engine capacity exceeded: no slots available (%d/%d active)",
-			stats.Active, stats.MaxAgents)
-		return
-	}
-
+	branchName := wf.BranchName
+	workflowDir := wf.WorkflowDir()
 	// Build commit instructions listing each repo worktree
 	fullTask := task + "\n\n" + buildWorkflowCommitInstructions(wf)
 
-	id, err := v.services.Agent.Start(v.ctx(), wf.WorkflowDir(), fullTask, service.AgentOptions{
-		ContextFiles: ctxFiles,
-		SmartRoute:   true,
-		WorkflowID:   wf.BranchName,
-	})
-	if err != nil {
-		v.workflowStatusMsg = fmt.Sprintf("Agent spawn failed: %v", err)
-	} else {
-		wf.SetWorkflowAgentID(id)
-		v.workflowStatusMsg = fmt.Sprintf(" Agent spawned for '%s'\n   Next: press 'p' to push when ready", wf.BranchName)
+	return func() tea.Msg {
+		stats := v.agentStats()
+		available := stats.MaxAgents - stats.Active
+		if available < 1 {
+			return agentSpawnResultMsg{
+				branchName: branchName,
+				statusMsg: fmt.Sprintf("Engine capacity exceeded: no slots available (%d/%d active)",
+					stats.Active, stats.MaxAgents),
+			}
+		}
+
+		id, err := v.services.Agent.Start(v.ctx(), workflowDir, fullTask, service.AgentOptions{
+			ContextFiles: ctxFiles,
+			SmartRoute:   true,
+			WorkflowID:   branchName,
+		})
+		if err != nil {
+			return agentSpawnResultMsg{branchName: branchName, statusMsg: fmt.Sprintf("Agent spawn failed: %v", err)}
+		}
+		return agentSpawnResultMsg{
+			branchName: branchName,
+			agentID:    id,
+			statusMsg:  fmt.Sprintf(" Agent spawned for '%s'\n   Next: press 'p' to push when ready", branchName),
+		}
 	}
+}
+
+// applyAgentSpawnResult installs the outcome of an async agent spawn: the
+// status message always applies, and on success the workflow whose spawn
+// this was gets its agent ID recorded and the tick loop (re)started so the
+// new agent's status streams into view.
+func (v *WorkflowsView) applyAgentSpawnResult(msg agentSpawnResultMsg) tea.Cmd {
+	v.workflowStatusMsg = msg.statusMsg
+	if msg.agentID == "" {
+		return nil
+	}
+	for _, wf := range v.workflows {
+		if wf.BranchName == msg.branchName {
+			wf.SetWorkflowAgentID(msg.agentID)
+			break
+		}
+	}
+	cmds := []tea.Cmd{v.refreshWorkflowAgentSnapCmd()}
+	if !v.workflowTicking {
+		v.workflowTicking = true
+		cmds = append(cmds, v.workflowTickCmd())
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update handles update events.
@@ -420,12 +463,12 @@ func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cm
 	case "j", "down":
 		if len(v.workflows) > 1 && v.selectedWorkflow < len(v.workflows)-1 {
 			v.selectedWorkflow++
-			v.refreshWorkflowAgentSnap()
+			return v, v.refreshWorkflowAgentSnapCmd()
 		}
 	case "k", "up":
 		if len(v.workflows) > 1 && v.selectedWorkflow > 0 {
 			v.selectedWorkflow--
-			v.refreshWorkflowAgentSnap()
+			return v, v.refreshWorkflowAgentSnapCmd()
 		}
 	case "/":
 		if v.filter != nil {
@@ -522,7 +565,13 @@ func (v *WorkflowsView) dispatchModalKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 func (v *WorkflowsView) handleWorkflowsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case RefreshDoneMsg:
-		v.refreshWorkflowAgentSnap()
+		return v, v.refreshWorkflowAgentSnapCmd()
+
+	case workflowAgentSnapMsg:
+		v.applyWorkflowAgentSnaps(msg.snaps)
+
+	case agentSpawnResultMsg:
+		return v, v.applyAgentSpawnResult(msg)
 
 	case worktreesCreatedMsg:
 		return v, v.handleWorktreesCreatedMsg()
@@ -564,7 +613,7 @@ func (v *WorkflowsView) handleWorkflowsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 // handleWorktreesCreatedMsg refreshes agent status, reports the worktree
 // creation outcome, and persists workflow state.
 func (v *WorkflowsView) handleWorktreesCreatedMsg() tea.Cmd {
-	v.refreshWorkflowAgentSnap()
+	snapCmd := v.refreshWorkflowAgentSnapCmd()
 	wf := v.currentWorkflow()
 	if wf != nil {
 		created := 0
@@ -576,13 +625,12 @@ func (v *WorkflowsView) handleWorktreesCreatedMsg() tea.Cmd {
 		v.workflowStatusMsg = fmt.Sprintf(" Worktrees created for '%s' across %d repos\n   Next: press 'a' to spawn an agent, or start working in the worktrees", wf.BranchName, created)
 	}
 	v.saveWorkflows()
-	return v.refreshBranchStatusCmd()
+	return tea.Batch(snapCmd, v.refreshBranchStatusCmd())
 }
 
 // handleWorktreesRemovedMsg reports worktree removal and drops the workflow
 // from the list.
 func (v *WorkflowsView) handleWorktreesRemovedMsg(msg worktreesRemovedMsg) tea.Cmd {
-	v.refreshWorkflowAgentSnap()
 	wf := v.currentWorkflow()
 	if msg.err != nil {
 		name := "workflow"
@@ -597,7 +645,7 @@ func (v *WorkflowsView) handleWorktreesRemovedMsg(msg worktreesRemovedMsg) tea.C
 		v.removeCurrentWorkflow()
 	}
 	v.saveWorkflows()
-	return v.refreshBranchStatusCmd()
+	return tea.Batch(v.refreshWorkflowAgentSnapCmd(), v.refreshBranchStatusCmd())
 }
 
 // handlePushCheckDoneMsg turns the async push-eligibility check into a
@@ -676,12 +724,16 @@ func (v *WorkflowsView) handleMRDoneMsg() {
 // handleWorkflowTickMsg refreshes agent snapshots and keeps the tick loop
 // alive while any agent is still running.
 func (v *WorkflowsView) handleWorkflowTickMsg() tea.Cmd {
-	v.refreshWorkflowAgentSnap()
+	snapCmd := v.refreshWorkflowAgentSnapCmd()
+	// hasRunningAgents reads the snapshot cache from the previous tick (the
+	// refresh above hasn't landed yet); at worst this ticks one extra second
+	// after the last agent finishes, which is an acceptable trade-off for
+	// not blocking the UI goroutine on a live RPC here.
 	if v.hasRunningAgents() {
-		return v.workflowTickCmd()
+		return tea.Batch(snapCmd, v.workflowTickCmd())
 	}
 	v.workflowTicking = false
-	return nil
+	return snapCmd
 }
 
 // --- Jira picker handlers ---
@@ -876,9 +928,7 @@ func (v *WorkflowsView) handleAgentPromptInput(msg tea.KeyMsg) tea.Cmd {
 			promptText := v.agentPromptInput.Value
 			v.showAgentPrompt = false
 			v.agentPromptInput.Clear()
-			v.spawnAgentForWorkflow(promptText)
-			v.refreshWorkflowAgentSnap()
-			return v.ensureWorkflowTick()
+			return v.spawnAgentForWorkflowCmd(promptText)
 		}
 		v.showAgentPrompt = false
 	case "esc":
@@ -1287,25 +1337,44 @@ func (v *WorkflowsView) refreshBranchStatusCmd() tea.Cmd {
 	}
 }
 
-func (v *WorkflowsView) refreshWorkflowAgentSnap() {
-	// Refresh the cache for every workflow with an assigned agent so that
-	// runningAgentCount() and renderWorkflowItem() can read from it during
-	// View() instead of making a live (potentially network-bound) service
-	// call on every render — View() runs after every keystroke, so a live
-	// call here would reintroduce the input-lag bug fixed in AgentView.
-	snaps := make(map[string]*service.AgentSnapshot, len(v.workflows))
+// workflowAgentSnapMsg carries the result of refreshWorkflowAgentSnapCmd's
+// off-thread agent lookups back into Update().
+type workflowAgentSnapMsg struct {
+	snaps map[string]*service.AgentSnapshot
+}
+
+// refreshWorkflowAgentSnapCmd returns a command that refreshes the agent
+// snapshot cache for every workflow with an assigned agent, so that
+// runningAgentCount() and renderWorkflowItem() can read from it during
+// View() instead of making a live (potentially network-bound) service call
+// on every render or keystroke — a live call on the UI goroutine here
+// reintroduces the input-lag bug fixed in AgentView. The set of agent IDs is
+// captured synchronously (on the caller's goroutine) since v.workflows may
+// be mutated by the time the returned command runs.
+func (v *WorkflowsView) refreshWorkflowAgentSnapCmd() tea.Cmd {
+	var ids []string
 	if v.services != nil {
 		for _, wf := range v.workflows {
-			agentID := wf.GetWorkflowAgentID()
-			if agentID == "" {
-				continue
-			}
-			if agent := v.agentGet(agentID); agent != nil {
-				s := (*agent)
-				snaps[agentID] = &s
+			if id := wf.GetWorkflowAgentID(); id != "" {
+				ids = append(ids, id)
 			}
 		}
 	}
+	return func() tea.Msg {
+		snaps := make(map[string]*service.AgentSnapshot, len(ids))
+		for _, id := range ids {
+			if agent := v.agentGet(id); agent != nil {
+				s := (*agent)
+				snaps[id] = &s
+			}
+		}
+		return workflowAgentSnapMsg{snaps: snaps}
+	}
+}
+
+// applyWorkflowAgentSnaps installs a freshly-fetched snapshot cache and
+// recomputes the single-workflow shortcut used by the detail pane.
+func (v *WorkflowsView) applyWorkflowAgentSnaps(snaps map[string]*service.AgentSnapshot) {
 	v.workflowAgentSnaps = snaps
 
 	wf := v.currentWorkflow()

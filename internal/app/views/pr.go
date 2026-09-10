@@ -591,7 +591,12 @@ func (v *PRView) View() string {
 		s.WriteString(th.DashboardAccentStyle.Render("↑↓"))
 	}
 	s.WriteString("]\n")
-	for i, b := range v.branches {
+	srcStart, srcEnd := calcViewport(v.height, 20, v.sourceBranchIdx, len(v.branches))
+	if srcStart > 0 {
+		s.WriteString(th.MutedTextStyle.Render(fmt.Sprintf("  ↑ %d more above", srcStart)) + "\n")
+	}
+	for i := srcStart; i < srcEnd; i++ {
+		b := v.branches[i]
 		prefix := "  "
 		if i == v.sourceBranchIdx {
 			prefix = th.DashboardAccentStyle.Render("▶ ")
@@ -605,6 +610,9 @@ func (v *PRView) View() string {
 		} else {
 			s.WriteString(prefix + th.BranchStyle.Render(branchName) + "\n")
 		}
+	}
+	if srcEnd < len(v.branches) {
+		s.WriteString(th.MutedTextStyle.Render(fmt.Sprintf("  ↓ %d more below", len(v.branches)-srcEnd)) + "\n")
 	}
 	s.WriteString("\n")
 

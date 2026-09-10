@@ -146,13 +146,7 @@ func (v *OverviewView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "y", "enter":
 				v.showDetachConfirm = false
-				err := v.services.Branch.CheckoutDetached(v.ctx(), v.repoPath)
-				if err != nil {
-					v.actionResult = fmt.Sprintf("✗ %v", err)
-				} else {
-					v.actionResult = "✓ Checked out HEAD in detached state"
-				}
-				v.loadData()
+				return v, v.checkoutDetachedCmd()
 			case "n", "esc":
 				v.showDetachConfirm = false
 			}
@@ -171,8 +165,30 @@ func (v *OverviewView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case RefreshDoneMsg:
 		v.loading = false
+
+	case detachCheckoutDoneMsg:
+		v.actionResult = msg.result
 	}
 	return v, nil
+}
+
+// detachCheckoutDoneMsg reports the outcome of an async detached-HEAD
+// checkout.
+type detachCheckoutDoneMsg struct {
+	result string
+}
+
+// checkoutDetachedCmd checks out HEAD in detached state and reloads repo
+// data, entirely off the UI goroutine.
+func (v *OverviewView) checkoutDetachedCmd() tea.Cmd {
+	return func() tea.Msg {
+		result := "✓ Checked out HEAD in detached state"
+		if err := v.services.Branch.CheckoutDetached(v.ctx(), v.repoPath); err != nil {
+			result = fmt.Sprintf("✗ %v", err)
+		}
+		v.loadData()
+		return detachCheckoutDoneMsg{result: result}
+	}
 }
 
 // View renders the overview.

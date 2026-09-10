@@ -34,6 +34,11 @@ type PipelineView struct {
 	// Retry state
 	retryBranch   string
 	showRetryBusy bool
+
+	// Cached forge auth info, refreshed alongside repo/pipeline data in
+	// loadData — View() must never make a live daemon call, or it blocks
+	// the UI goroutine on every render.
+	forgeAuth *service.ForgeAuth
 }
 
 // NewPipelineView creates a new pipeline view.
@@ -68,6 +73,7 @@ func (v *PipelineView) loadData() {
 	}
 	v.repo = repo
 	v.branches = repo.Branches
+	v.forgeAuth, _ = v.services.Forge.DetectAuth(v.ctx())
 
 	// Get pipeline statuses for all branches
 	v.pipelines, err = v.services.Pipeline.Statuses(v.ctx(), v.repoPath, v.branches)
@@ -199,7 +205,7 @@ func (v *PipelineView) View() string {
 	s.WriteString("\n\n")
 
 	// Forge info
-	auth, _ := v.services.Forge.DetectAuth(v.ctx())
+	auth := v.forgeAuth
 	if auth != nil && auth.Valid {
 		s.WriteString(th.StatsStyle.Render(fmt.Sprintf(" Forge: %s ", auth.Type.String())))
 	} else {
@@ -266,13 +272,22 @@ func (v *PipelineView) View() string {
 		return s.String()
 	}
 
-	// Branch list
-	for i, branch := range v.branches {
+	// Branch list — scrolled to keep the cursor in view. Chrome is measured
+	// from what's already been written (the current-branch pipeline block
+	// above is variable height) plus a fixed allowance for the footer.
+	chrome := strings.Count(s.String(), "\n") + 4
+	startIdx, endIdx := calcViewport(v.height, chrome, v.selectedIdx, len(v.branches))
+	for i := startIdx; i < endIdx && i < len(v.branches); i++ {
+		branch := v.branches[i]
 		if i == v.selectedIdx {
 			s.WriteString(v.renderSelectedBranch(branch))
 		} else {
 			s.WriteString(v.renderBranchItem(branch))
 		}
+		s.WriteString("\n")
+	}
+	if endIdx-startIdx < len(v.branches) {
+		s.WriteString(th.Help.Render(fmt.Sprintf(" Showing %d-%d of %d — ↑↓ to scroll", startIdx+1, endIdx, len(v.branches))))
 		s.WriteString("\n")
 	}
 
@@ -391,17 +406,27 @@ func (v *PipelineView) renderExpandedDetails() string {
 
 	s.WriteString("\n")
 
-	// Jobs
+	// Jobs — capped to keep the expanded panel from overflowing the view;
+	// there's no per-job cursor here, so a "+N more" note stands in for a
+	// full scrollable viewport.
 	if len(pipeline.Jobs) > 0 {
 		s.WriteString(th.DashboardTitle.Render(" Jobs "))
 		s.WriteString("\n")
-		for _, job := range pipeline.Jobs {
+		const maxJobs = 12
+		jobs := pipeline.Jobs
+		if len(jobs) > maxJobs {
+			jobs = jobs[:maxJobs]
+		}
+		for _, job := range jobs {
 			statusStr := service.FormatPipelineStatus(job.Status)
 			statusStyle := v.getStatusStyle(job.Status)
 			s.WriteString(fmt.Sprintf("  %s %s %s\n",
 				v.getJobStatusIcon(job.Status),
 				th.InfoStyle.Render(job.Name),
 				statusStyle.Render(statusStr)))
+		}
+		if len(pipeline.Jobs) > maxJobs {
+			s.WriteString(th.Help.Render(fmt.Sprintf("  … +%d more jobs (see pipeline URL above)\n", len(pipeline.Jobs)-maxJobs)))
 		}
 	}
 
