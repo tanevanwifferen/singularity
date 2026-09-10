@@ -65,7 +65,7 @@ func runFlowStart(ctx context.Context, args []string) int {
 	var allowedTools idListFlag
 	fs.Var(&allowedTools, "allowed-tools", "restrict every step's agent to these tools (repeatable, or comma-separated)")
 	maxRetries := fs.Int("max-retries", 0, "unsupported: the flow wire contract carries no per-task retry count")
-	reviewerModel := fs.String("reviewer-model", "", "model for the review step only (default: --model)")
+	reviewerModel := fs.String("reviewer-model", "", "model for the review step only (default: sonnet)")
 	reviewerEffort := fs.String("reviewer-effort", "", "effort for the review step only (default: --effort)")
 	planning := fs.Bool("planning", false, "run a planning phase before round 1, refining the goal before the implementer starts")
 	plannerModel := fs.String("planner-model", "", "model for the planning step only (default: --model)")
@@ -268,6 +268,10 @@ func nextFlowRound(f api.Flow) int {
 // daemon to default because flow.Start only substitutes Opts for an
 // *entirely* zero ReviewOpts, and a resolved SmartRoute is never zero.
 //
+// The reviewer's model defaults to "sonnet" rather than inheriting --model:
+// code review always runs on sonnet unless --reviewer-model explicitly names
+// something else, regardless of what model the implementer used.
+//
 // resolve is smartRouteFlags' resolver, called once per block with that
 // block's effective model and effort: the reviewer routes on its own pins,
 // so `--reviewer-model opus` leaves the classifier deciding the reviewer's
@@ -278,6 +282,7 @@ func composeFlowOpts(base api.TaskOptions, reviewerModel, reviewerEffort string,
 	work.SmartRoute = &workRoute
 
 	review = base
+	review.Model = "sonnet"
 	if reviewerModel != "" {
 		review.Model = reviewerModel
 	}
