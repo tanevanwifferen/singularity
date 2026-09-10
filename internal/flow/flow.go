@@ -221,6 +221,10 @@ type Flow struct {
 	// QueueID is always "flow-<id>".
 	QueueID string `json:"queue_id"`
 	Title   string `json:"title,omitempty"`
+	// IssueKey is the Jira issue (e.g. "PROJ-123") the flow's Goal was built
+	// from, when it was started with --jira instead of a bare --prompt.
+	// Empty for a flow given its goal directly.
+	IssueKey string `json:"issue_key,omitempty"`
 	// Goal is the implementer's task, repeated verbatim to every later fixer.
 	Goal string `json:"goal"`
 	// ReviewGoal is extra instruction for the reviewer, if any.
