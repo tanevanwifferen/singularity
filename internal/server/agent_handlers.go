@@ -118,6 +118,28 @@ func (s *Server) handleAgentKill(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true})
 }
 
+// handleAgentTerminate handles POST /api/agent/terminate.
+func (s *Server) handleAgentTerminate(w http.ResponseWriter, r *http.Request) {
+	if !s.requireMethod(w, r, http.MethodPost) || !s.requireServices(w) {
+		return
+	}
+	var req api.AgentQueryRequest
+	if err := s.parseJSON(r, &req); err != nil {
+		s.writeCoded(w, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+	id := req.ResolvedID()
+	if id == "" {
+		s.writeCoded(w, api.ErrCodeBadRequest, "agent_id required")
+		return
+	}
+	if err := s.Services.Agent.Terminate(r.Context(), id); err != nil {
+		s.writeServiceErr(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true})
+}
+
 // handleAgentRemove handles POST /api/agent/remove.
 func (s *Server) handleAgentRemove(w http.ResponseWriter, r *http.Request) {
 	if !s.requireMethod(w, r, http.MethodPost) || !s.requireServices(w) {

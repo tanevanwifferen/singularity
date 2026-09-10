@@ -65,7 +65,7 @@ func (s *localAgentService) SendInput(ctx context.Context, agentID, message stri
 	return wrapErr(s.eng.SendInput(agentID, message))
 }
 
-// Kill terminates the agent's subprocess.
+// Kill soft-closes the agent; the subprocess keeps running.
 func (s *localAgentService) Kill(ctx context.Context, agentID string) error {
 	if err := checkCtx(ctx); err != nil {
 		return err
@@ -74,6 +74,17 @@ func (s *localAgentService) Kill(ctx context.Context, agentID string) error {
 		return service.ErrUnavailable
 	}
 	return wrapErr(s.eng.KillAgent(agentID))
+}
+
+// Terminate ends the agent's subprocess, keeping its record.
+func (s *localAgentService) Terminate(ctx context.Context, agentID string) error {
+	if err := checkCtx(ctx); err != nil {
+		return err
+	}
+	if s.eng == nil {
+		return service.ErrUnavailable
+	}
+	return wrapErr(s.eng.TerminateAgent(agentID))
 }
 
 // Remove drops the agent from the engine's registry.

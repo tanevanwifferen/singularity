@@ -44,8 +44,12 @@ type branchStatusDoneMsg struct{}
 // worktreesCreatedMsg signals that worktree creation for a workflow completed.
 type worktreesCreatedMsg struct{}
 
-// worktreesRemovedMsg signals that worktree removal for a workflow completed.
-type worktreesRemovedMsg struct{}
+// worktreesRemovedMsg signals that worktree removal for a workflow finished.
+// A non-nil err means the removal was aborted before any worktree was touched
+// because an agent still working in the workflow could not be terminated.
+type worktreesRemovedMsg struct {
+	err error
+}
 
 // WorkflowTickMsg is sent periodically to refresh workflow agent status.
 type WorkflowTickMsg struct{}
@@ -359,10 +363,7 @@ func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cm
 					if wf == nil {
 						return nil
 					}
-					return func() tea.Msg {
-						wf.RemoveAllWorktrees()
-						return worktreesRemovedMsg{}
-					}
+					return v.removeWorkflowCmd(wf)
 				})
 		}
 	case "X":
@@ -375,10 +376,7 @@ func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cm
 					if wf == nil {
 						return nil
 					}
-					return func() tea.Msg {
-						wf.RemoveAllWorktrees()
-						return worktreesRemovedMsg{}
-					}
+					return v.removeWorkflowCmd(wf)
 				})
 		}
 	case "H":
@@ -519,7 +517,7 @@ func (v *WorkflowsView) handleWorkflowsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return v, v.handleWorktreesCreatedMsg()
 
 	case worktreesRemovedMsg:
-		return v, v.handleWorktreesRemovedMsg()
+		return v, v.handleWorktreesRemovedMsg(msg)
 
 	case branchStatusDoneMsg:
 		// Branch statuses updated; re-render is automatic.
@@ -572,9 +570,17 @@ func (v *WorkflowsView) handleWorktreesCreatedMsg() tea.Cmd {
 
 // handleWorktreesRemovedMsg reports worktree removal and drops the workflow
 // from the list.
-func (v *WorkflowsView) handleWorktreesRemovedMsg() tea.Cmd {
+func (v *WorkflowsView) handleWorktreesRemovedMsg(msg worktreesRemovedMsg) tea.Cmd {
 	v.refreshWorkflowAgentSnap()
 	wf := v.currentWorkflow()
+	if msg.err != nil {
+		name := "workflow"
+		if wf != nil {
+			name = fmt.Sprintf("'%s'", wf.BranchName)
+		}
+		v.workflowStatusMsg = fmt.Sprintf("Cannot delete %s: %v", name, msg.err)
+		return nil
+	}
 	if wf != nil {
 		v.workflowStatusMsg = fmt.Sprintf("Worktrees and branches for '%s' removed", wf.BranchName)
 		v.removeCurrentWorkflow()
@@ -1206,6 +1212,30 @@ func (v *WorkflowsView) workflowTickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
 		return WorkflowTickMsg{}
 	})
+}
+
+// removeWorkflowCmd tears wf down: every agent still working inside the
+// workflow is terminated first, then the worktrees and branches are removed.
+// Deleting the worktrees out from under a live agent would leave it orphaned,
+// editing a working directory that no longer exists, so when an agent cannot
+// be stopped the worktrees are left alone and the failure is reported in the
+// resulting worktreesRemovedMsg instead.
+//
+// All agents in the workflow are considered, not just the one recorded on it:
+// see service.TerminateWorkflowAgents.
+func (v *WorkflowsView) removeWorkflowCmd(wf *service.FeatureWorkflow) tea.Cmd {
+	var agents service.AgentService
+	if v.services != nil {
+		agents = v.services.Agent
+	}
+	ctx := v.ctx()
+	return func() tea.Msg {
+		if err := service.TerminateWorkflowAgents(ctx, agents, wf); err != nil {
+			return worktreesRemovedMsg{err: err}
+		}
+		wf.RemoveAllWorktrees()
+		return worktreesRemovedMsg{}
+	}
 }
 
 func (v *WorkflowsView) hasRunningAgents() bool {

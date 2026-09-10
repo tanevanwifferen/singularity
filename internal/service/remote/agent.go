@@ -34,9 +34,14 @@ func (s *remoteAgentService) SendInput(ctx context.Context, agentID, message str
 	return s.c.AgentSendInput(ctx, agentID, message)
 }
 
-// Kill terminates the agent's subprocess.
+// Kill soft-closes the agent; the subprocess keeps running.
 func (s *remoteAgentService) Kill(ctx context.Context, agentID string) error {
 	return s.c.AgentKill(ctx, agentID)
+}
+
+// Terminate ends the agent's subprocess, keeping its record.
+func (s *remoteAgentService) Terminate(ctx context.Context, agentID string) error {
+	return s.c.AgentTerminate(ctx, agentID)
 }
 
 // Remove drops the agent from the engine's registry.

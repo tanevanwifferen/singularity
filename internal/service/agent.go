@@ -23,8 +23,17 @@ type AgentService interface {
 	// SendInput pushes a message to a running agent's stdin.
 	SendInput(ctx context.Context, agentID, message string) error
 
-	// Kill terminates the agent's subprocess (SIGTERM, then SIGKILL).
+	// Kill soft-closes the agent: it is marked killed and stops holding a
+	// slot, but its subprocess is left alive so follow-up messages can
+	// still be sent. Use Terminate when the process really has to stop.
 	Kill(ctx context.Context, agentID string) error
+
+	// Terminate ends the agent's subprocess (SIGTERM, then SIGKILL) and
+	// waits for it to exit, keeping the agent record and its transcript.
+	// Unlike Kill the process is really gone afterwards; unlike Remove the
+	// record survives. Callers that are about to delete the agent's working
+	// directory must use this.
+	Terminate(ctx context.Context, agentID string) error
 
 	// Remove drops the agent from the engine's registry. Idempotent.
 	Remove(ctx context.Context, agentID string) error

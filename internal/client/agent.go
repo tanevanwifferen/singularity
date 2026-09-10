@@ -66,6 +66,11 @@ func (c *Client) AgentKill(ctx context.Context, agentID string) error {
 	return c.post(ctx, "/api/agent/kill", api.AgentQueryRequest{AgentID: agentID}, nil)
 }
 
+// AgentTerminate calls Agent.Terminate.
+func (c *Client) AgentTerminate(ctx context.Context, agentID string) error {
+	return c.post(ctx, "/api/agent/terminate", api.AgentQueryRequest{AgentID: agentID}, nil)
+}
+
 // AgentRemove calls Agent.Remove.
 func (c *Client) AgentRemove(ctx context.Context, agentID string) error {
 	return c.post(ctx, "/api/agent/remove", api.AgentQueryRequest{AgentID: agentID}, nil)
