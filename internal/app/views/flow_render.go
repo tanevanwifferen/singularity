@@ -260,8 +260,10 @@ func (v *FlowsView) renderTreePane(width int) string {
 	}
 	s.WriteString(th.DashboardTitle.Render(title))
 	if haveSel {
-		s.WriteString(th.MutedTextStyle.Render(fmt.Sprintf(" %s  %s  %s  %s",
-			sel.ID, clipText(sel.Label, max(width-40, 10)), sel.State, sel.rounds())))
+		// The label gives way first; whatever is left is clipped to the
+		// room the title leaves, so a narrow pane never wraps its header.
+		s.WriteString(th.MutedTextStyle.Render(fitText(fmt.Sprintf(" %s  %s  %s  %s",
+			sel.ID, clipText(sel.Label, max(width-40, 10)), sel.State, sel.rounds()), width-len(title))))
 	}
 	s.WriteString("\n")
 
@@ -273,13 +275,16 @@ func (v *FlowsView) renderTreePane(width int) string {
 	blockLines := 0
 	footer := false
 	if haveSel {
-		requestMax, findingsMax := v.blockBudget(len(rows), sel, width, footer)
+		var requestMax, findingsMax int
+		requestMax, findingsMax, footer = v.settleBlockBudget(len(rows), sel, width)
 		blockLines = v.blockHeight(sel, width, requestMax, findingsMax)
-		if len(rows) > v.height-v.treeChromeLines(footer)-blockLines {
-			footer = true
-			requestMax, findingsMax = v.blockBudget(len(rows), sel, width, footer)
-			blockLines = v.blockHeight(sel, width, requestMax, findingsMax)
+		// The budget is settled: clamp the scroll to it once, here, so a
+		// j past the end lands on the last full page of the final budget
+		// rather than one the footer pass then shrank.
+		if requestMax == 0 && findingsMax == 0 {
+			v.expanded = flowBlockNone
 		}
+		v.blockScroll = v.clampBlockScroll(sel, width, requestMax, findingsMax)
 		if requestMax > 0 {
 			s.WriteString(v.renderFlowRequestBlock(sel, width, requestMax))
 		}
@@ -289,7 +294,7 @@ func (v *FlowsView) renderTreePane(width int) string {
 	}
 
 	if len(rows) == 0 {
-		s.WriteString(th.MutedTextStyle.Render(" No rounds yet — the reconciler submits round 1."))
+		s.WriteString(th.MutedTextStyle.Render(clipText(" No rounds yet — the reconciler submits round 1.", blockTextWidth(width))))
 		s.WriteString("\n")
 		return s.String()
 	}
@@ -362,6 +367,38 @@ func (v *FlowsView) nextExpanded() flowBlock {
 	}
 }
 
+// settleBlockBudget is the block budget the pane draws under, and whether
+// it draws the footer: blockBudget drawn up without the footer, and again
+// with it reserved when the rows overflow the tree room the first left.
+func (v *FlowsView) settleBlockBudget(rowCount int, sel FlowInfo, width int) (requestMax, findingsMax int, footer bool) {
+	requestMax, findingsMax = v.blockBudget(rowCount, sel, width, false)
+	blockLines := v.blockHeight(sel, width, requestMax, findingsMax)
+	if rowCount > v.height-v.treeChromeLines(false)-blockLines {
+		footer = true
+		requestMax, findingsMax = v.blockBudget(rowCount, sel, width, true)
+	}
+	return requestMax, findingsMax, footer
+}
+
+// expandedShown reports whether the expanded block is actually on screen:
+// a pane too short for the blocks drops them, and then j/k belong to the
+// tree again — an invisible block must not swallow them.
+func (v *FlowsView) expandedShown() bool {
+	if v.expanded == flowBlockNone {
+		return false
+	}
+	sel, ok := v.selectedFlow()
+	if !ok {
+		return false
+	}
+	treeW := max(v.width-v.listWidth()-1, 20)
+	requestMax, findingsMax, _ := v.settleBlockBudget(len(v.treeRows()), sel, treeW)
+	if v.expanded == flowBlockFindings {
+		return findingsMax > 0
+	}
+	return requestMax > 0
+}
+
 // blockBudget splits the tree pane's height between the request and the
 // findings blocks, returning how many lines each may draw under its header
 // — every line, the findings block's "round N: decision" line and any
@@ -424,6 +461,18 @@ func (v *FlowsView) blockHeight(sel FlowInfo, width, requestMax, findingsMax int
 	return n
 }
 
+// clampBlockScroll is blockScroll kept within the expanded block's body
+// under the budget it was given — zero when no block is expanded.
+func (v *FlowsView) clampBlockScroll(sel FlowInfo, width, requestMax, findingsMax int) int {
+	switch v.expanded {
+	case flowBlockRequest:
+		return clampScroll(v.blockScroll, len(v.requestLines(sel, width)), requestMax)
+	case flowBlockFindings:
+		return clampScroll(v.blockScroll, len(v.findingsLines(width)), findingsMax-1)
+	}
+	return 0
+}
+
 // renderFlowRequestBlock renders the flow's original goal — the request the
 // implementer was given — and the review focus, if the flow narrowed one,
 // as a wrapped multiline block above the tree: the first of the two blocks
@@ -443,18 +492,22 @@ func (v *FlowsView) renderFlowRequestBlock(sel FlowInfo, width, maxLines int) st
 	case len(lines) > maxLines && v.expanded == flowBlockFindings:
 		hint = "  (f: expand)"
 	case len(lines) > maxLines:
-		hint = "  (f f: expand)"
+		_, verdict := v.latestVerdict()
+		if verdict != nil {
+			hint = "  (f f: expand)"
+		} else {
+			hint = "  (f: expand)"
+		}
 	}
-	s.WriteString(th.MutedTextStyle.Render(" Request" + hint))
+	s.WriteString(th.MutedTextStyle.Render(blockHeader(" Request", hint, width)))
 	s.WriteString("\n")
 
 	if len(lines) == 0 {
-		s.WriteString(th.MutedTextStyle.Render(" (no goal recorded)"))
+		s.WriteString(th.MutedTextStyle.Render(clipText(" (no goal recorded)", blockTextWidth(width))))
 		s.WriteString("\n")
 		return s.String()
 	}
 	if expanded {
-		v.blockScroll = clampScroll(v.blockScroll, len(lines), maxLines)
 		writeScrolledLines(&s, lines, v.blockScroll, maxLines, width, lipgloss.NewStyle())
 		return s.String()
 	}
@@ -497,9 +550,9 @@ func (v *FlowsView) renderFlowFindingsBlock(width, maxLines int) string {
 
 	round, verdict := v.latestVerdict()
 	if verdict == nil {
-		s.WriteString(th.MutedTextStyle.Render(" Findings"))
+		s.WriteString(th.MutedTextStyle.Render(blockHeader(" Findings", "", width)))
 		s.WriteString("\n")
-		s.WriteString(th.MutedTextStyle.Render(" (no review verdict yet)"))
+		s.WriteString(th.MutedTextStyle.Render(clipText(" (no review verdict yet)", blockTextWidth(width))))
 		s.WriteString("\n")
 		return s.String()
 	}
@@ -517,32 +570,33 @@ func (v *FlowsView) renderFlowFindingsBlock(width, maxLines int) string {
 	case compact:
 		hint = "  (f: expand)"
 	}
-	s.WriteString(th.MutedTextStyle.Render(" Findings" + hint))
+	s.WriteString(th.MutedTextStyle.Render(blockHeader(" Findings", hint, width)))
 	s.WriteString("\n")
 
-	decisionStyle := flowStateStyle(string(verdict.Decision), th)
-	decision := fmt.Sprintf(" round %d: %s", round, decisionStyle.Render(string(verdict.Decision)))
+	// Each piece is clipped to what is left of the line before it is
+	// styled: clipping styled text would count the escape codes as columns
+	// and could cut one in half.
+	room := blockTextWidth(width)
+	writeFitted(&s, &room, fmt.Sprintf(" round %d: ", round), lipgloss.NewStyle())
+	writeFitted(&s, &room, string(verdict.Decision), flowStateStyle(string(verdict.Decision), th))
 	if budget < 1 {
 		// No room for a body: the count is what the body would have said.
 		if n := len(verdict.Findings); n > 0 {
-			decision += th.MutedTextStyle.Render(fmt.Sprintf("  %d finding(s)", n))
+			writeFitted(&s, &room, fmt.Sprintf("  %d finding(s)", n), th.MutedTextStyle)
 		}
-		s.WriteString(decision)
 		s.WriteString("\n")
 		return s.String()
 	}
-	s.WriteString(decision)
 	s.WriteString("\n")
 
 	if verdict.Summary == "" && len(verdict.Findings) == 0 {
-		s.WriteString(th.MutedTextStyle.Render(" (no summary or findings)"))
+		s.WriteString(th.MutedTextStyle.Render(clipText(" (no summary or findings)", blockTextWidth(width))))
 		s.WriteString("\n")
 		return s.String()
 	}
 
 	switch {
 	case expanded:
-		v.blockScroll = clampScroll(v.blockScroll, len(lines), budget)
 		writeScrolledLines(&s, lines, v.blockScroll, budget, width, th.MutedTextStyle)
 	case compact:
 		writeCappedLines(&s, findingsItemLines(verdict, width), budget, width, th.MutedTextStyle, "finding(s)")
@@ -613,6 +667,41 @@ func (v *FlowsView) latestVerdict() (int, *service.FlowVerdict) {
 // with a margin so lipgloss never has to wrap what it is handed.
 func blockTextWidth(width int) int { return max(width-2, 10) }
 
+// blockHeader is a block's header line: the name with its key hint when
+// the hint fits the pane, the name alone when it does not — a hint cut to
+// "(f: co…" says less than no hint — and the name clipped as a last resort.
+func blockHeader(name, hint string, width int) string {
+	if room := blockTextWidth(width); len(name)+len(hint) > room {
+		return clipText(name, room)
+	}
+	return name + hint
+}
+
+// fitText is clipText for a room that may be too small for anything: it
+// returns "" when there is no room, an ellipsis alone when there is room
+// for nothing else, and clipText otherwise.
+func fitText(s string, room int) string {
+	switch {
+	case room <= 0 || s == "":
+		return ""
+	case room == 1 && len([]rune(s)) > 1:
+		return "…"
+	}
+	return clipText(s, room)
+}
+
+// writeFitted writes text styled, clipped to room, and takes what it wrote
+// off room — so pieces of one line can each be styled and still add up to
+// one terminal row.
+func writeFitted(s *strings.Builder, room *int, text string, style lipgloss.Style) {
+	text = fitText(text, *room)
+	if text == "" {
+		return
+	}
+	*room -= len([]rune(text))
+	s.WriteString(style.Render(text))
+}
+
 // wrapBlock word-wraps text to the pane, one paragraph per input line,
 // hard-splitting any token wider than the pane so every returned line
 // really is one terminal row.
@@ -658,7 +747,8 @@ func writeCappedLines(s *strings.Builder, lines []string, maxLines, width int, s
 		s.WriteString("\n")
 	}
 	if hidden := len(lines) - len(shown); hidden > 0 {
-		s.WriteString(th.MutedTextStyle.Render(fmt.Sprintf(" … +%d more %s", hidden, unit)))
+		marker := fmt.Sprintf(" … +%d more %s", hidden, unit)
+		s.WriteString(th.MutedTextStyle.Render(clipText(marker, blockTextWidth(width))))
 		s.WriteString("\n")
 	}
 }
@@ -690,7 +780,8 @@ func writeScrolledLines(s *strings.Builder, lines []string, offset, maxLines, wi
 		s.WriteString("\n")
 	}
 	if end < len(lines) {
-		s.WriteString(th.MutedTextStyle.Render(fmt.Sprintf(" … +%d more line(s) below", len(lines)-end)))
+		marker := fmt.Sprintf(" … +%d more line(s) below", len(lines)-end)
+		s.WriteString(th.MutedTextStyle.Render(clipText(marker, blockTextWidth(width))))
 		s.WriteString("\n")
 	}
 }

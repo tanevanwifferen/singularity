@@ -422,7 +422,7 @@ func (v *FlowsView) CapturesKey(key string) bool { return key == "tab" }
 
 // ShortHelp returns the status-bar help line.
 func (v *FlowsView) ShortHelp() string {
-	return "n:start  C:continue  c:cancel  D:remove  a:agent  tab:pane  l/h:expand f:findings  r:refresh  /:filter"
+	return "n:start  C:continue  c:cancel  D:remove  a:agent  tab:pane  l/h:expand  f:findings  r:refresh  /:filter"
 }
 
 // KeyBindings returns the view's bindings for the help overlay.
@@ -438,7 +438,7 @@ func (v *FlowsView) KeyBindings() []components.KeyBinding {
 		{Key: "j/k", Description: "Navigate"},
 		{Key: "l/→/Enter", Description: "Expand tree node (or focus tree)"},
 		{Key: "h/←", Description: "Collapse tree node"},
-		{Key: "f", Description: "Expand the findings block over the tree (j/k scroll it)"},
+		{Key: "f", Description: "Expand the findings block, then the request block, over the tree (j/k scroll it)"},
 		{Key: "/", Description: "Filter flows"},
 		{Key: "Esc", Description: "Back to the flow list"},
 	}

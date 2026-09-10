@@ -90,7 +90,7 @@ func (v *FlowsView) handleFlowKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return v, nil
 
 	case "j", "down":
-		if v.expanded != flowBlockNone {
+		if v.expandedShown() {
 			v.blockScroll++
 			return v, nil
 		}
@@ -102,7 +102,7 @@ func (v *FlowsView) handleFlowKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return v, v.syncSelectionFromCursor()
 
 	case "k", "up":
-		if v.expanded != flowBlockNone {
+		if v.expandedShown() {
 			v.blockScroll = max(v.blockScroll-1, 0)
 			return v, nil
 		}
