@@ -494,6 +494,60 @@ func TestRemoveFlowBehindConfirm(t *testing.T) {
 	}
 }
 
+// After a remove, the refresh lands the cursor on a neighbouring flow and
+// the right-hand pane follows: the removed flow's tree is dropped and the
+// neighbour's tree is fetched, not left showing the deleted flow.
+func TestRemoveFlowRefetchesNeighbourTree(t *testing.T) {
+	v, stub := loadedFlowsView(t)
+	stub.RemoveFn = func(context.Context, string) error { return nil }
+	second := testFlow()
+	second.ID = "f2"
+	treeAsked := ""
+	stub.TreeFn = func(_ context.Context, id string) (*service.FlowTree, error) {
+		treeAsked = id
+		if id != "f2" {
+			return nil, service.ErrNotFound
+		}
+		return testTree(), nil
+	}
+	stub.ListFn = func(context.Context, []service.FlowState) ([]service.Flow, error) {
+		return []service.Flow{second}, nil
+	}
+
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	_, cmd := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, refresh := v.Update(cmd())
+	if len(v.treeNodes) != 0 {
+		t.Fatalf("tree nodes = %d after remove, want the pane cleared", len(v.treeNodes))
+	}
+	if refresh == nil {
+		t.Fatal("a successful remove must refresh the list")
+	}
+	_, fetch := v.Update(refresh())
+	if v.selectedID != "f2" {
+		t.Fatalf("selected = %q after refresh, want f2", v.selectedID)
+	}
+	if fetch == nil {
+		t.Fatal("the refresh moved the cursor to f2 but fetched no tree for it")
+	}
+	v.Update(fetch())
+	if treeAsked != "f2" || len(v.treeNodes) != 10 {
+		t.Fatalf("tree asked for %q, nodes = %d; want f2's 10 nodes", treeAsked, len(v.treeNodes))
+	}
+
+	// Removing the last flow leaves nothing selected and nothing drawn.
+	stub.ListFn = func(context.Context, []service.FlowState) ([]service.Flow, error) {
+		return nil, nil
+	}
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	_, cmd = v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, refresh = v.Update(cmd())
+	v.Update(refresh())
+	if v.selectedID != "" || len(v.treeNodes) != 0 {
+		t.Fatalf("after removing the last flow: selected=%q nodes=%d, want none", v.selectedID, len(v.treeNodes))
+	}
+}
+
 // A refresh keeps the cursor on the flow it was on and picks up the state
 // the daemon now reports — this is what the app's tick and agent-event
 // chains deliver.
