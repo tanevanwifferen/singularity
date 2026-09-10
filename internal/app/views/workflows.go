@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -109,6 +110,10 @@ type WorkflowsView struct {
 
 	// Drill-down diff view
 	workflowDiffView *WorkflowDiffView
+
+	// Flows view, for starting an adversarial review flow directly on the
+	// selected workflow without having to switch over and pick it there.
+	flowsView *FlowsView
 }
 
 // NewWorkflowsView creates a new workflows view.
@@ -150,6 +155,12 @@ func (v *WorkflowsView) SetProject(proj *service.Project) {
 // SetWorkflowDiffView wires the drill-down diff view for showing workflow changes.
 func (v *WorkflowsView) SetWorkflowDiffView(dv *WorkflowDiffView) {
 	v.workflowDiffView = dv
+}
+
+// SetFlowsView wires the Flows view so 'f' can jump there with the start
+// modal already open on the selected workflow.
+func (v *WorkflowsView) SetFlowsView(fv *FlowsView) {
+	v.flowsView = fv
 }
 
 // Init initializes the workflows view.
@@ -393,6 +404,8 @@ func (v *WorkflowsView) handleWorkflowsKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cm
 				return ViewChangeMsg{ViewName: "WorkflowDiff"}
 			}
 		}
+	case "f":
+		return v, v.handleStartFlow()
 	case "I":
 		v.handleImport()
 	case "j", "down":
@@ -956,6 +969,35 @@ func (v *WorkflowsView) handleStartAgent() {
 		} else {
 			v.workflowStatusMsg = "No worktrees created yet -- create worktrees first"
 		}
+	}
+}
+
+// handleStartFlow jumps to the Flows view with its start modal already open
+// on the selected workflow — openStartModal's loadWorkflowOptions preselects
+// whatever this view's currentWorkflow() is, since v.flowsView shares this
+// same WorkflowsView instance.
+//
+// loadWorkflowOptions never preselects a Missing row (one whose worktrees
+// were removed), so if the selected workflow's root is gone we must refuse
+// here rather than open the modal: it would silently land on a DIFFERENT
+// workflow with no indication the user's actual selection was skipped.
+func (v *WorkflowsView) handleStartFlow() tea.Cmd {
+	wf := v.currentWorkflow()
+	if wf == nil {
+		v.workflowStatusMsg = "No workflow selected — press 'w' to start one first"
+		return nil
+	}
+	if st, err := os.Stat(wf.WorkflowDir()); err != nil || !st.IsDir() {
+		v.workflowStatusMsg = fmt.Sprintf("%s has no worktrees on disk — recreate them in the Workflows view", wf.Status().BranchName)
+		return nil
+	}
+	if v.flowsView == nil {
+		v.workflowStatusMsg = "Flows view unavailable"
+		return nil
+	}
+	v.flowsView.openStartModal()
+	return func() tea.Msg {
+		return ViewChangeMsg{ViewName: "Flows"}
 	}
 }
 
@@ -1696,7 +1738,7 @@ func (v *WorkflowsView) renderFooterHelp() string {
 		jiraHint = "  J Jira"
 	}
 	if len(v.workflows) > 0 {
-		return th.Help.Render(" w New" + jiraHint + "  a Agent  d Diff  p Push  P Force Push  M MRs  m Merge  D Delete  X Force Delete  H Detach  I Import  ↑↓ Select  r Refresh")
+		return th.Help.Render(" w New" + jiraHint + "  a Agent  f Flow  d Diff  p Push  P Force Push  M MRs  m Merge  D Delete  X Force Delete  H Detach  I Import  ↑↓ Select  r Refresh")
 	}
 	return th.Help.Render(" w New Workflow  I Import  r Refresh" + jiraHint)
 }
@@ -1716,7 +1758,7 @@ func (v *WorkflowsView) ShortHelp() string {
 		if v.jiraPicker.IsAvailable() {
 			jiraHint = "  J Jira ticket"
 		}
-		return fmt.Sprintf("Workflow: %s  w New%s  a Agent  d Diff  p Push  P Force Push  M MRs  m Merge  D Delete  X Force Delete  H Detach  I Import", wfLabel, jiraHint)
+		return fmt.Sprintf("Workflow: %s  w New%s  a Agent  f Flow  d Diff  p Push  P Force Push  M MRs  m Merge  D Delete  X Force Delete  H Detach  I Import", wfLabel, jiraHint)
 	}
 	jiraHint := ""
 	if v.jiraPicker.IsAvailable() {
@@ -1737,7 +1779,7 @@ func (v *WorkflowsView) CapturesInput() bool {
 // CapturesKey returns true for keys this view handles directly.
 func (v *WorkflowsView) CapturesKey(key string) bool {
 	switch key {
-	case "r", "w", "a", "p", "P", "d", "D", "X", "H", "I", "M", "m", "J", "j", "k", "up", "down", "/":
+	case "r", "w", "a", "p", "P", "d", "f", "D", "X", "H", "I", "M", "m", "J", "j", "k", "up", "down", "/":
 		return true
 	}
 	return false
@@ -1763,6 +1805,7 @@ func (v *WorkflowsView) KeyBindings() []components.KeyBinding {
 		{Key: "d", Description: "View changes (diff vs default branch)"},
 		{Key: "w", Description: "Start new feature workflow"},
 		{Key: "a", Description: "Spawn agent for selected workflow"},
+		{Key: "f", Description: "Start an adversarial review flow for selected workflow"},
 		{Key: "p", Description: "Push all repos in selected workflow"},
 		{Key: "P", Description: "Force push (--force-with-lease) all repos in selected workflow"},
 		{Key: "M", Description: "Create MRs/PRs for all pushed repos"},
