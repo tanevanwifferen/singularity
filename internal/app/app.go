@@ -452,6 +452,12 @@ func (m *Model) initProjectRouter() {
 	// Register shared single-repo views (F3-F8, after Workflows at F2)
 	m.registerCommonViews(router, defaultRepoPath, 3)
 
+	// Reverse of flowsView.SetWorkflowsView above: lets Workflows jump to
+	// Flows with the start modal already open on the selected workflow.
+	if flowsView, ok := router.GetView("Flows").(*views.FlowsView); ok {
+		workflowsView.SetFlowsView(flowsView)
+	}
+
 	// Project-specific submenu views
 	projectSyncView := views.NewProjectSyncView(m.proj)
 	router.Register("ProjectSync", projectSyncView)
