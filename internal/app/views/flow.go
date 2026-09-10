@@ -103,10 +103,11 @@ type FlowsView struct {
 	treeCursor int
 	collapsed  map[string]bool
 
-	// findingsExpanded gives the findings block the height the tree would
-	// otherwise have, and findingsScroll is its first visible line then.
-	findingsExpanded bool
-	findingsScroll   int
+	// expanded names the block — findings or request — that has taken the
+	// tree's height, if one has, and blockScroll is its first visible line
+	// then. One block expands at a time, so one offset serves both.
+	expanded    flowBlock
+	blockScroll int
 
 	focus     flowFocus
 	loading   bool
@@ -375,8 +376,8 @@ func (v *FlowsView) syncSelectionFromCursor() tea.Cmd {
 	v.selectedID = item.ID
 	v.setTreeNodes(nil)
 	v.treeCursor = 0
-	v.findingsExpanded = false
-	v.findingsScroll = 0
+	v.expanded = flowBlockNone
+	v.blockScroll = 0
 	return v.treeCmd(item.ID)
 }
 
@@ -420,7 +421,7 @@ func (v *FlowsView) KeyBindings() []components.KeyBinding {
 		{Key: "j/k", Description: "Navigate"},
 		{Key: "l/→/Enter", Description: "Expand tree node (or focus tree)"},
 		{Key: "h/←", Description: "Collapse tree node"},
-		{Key: "f", Description: "Expand the findings block over the tree (j/k scroll it)"},
+		{Key: "f", Description: "Expand the findings block, then the request block, over the tree (j/k scroll it)"},
 		{Key: "/", Description: "Filter flows"},
 		{Key: "Esc", Description: "Back to the flow list"},
 	}
