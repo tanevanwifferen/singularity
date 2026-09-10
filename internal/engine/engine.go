@@ -200,7 +200,10 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 	if opts.SmartRoute && (opts.Model == "" || opts.Effort == "") {
 		// Route async: show agent immediately, classify in background, then start
 		agent.setState(AgentRouting)
-		agent.appendOutput("system", "Routing via Haiku...")
+		// The classifier model is user-configurable (Models().ClassifierModel),
+		// so the banner doesn't name one — a hardcoded name would misreport
+		// whatever the operator actually configured.
+		agent.appendOutput("system", "Routing...")
 		go func() {
 			routed := false
 			route, err := RoutePrompt(task, backend)

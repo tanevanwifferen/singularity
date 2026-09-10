@@ -59,7 +59,7 @@ Each agent wraps a `claude` subprocess and provides:
 - Cost tracking per session
 - Optional worktree isolation — creates a temp branch, runs the agent, merges back on completion
 - Timeout support
-- Smart model routing — uses Haiku to classify the task, then routes to Opus (planning) or Sonnet (implementation)
+- Smart model routing — uses Sonnet to classify the task, then routes to Opus (planning) or Sonnet (implementation)
 
 **Lifecycle states:** `Idle → Routing → Starting → Running → Complete / Error / Killed`
 

@@ -71,7 +71,7 @@ The agent view (`F5`) provides a split-pane console: agent list on the left, liv
 
 ### Smart LLM Router
 
-Before launching an agent, the router classifies the user's prompt using Haiku (fast and cheap) to determine the optimal model and effort level:
+Before launching an agent, the router classifies the user's prompt using Sonnet to determine the optimal model and effort level:
 
 | Classification | Model | Use Case |
 |----------------|-------|----------|

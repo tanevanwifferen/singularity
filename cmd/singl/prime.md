@@ -349,7 +349,7 @@ singl --json agents spawn --workdir ~/.worktrees/<project>/feature-x/api \
 Flags: `--model`, `--effort low|medium|high`, `--max-turns`, `--timeout <secs>`,
 `--backend claude|pi|herdr`, `--smart-route[=bool]`, `--no-smart-route`.
 
-Smart routing is **on by default**: a Haiku classifier reads the prompt and
+Smart routing is **on by default**: a Sonnet classifier reads the prompt and
 picks the model (planning → opus, implementation → sonnet), the effort
 (low/medium/high) and the one-line summary shown in `agents list` and the TUI.
 Passing `--model` or `--effort` overrides only the corresponding part of

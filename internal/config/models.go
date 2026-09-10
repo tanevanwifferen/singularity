@@ -35,15 +35,14 @@ type ModelsConfig struct {
 // The pi ids were verified against `pi --list-models` (pi model registry, the
 // anthropic provider): claude-haiku-4-5, claude-haiku-4-5-20251001,
 // claude-sonnet-5 and claude-opus-5 all resolve to catalogued models. The
-// classifier is pinned to a dated haiku snapshot so routing decisions stay
-// stable when the floating alias moves. The claude backend takes the bare
-// short names directly.
+// classifier uses sonnet for routing decisions. The claude backend takes the
+// bare short names directly.
 func DefaultModelsConfig() *ModelsConfig {
 	return &ModelsConfig{
-		Version: 1,
+		Version: 2,
 		Backends: map[string]BackendModels{
 			"pi": {
-				ClassifierModel: "anthropic/claude-haiku-4-5-20251001",
+				ClassifierModel: "anthropic/claude-sonnet-5",
 				Aliases: map[string]string{
 					"haiku":  "anthropic/claude-haiku-4-5",
 					"sonnet": "anthropic/claude-sonnet-5",
@@ -51,7 +50,7 @@ func DefaultModelsConfig() *ModelsConfig {
 				},
 			},
 			"claude": {
-				ClassifierModel: "haiku",
+				ClassifierModel: "sonnet",
 				Aliases: map[string]string{
 					"haiku":  "haiku",
 					"sonnet": "sonnet",
@@ -60,6 +59,21 @@ func DefaultModelsConfig() *ModelsConfig {
 			},
 		},
 	}
+}
+
+// oldDefaultClassifierModels holds the per-backend classifier_model that
+// DefaultModelsConfig used to return under schema version 1, before the
+// classifier moved from Haiku to Sonnet. ApplyDefaults uses this to tell a
+// stale, never-edited default apart from a value the user chose on purpose:
+// only the former is upgraded when migrating a table forward.
+var oldDefaultClassifierModels = map[string]map[string]bool{
+	"pi": {
+		"anthropic/claude-haiku-4-5":          true,
+		"anthropic/claude-haiku-4-5-20251001": true,
+	},
+	"claude": {
+		"haiku": true,
+	},
 }
 
 // GetModelsPath returns the default model table path, alongside config.json.
@@ -93,9 +107,14 @@ func (m *ModelsConfig) ApplyDefaults() {
 		return
 	}
 	def := DefaultModelsConfig()
-	if m.Version == 0 {
-		m.Version = def.Version
-	}
+	// A table saved under an older schema version keeps that version number
+	// until it passes through here, so it marks "not upgraded yet": a
+	// classifier_model that still exactly matches the old compiled-in
+	// default is stale, not a deliberate user choice, and gets migrated to
+	// the current default. A table already at or past the current version
+	// is left alone even if its classifier_model happens to equal the old
+	// default — that's now an intentional choice.
+	migrate := m.Version < def.Version
 	if m.Backends == nil {
 		m.Backends = map[string]BackendModels{}
 	}
@@ -105,7 +124,7 @@ func (m *ModelsConfig) ApplyDefaults() {
 			m.Backends[name] = fallback
 			continue
 		}
-		if backend.ClassifierModel == "" {
+		if backend.ClassifierModel == "" || (migrate && oldDefaultClassifierModels[name][backend.ClassifierModel]) {
 			backend.ClassifierModel = fallback.ClassifierModel
 		}
 		if backend.Aliases == nil {
@@ -117,6 +136,9 @@ func (m *ModelsConfig) ApplyDefaults() {
 			}
 		}
 		m.Backends[name] = backend
+	}
+	if migrate {
+		m.Version = def.Version
 	}
 }
 

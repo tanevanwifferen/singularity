@@ -28,13 +28,13 @@ func TestBackendOneShotCommandArgv(t *testing.T) {
 			name:       "claude",
 			backend:    NewClaudeBackend(),
 			wantBinary: "claude",
-			wantArgs:   []string{"--print", "--model", "haiku", "--output-format", "text", "-p", "why is the sky blue"},
+			wantArgs:   []string{"--print", "--model", "sonnet", "--output-format", "text", "-p", "why is the sky blue"},
 		},
 		{
 			name:       "pi default model",
 			backend:    NewPiBackend(""),
 			wantBinary: "pi",
-			wantArgs:   []string{"--print", "--no-session", "--model", "anthropic/claude-haiku-4-5-20251001", "why is the sky blue"},
+			wantArgs:   []string{"--print", "--no-session", "--model", "anthropic/claude-sonnet-5", "why is the sky blue"},
 		},
 		{
 			name:       "pi explicit model",

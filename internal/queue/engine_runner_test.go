@@ -300,7 +300,7 @@ func TestQueuedTaskIsSmartRoutedByDefault(t *testing.T) {
 		t.Fatalf("StartTask: %v", err)
 	}
 	t.Cleanup(func() { _ = r.TerminateAgent(routed) })
-	if !waitForOutput(t, eng, routed, "Routing via Haiku") {
+	if !waitForOutput(t, eng, routed, "Routing...") {
 		t.Error("a task that did not mention routing was not smart-routed; queued work must be routed like spawned work")
 	}
 
@@ -313,7 +313,7 @@ func TestQueuedTaskIsSmartRoutedByDefault(t *testing.T) {
 		t.Fatalf("StartTask: %v", err)
 	}
 	t.Cleanup(func() { _ = r.TerminateAgent(plain) })
-	if waitForOutput(t, eng, plain, "Routing via Haiku") {
+	if waitForOutput(t, eng, plain, "Routing...") {
 		t.Error("smart_route=false was ignored")
 	}
 }
