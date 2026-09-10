@@ -334,6 +334,7 @@ func (agentStub) Resume(context.Context, string, string, service.AgentOptions) (
 }
 func (agentStub) SendInput(context.Context, string, string) error       { return unavail() }
 func (agentStub) Kill(context.Context, string) error                    { return unavail() }
+func (agentStub) Terminate(context.Context, string) error               { return unavail() }
 func (agentStub) Remove(context.Context, string) error                  { return unavail() }
 func (agentStub) List(context.Context) ([]service.AgentSnapshot, error) { return nil, unavail() }
 func (agentStub) Get(context.Context, string) (*service.AgentSnapshot, error) {

@@ -35,7 +35,7 @@ func newTestProjectService(t *testing.T) *localProjectService {
 	if err != nil {
 		t.Fatalf("NewLoader: %v", err)
 	}
-	return newProjectService(loader)
+	return newProjectService(loader, nil)
 }
 
 // TestResolveIsStateless: any handle derived from a configured key works

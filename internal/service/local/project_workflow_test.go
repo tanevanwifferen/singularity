@@ -44,7 +44,7 @@ func newWorkflowTestService(t *testing.T) (*localProjectService, string) {
 	if err != nil {
 		t.Fatalf("NewLoader: %v", err)
 	}
-	return newProjectService(loader), root
+	return newProjectService(loader, nil), root
 }
 
 // TestCreateWorkflowCreatesWorktreesForEveryRepo is the paradigm guard at the
@@ -185,4 +185,128 @@ func TestRemoveWorkflowUnknownBranch(t *testing.T) {
 	if _, err := s.RemoveWorkflow(context.Background(), "proj-alpha", "feature/nope"); err == nil {
 		t.Fatal("expected error for unknown workflow branch")
 	}
+}
+
+// recordingAgents is an AgentService that serves a fixed set of agents and
+// records which of them RemoveWorkflow asks it to terminate. onTerminate,
+// when set, runs inside every Terminate call so a test can observe the
+// worktrees' state at that moment.
+type recordingAgents struct {
+	service.AgentService
+
+	snaps       []service.AgentSnapshot
+	terminated  []string
+	failFor     string
+	onTerminate func(id string)
+}
+
+func (r *recordingAgents) List(context.Context) ([]service.AgentSnapshot, error) {
+	return r.snaps, nil
+}
+
+func (r *recordingAgents) Terminate(_ context.Context, id string) error {
+	r.terminated = append(r.terminated, id)
+	if r.onTerminate != nil {
+		r.onTerminate(id)
+	}
+	if id == r.failFor {
+		return errors.New("process would not die")
+	}
+	return nil
+}
+
+// TestRemoveWorkflowTerminatesAgentsFirst is the daemon-side half of "deleting
+// a workflow kills its agents": every agent working anywhere inside the
+// workflow dies (the recorded one and any started straight in a worktree),
+// agents elsewhere are left alone, and the kill happens while the worktrees
+// are still on disk, not after they are gone.
+func TestRemoveWorkflowTerminatesAgentsFirst(t *testing.T) {
+	s, _ := newWorkflowTestService(t)
+	ctx := context.Background()
+	wf, err := s.CreateWorkflow(ctx, "proj-alpha", "feature/x", t.TempDir())
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	wf.SetWorkflowAgentID("recorded")
+	if err := s.SaveWorkflows(ctx, "proj-alpha", []*service.FeatureWorkflow{wf}); err != nil {
+		t.Fatalf("SaveWorkflows: %v", err)
+	}
+
+	dir := wf.WorkflowDir()
+	agents := &recordingAgents{snaps: []service.AgentSnapshot{
+		{ID: "recorded", WorkDir: dir},
+		{ID: "in-web", WorkDir: filepath.Join(dir, "web")},
+		{ID: "in-api", WorkDir: filepath.Join(dir, "api")},
+		{ID: "sibling", WorkDir: dir + "-other"},
+		{ID: "elsewhere", WorkDir: t.TempDir()},
+	}}
+	agents.onTerminate = func(id string) {
+		for _, wr := range wf.Repos {
+			if _, err := os.Stat(wr.WorktreePath); err != nil {
+				t.Errorf("terminating %s: worktree %s already gone (%v)", id, wr.WorktreePath, err)
+			}
+		}
+	}
+	s.agent = agents
+
+	if _, err := s.RemoveWorkflow(ctx, "proj-alpha", "feature/x"); err != nil {
+		t.Fatalf("RemoveWorkflow: %v", err)
+	}
+	want := []string{"recorded", "in-web", "in-api"}
+	if !sameSet(agents.terminated, want) {
+		t.Errorf("terminated %v, want %v", agents.terminated, want)
+	}
+	for _, wr := range wf.Repos {
+		if _, err := os.Stat(wr.WorktreePath); !os.IsNotExist(err) {
+			t.Errorf("worktree %s still on disk (err=%v)", wr.WorktreePath, err)
+		}
+	}
+}
+
+// TestRemoveWorkflowKeepsWorktreesWhenAgentSurvives: an agent that cannot be
+// stopped must not have its directory deleted underneath it. The removal
+// fails, the worktrees stay, and the workflow stays persisted for a retry.
+func TestRemoveWorkflowKeepsWorktreesWhenAgentSurvives(t *testing.T) {
+	s, _ := newWorkflowTestService(t)
+	ctx := context.Background()
+	wf, err := s.CreateWorkflow(ctx, "proj-alpha", "feature/x", t.TempDir())
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	s.agent = &recordingAgents{
+		snaps:   []service.AgentSnapshot{{ID: "stuck", WorkDir: filepath.Join(wf.WorkflowDir(), "web")}},
+		failFor: "stuck",
+	}
+
+	if _, err := s.RemoveWorkflow(ctx, "proj-alpha", "feature/x"); err == nil {
+		t.Fatal("RemoveWorkflow succeeded with an agent still alive")
+	}
+	for _, wr := range wf.Repos {
+		if _, err := os.Stat(wr.WorktreePath); err != nil {
+			t.Errorf("worktree %s removed under a live agent (%v)", wr.WorktreePath, err)
+		}
+	}
+	wfs, err := s.LoadWorkflows(ctx, "proj-alpha")
+	if err != nil {
+		t.Fatalf("LoadWorkflows: %v", err)
+	}
+	if len(wfs) != 1 {
+		t.Errorf("workflow dropped from persistence despite failed removal: %d left", len(wfs))
+	}
+}
+
+func sameSet(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	seen := make(map[string]bool, len(got))
+	for _, g := range got {
+		seen[g] = true
+	}
+	for _, w := range want {
+		if !seen[w] {
+			return false
+		}
+	}
+	return true
 }

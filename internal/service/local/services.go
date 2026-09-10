@@ -34,7 +34,8 @@ import (
 // the same terms, and for the same reason: a daemon without one still serves
 // everything else, with FlowService answering ErrUnavailable.
 func New(eng *engine.Engine, projectLoader *project.Loader, jiraCfg config.JiraConfig, taskQueue *queue.Manager, flowMgr *flow.Manager) *service.Services {
-	projSvc := newProjectService(projectLoader)
+	agentSvc := &localAgentService{eng: eng}
+	projSvc := newProjectService(projectLoader, agentSvc)
 	return &service.Services{
 		Repo:     &localRepoService{},
 		Branch:   &localBranchService{},
@@ -48,7 +49,7 @@ func New(eng *engine.Engine, projectLoader *project.Loader, jiraCfg config.JiraC
 		MR:       &localMRService{},
 		Forge:    &localForgeService{},
 		Project:  projSvc,
-		Agent:    &localAgentService{eng: eng},
+		Agent:    agentSvc,
 		Queue:    &localQueueService{mgr: taskQueue},
 		Flow:     &localFlowService{mgr: flowMgr, eng: eng},
 		Jira:     newJiraService(eng, jiraCfg),

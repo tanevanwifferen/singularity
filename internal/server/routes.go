@@ -166,6 +166,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/agent/resume", wrap(s.handleAgentResume))
 	mux.HandleFunc("/api/agent/input", wrap(s.handleAgentInput))
 	mux.HandleFunc("/api/agent/kill", wrap(s.handleAgentKill))
+	mux.HandleFunc("/api/agent/terminate", wrap(s.handleAgentTerminate))
 	mux.HandleFunc("/api/agent/remove", wrap(s.handleAgentRemove))
 	mux.HandleFunc("/api/agent/list", wrap(s.handleAgentList))
 	mux.HandleFunc("/api/agent/get", wrap(s.handleAgentGet))

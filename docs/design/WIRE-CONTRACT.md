@@ -182,6 +182,7 @@ All endpoints live under `/api`. Streaming operations are marked **stream**: res
 | 90 | `Agent.Resume`           | `POST /api/agent/resume`                           | `api.AgentResumeRequest`                | `api.AgentStartResponse`                    | `AGENT_LIMIT`, `NOT_FOUND` |
 | 91 | `Agent.SendInput`        | `POST /api/agent/input`                            | `api.AgentInputRequest`                 | —                                           | `NOT_FOUND` |
 | 92 | `Agent.Kill`             | `POST /api/agent/kill`                             | `api.AgentQueryRequest`                 | —                                           | `NOT_FOUND` |
+| 92a | `Agent.Terminate`       | `POST /api/agent/terminate`                        | `api.AgentQueryRequest`                 | —                                           | `NOT_FOUND` |
 | 93 | `Agent.Remove`           | `POST /api/agent/remove`                           | `api.AgentQueryRequest`                 | —                                           | — |
 | 94 | `Agent.List`             | `GET  /api/agent/list`                             | —                                       | `api.AgentListResponse`                     | — |
 | 95 | `Agent.Get`              | `GET  /api/agent/get?agent_id=`                    | —                                       | `*api.AgentSnapshot`                        | `NOT_FOUND` |

@@ -23,6 +23,10 @@ import (
 // surface is honest until those land.
 type localProjectService struct {
 	loader *project.Loader
+	// agent is consulted by RemoveWorkflow to terminate every agent still
+	// working inside the workflow before its worktrees are deleted. nil
+	// (tests that only exercise persistence) means there is nothing to kill.
+	agent service.AgentService
 
 	mu       sync.RWMutex
 	handles  map[service.ProjectHandle]*project.Project
@@ -30,9 +34,10 @@ type localProjectService struct {
 	handleOf map[string]service.ProjectHandle
 }
 
-func newProjectService(loader *project.Loader) *localProjectService {
+func newProjectService(loader *project.Loader, agent service.AgentService) *localProjectService {
 	return &localProjectService{
 		loader:   loader,
+		agent:    agent,
 		handles:  make(map[service.ProjectHandle]*project.Project),
 		keyOf:    make(map[service.ProjectHandle]string),
 		handleOf: make(map[string]service.ProjectHandle),
@@ -286,7 +291,10 @@ func (s *localProjectService) CreateWorkflow(ctx context.Context, handle service
 
 // RemoveWorkflow tears down the persisted workflow for `branch`: worktrees
 // removed for every repo, local + remote feature branches deleted, workflow
-// dropped from persistence when fully clean. Mirrors the TUI cleanup path.
+// dropped from persistence when fully clean. Mirrors the TUI cleanup path:
+// like the workflows view's D/X keys it first terminates every agent still
+// running inside the workflow (see service.TerminateWorkflowAgents), and it
+// refuses to remove the worktrees while one of them could not be stopped.
 //
 // On partial failure the workflow is returned with per-repo Errors and kept
 // persisted so a retry can finish the teardown.
@@ -317,6 +325,14 @@ func (s *localProjectService) RemoveWorkflow(ctx context.Context, handle service
 	}
 	if wf == nil {
 		return nil, wrapErr(fmt.Errorf("no workflow for branch %q in project %q", branch, key))
+	}
+
+	// Agents still running inside the workflow must die before their
+	// directories go, or they are orphaned in a deleted working directory.
+	// A termination failure aborts the teardown: removing the worktrees
+	// under a live process is exactly what this exists to prevent.
+	if err := service.TerminateWorkflowAgents(ctx, s.agent, wf); err != nil {
+		return nil, wrapErr(fmt.Errorf("terminate agents of workflow %q: %w", branch, err))
 	}
 
 	_ = wf.RemoveAllWorktrees() // always nil today; per-repo errors land on wf.Repos

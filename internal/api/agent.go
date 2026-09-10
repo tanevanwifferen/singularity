@@ -106,7 +106,7 @@ type AgentStartResponse struct {
 	AgentID string `json:"agent_id"`
 }
 
-// AgentQueryRequest is the body for POST /api/agent/kill, /api/agent/remove
+// AgentQueryRequest is the body for POST /api/agent/kill, /api/agent/terminate, /api/agent/remove
 // (and the legacy GET /api/agent/output?session_id= query when JSON-bodied).
 type AgentQueryRequest struct {
 	AgentID string `json:"agent_id"`

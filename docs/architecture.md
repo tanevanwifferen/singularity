@@ -203,7 +203,8 @@ main()
 | POST | `/api/agent/message` | Send follow-up message to running agent |
 | GET | `/api/agent/status` | Agent state |
 | GET | `/api/agent/output` | Agent output stream |
-| POST | `/api/agent/kill` | Terminate agent |
+| POST | `/api/agent/kill` | Soft-close agent (process keeps running for follow-ups) |
+| POST | `/api/agent/terminate` | Kill agent process, keep its record |
 | GET | `/api/agent/list` | List all agents in pool |
 | GET | `/api/agent/stats` | Pool statistics |
 
