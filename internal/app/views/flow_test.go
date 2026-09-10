@@ -1039,7 +1039,7 @@ func TestRequestBlockExpandsAndScrolls(t *testing.T) {
 	}
 	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
 	pane = v.renderTreePane(60)
-	if v.expanded != flowBlockRequest || !strings.Contains(pane, "Request  (f: collapse  j/k: scroll)") {
+	if v.expanded != flowBlockRequest || !strings.Contains(pane, "Request  (f: collapse  j/k/g/G/ctrl+d/u: scroll)") {
 		t.Fatalf("f f must expand the request block:\n%s", pane)
 	}
 	if !strings.Contains(pane, "more line(s) below") {
@@ -1057,6 +1057,103 @@ func TestRequestBlockExpandsAndScrolls(t *testing.T) {
 	}
 	if got := lipgloss.Height(v.View()); got > 20 {
 		t.Errorf("expanded request: view is %d lines tall:\n%s", got, v.View())
+	}
+}
+
+// g jumps the expanded block back to its top, and G to its bottom — the
+// same clamp j relies on to stop at the last full page.
+func TestBlockScrollGoToTopAndBottom(t *testing.T) {
+	f := testFlow()
+	f.Goal = strings.Repeat("add a retry backoff helper with a cap and jitter, ", 24) + "done."
+	v := flowsViewFor(t, f, verboseTree(6), 100, 20)
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if v.expanded != flowBlockRequest {
+		t.Fatalf("f f must expand the request block, got %v", v.expanded)
+	}
+
+	for i := 0; i < 10; i++ {
+		v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	}
+	if v.blockScroll == 0 {
+		t.Fatalf("j must have scrolled the block before g is pressed")
+	}
+
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if v.blockScroll != 0 {
+		t.Errorf("g must jump the block back to its top, got scroll %d", v.blockScroll)
+	}
+	pane := v.renderTreePane(60)
+	if strings.Contains(pane, "done.") {
+		t.Errorf("scrolled to the top, the end of the goal must not show:\n%s", pane)
+	}
+
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	pane = v.renderTreePane(60)
+	if !strings.Contains(pane, "done.") || strings.Contains(pane, "more line(s) below") {
+		t.Errorf("G must land on the last full page of the goal:\n%s", pane)
+	}
+}
+
+// ctrl+d/ctrl+u (and pgdown/pgup) page the expanded block by half its
+// budget, clamping at the top and bottom.
+func TestBlockScrollHalfPage(t *testing.T) {
+	f := testFlow()
+	f.Goal = strings.Repeat("add a retry backoff helper with a cap and jitter, ", 24) + "done."
+	v := flowsViewFor(t, f, verboseTree(6), 100, 20)
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if v.expanded != flowBlockRequest {
+		t.Fatalf("f f must expand the request block, got %v", v.expanded)
+	}
+	half := max(v.expandedMaxLines()/2, 1)
+
+	v.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	if v.blockScroll != half {
+		t.Errorf("ctrl+d must scroll by half a page (%d), got %d", half, v.blockScroll)
+	}
+	v.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	if v.blockScroll != 2*half {
+		t.Errorf("pgdown must scroll by another half page (%d), got %d", 2*half, v.blockScroll)
+	}
+
+	v.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	if v.blockScroll != half {
+		t.Errorf("ctrl+u must scroll back up by half a page (%d), got %d", half, v.blockScroll)
+	}
+	v.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	if v.blockScroll != 0 {
+		t.Errorf("pgup must clamp at the top, got %d", v.blockScroll)
+	}
+
+	for i := 0; i < 40; i++ {
+		v.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	}
+	pane := v.renderTreePane(60)
+	if !strings.Contains(pane, "done.") || strings.Contains(pane, "more line(s) below") {
+		t.Errorf("ctrl+d must clamp at the bottom of the goal:\n%s", pane)
+	}
+}
+
+// CapturesKey only claims g/G/ctrl+d/ctrl+u/pgdown/pgup while a block is
+// actually expanded on screen — otherwise the router's Git submenu (also
+// bound to g) must still reach FlowsView.
+func TestCapturesKeyScrollOnlyWhenBlockExpanded(t *testing.T) {
+	v := flowsViewFor(t, testFlow(), testTree(), 100, 24)
+	for _, key := range []string{"g", "G", "ctrl+d", "ctrl+u", "pgdown", "pgup"} {
+		if v.CapturesKey(key) {
+			t.Errorf("with nothing expanded, CapturesKey(%q) must be false so the Git submenu stays reachable", key)
+		}
+	}
+
+	v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if v.expanded != flowBlockFindings {
+		t.Fatalf("f must expand the findings block")
+	}
+	for _, key := range []string{"g", "G", "ctrl+d", "ctrl+u", "pgdown", "pgup"} {
+		if !v.CapturesKey(key) {
+			t.Errorf("with a block expanded, CapturesKey(%q) must be true", key)
+		}
 	}
 }
 
@@ -1103,7 +1200,7 @@ func TestBlockHeadersFitNarrowPane(t *testing.T) {
 		}
 	}
 	v.expanded = flowBlockFindings
-	if !strings.Contains(v.renderTreePane(60), "Findings  (f: collapse  j/k: scroll)") {
+	if !strings.Contains(v.renderTreePane(60), "Findings  (f: collapse  j/k/g/G/ctrl+d/u: scroll)") {
 		t.Errorf("the hint returns where it fits:\n%s", v.renderTreePane(60))
 	}
 }
