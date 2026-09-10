@@ -68,7 +68,7 @@ Verbs:
   chat       --id <id> --message <text>                   send input then stream the response (no --json)
   stats                                                   engine-wide counters
 
-Smart routing (Haiku picks model, effort and the display summary) is on by
+Smart routing (Sonnet picks model, effort and the display summary) is on by
 default; --model / --effort override only that part of it, and it is skipped
 only when both are pinned. --no-smart-route turns it off entirely.
 `,

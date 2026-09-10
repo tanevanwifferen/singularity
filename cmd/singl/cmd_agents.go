@@ -465,7 +465,7 @@ func runAgentsStats(ctx context.Context, _ []string) int {
 // effort, leaving the classifier nothing to decide; --no-smart-route always
 // wins.
 func smartRouteFlags(fs *flag.FlagSet) func(model, effort string) bool {
-	sr := fs.Bool("smart-route", false, "force Haiku routing on (--smart-route=false forces off; default: on unless both --model and --effort are given)")
+	sr := fs.Bool("smart-route", false, "force Sonnet routing on (--smart-route=false forces off; default: on unless both --model and --effort are given)")
 	nsr := fs.Bool("no-smart-route", false, "disable smart routing")
 	return func(model, effort string) bool {
 		explicit := false
@@ -478,7 +478,7 @@ func smartRouteFlags(fs *flag.FlagSet) func(model, effort string) bool {
 	}
 }
 
-// resolveSmartRoute decides whether to ask the daemon for Haiku routing.
+// resolveSmartRoute decides whether to ask the daemon for Sonnet routing.
 // Precedence: --no-smart-route > explicit --smart-route[=bool] > default.
 //
 // The classifier decides three things — model, effort and the display summary

@@ -40,7 +40,7 @@ func TestNilModelsConfigFallsBackToDefaults(t *testing.T) {
 	if got := models.ResolveModel("pi", "sonnet"); got != "anthropic/claude-sonnet-5" {
 		t.Errorf("ResolveModel on nil table = %q, want the compiled-in default", got)
 	}
-	if got := models.ClassifierModel("pi"); got != "anthropic/claude-haiku-4-5-20251001" {
+	if got := models.ClassifierModel("pi"); got != "anthropic/claude-sonnet-5" {
 		t.Errorf("ClassifierModel on nil table = %q, want the compiled-in default", got)
 	}
 }
@@ -52,8 +52,8 @@ func TestClassifierModel(t *testing.T) {
 		backend string
 		want    string
 	}{
-		{"pi default", DefaultModelsConfig(), "pi", "anthropic/claude-haiku-4-5-20251001"},
-		{"claude default", DefaultModelsConfig(), "claude", "haiku"},
+		{"pi default", DefaultModelsConfig(), "pi", "anthropic/claude-sonnet-5"},
+		{"claude default", DefaultModelsConfig(), "claude", "sonnet"},
 		{"unknown backend", DefaultModelsConfig(), "codex", ""},
 		{
 			name: "configured override",
@@ -69,7 +69,7 @@ func TestClassifierModel(t *testing.T) {
 				"pi": {ClassifierModel: ""},
 			}},
 			backend: "pi",
-			want:    "anthropic/claude-haiku-4-5-20251001",
+			want:    "anthropic/claude-sonnet-5",
 		},
 	}
 
@@ -96,14 +96,14 @@ func TestLoadModelsConfig(t *testing.T) {
 			content:   nil,
 			wantErr:   true,
 			wantPi:    map[string]string{"sonnet": "anthropic/claude-sonnet-5"},
-			wantClass: "anthropic/claude-haiku-4-5-20251001",
+			wantClass: "anthropic/claude-sonnet-5",
 		},
 		{
 			name:      "unparsable file yields defaults",
 			content:   []byte("{ not json"),
 			wantErr:   true,
 			wantPi:    map[string]string{"opus": "anthropic/claude-opus-5"},
-			wantClass: "anthropic/claude-haiku-4-5-20251001",
+			wantClass: "anthropic/claude-sonnet-5",
 		},
 		{
 			name:      "user overrides win",
@@ -115,19 +115,19 @@ func TestLoadModelsConfig(t *testing.T) {
 			name:      "omitted aliases fall back to defaults",
 			content:   []byte(`{"version":1,"backends":{"pi":{"aliases":{"sonnet":"openai/gpt-5"}}}}`),
 			wantPi:    map[string]string{"sonnet": "openai/gpt-5", "opus": "anthropic/claude-opus-5"},
-			wantClass: "anthropic/claude-haiku-4-5-20251001",
+			wantClass: "anthropic/claude-sonnet-5",
 		},
 		{
 			name:      "empty object falls back entirely",
 			content:   []byte(`{}`),
 			wantPi:    map[string]string{"sonnet": "anthropic/claude-sonnet-5"},
-			wantClass: "anthropic/claude-haiku-4-5-20251001",
+			wantClass: "anthropic/claude-sonnet-5",
 		},
 		{
 			name:      "new backend entries are kept",
 			content:   []byte(`{"backends":{"codex":{"classifier_model":"openai/gpt-5-mini","aliases":{"fast":"openai/gpt-5-mini"}}}}`),
 			wantPi:    map[string]string{"sonnet": "anthropic/claude-sonnet-5"},
-			wantClass: "anthropic/claude-haiku-4-5-20251001",
+			wantClass: "anthropic/claude-sonnet-5",
 		},
 	}
 
@@ -156,6 +156,80 @@ func TestLoadModelsConfig(t *testing.T) {
 				t.Errorf("ClassifierModel(pi) = %q, want %q", got, tt.wantClass)
 			}
 		})
+	}
+}
+
+// TestLoadModelsConfigMigratesStaleHaikuClassifier covers the upgrade path
+// for every install that ran before the classifier default moved from Haiku
+// to Sonnet: their materialised models.json has version 1 and a
+// classifier_model equal to the old default, and loading it must not keep
+// routing through Haiku forever just because a file is present on disk.
+func TestLoadModelsConfigMigratesStaleHaikuClassifier(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ModelsFileName)
+	content := `{"version":1,"backends":{
+		"claude":{"classifier_model":"haiku","aliases":{"haiku":"haiku","sonnet":"sonnet","opus":"opus"}},
+		"pi":{"classifier_model":"anthropic/claude-haiku-4-5","aliases":{"haiku":"anthropic/claude-haiku-4-5","sonnet":"anthropic/claude-sonnet-5","opus":"anthropic/claude-opus-5"}}
+	}}`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	models, err := LoadModelsConfig(path)
+	if err != nil {
+		t.Fatalf("LoadModelsConfig: %v", err)
+	}
+	if got := models.ClassifierModel("claude"); got != "sonnet" {
+		t.Errorf("ClassifierModel(claude) = %q, want migrated default %q", got, "sonnet")
+	}
+	if got := models.ClassifierModel("pi"); got != "anthropic/claude-sonnet-5" {
+		t.Errorf("ClassifierModel(pi) = %q, want migrated default %q", got, "anthropic/claude-sonnet-5")
+	}
+	if models.Version != DefaultModelsConfig().Version {
+		t.Errorf("Version = %d, want migrated to current version %d", models.Version, DefaultModelsConfig().Version)
+	}
+}
+
+// TestLoadModelsConfigMigratesDatedHaikuSnapshot covers installs materialised
+// after commit 53025c5 ("pin classifier to haiku-4-5-20251001"), whose
+// version-1 pi default was the dated snapshot
+// "anthropic/claude-haiku-4-5-20251001" rather than "anthropic/claude-haiku-4-5".
+// Those installs must also migrate to Sonnet, not be treated as a deliberate
+// user choice.
+func TestLoadModelsConfigMigratesDatedHaikuSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ModelsFileName)
+	content := `{"version":1,"backends":{
+		"pi":{"classifier_model":"anthropic/claude-haiku-4-5-20251001","aliases":{"haiku":"anthropic/claude-haiku-4-5","sonnet":"anthropic/claude-sonnet-5","opus":"anthropic/claude-opus-5"}}
+	}}`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	models, err := LoadModelsConfig(path)
+	if err != nil {
+		t.Fatalf("LoadModelsConfig: %v", err)
+	}
+	if got := models.ClassifierModel("pi"); got != "anthropic/claude-sonnet-5" {
+		t.Errorf("ClassifierModel(pi) = %q, want migrated default %q", got, "anthropic/claude-sonnet-5")
+	}
+}
+
+// TestLoadModelsConfigKeepsExplicitHaikuChoice ensures the migration in
+// TestLoadModelsConfigMigratesStaleHaikuClassifier only fires for a table
+// that hasn't been upgraded yet — once a table is at the current version, a
+// classifier_model of "haiku" is a deliberate choice and must survive.
+func TestLoadModelsConfigKeepsExplicitHaikuChoice(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ModelsFileName)
+	content := `{"version":2,"backends":{"claude":{"classifier_model":"haiku"}}}`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	models, err := LoadModelsConfig(path)
+	if err != nil {
+		t.Fatalf("LoadModelsConfig: %v", err)
+	}
+	if got := models.ClassifierModel("claude"); got != "haiku" {
+		t.Errorf("ClassifierModel(claude) = %q, want explicit choice %q preserved", got, "haiku")
 	}
 }
 

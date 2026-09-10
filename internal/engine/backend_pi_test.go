@@ -336,7 +336,7 @@ func TestPiOneShotCommandUsesModelTable(t *testing.T) {
 		oneShotModel string
 		want         string
 	}{
-		{"table default", "", "anthropic/claude-haiku-4-5-20251001"},
+		{"table default", "", "anthropic/claude-sonnet-5"},
 		{"explicit override", "openai/gpt-5-mini", "openai/gpt-5-mini"},
 	}
 
