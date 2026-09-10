@@ -162,6 +162,33 @@ func ReviewPrompt(f *Flow, verdictPath string) string {
 	return b.String()
 }
 
+// CommitPrompt is the one-off task submitted the moment a round's verdict is
+// accept: the implement/fix prompts above tell every work step not to commit
+// (so a reviewer always reads a clean uncommitted diff), which means nothing
+// ever commits the work the flow just spent rounds getting right. This is
+// that missing step, run once, after acceptance.
+func CommitPrompt(f *Flow) string {
+	var b strings.Builder
+
+	b.WriteString("A change in this repository was just reviewed and accepted. Your job is only\n")
+	b.WriteString("to commit it — do not modify the code.\n\n")
+	writeGoal(&b, f.Goal)
+	fmt.Fprintf(&b, "## Working directory\n\n%s\n\n", f.WorkDir)
+
+	b.WriteString("## Your task\n\n")
+	b.WriteString("Run `git status` and `git diff` to see what changed. Stage everything relevant\n")
+	b.WriteString("to the goal above and commit it with a message that describes what changed and\n")
+	b.WriteString("why, in your own words — do not just repeat the goal verbatim. Do not push, and\n")
+	b.WriteString("do not create or switch branches.\n\n")
+	b.WriteString("If the working tree is already clean — nothing to commit — say so and stop;\n")
+	b.WriteString("that is not an error.\n\n")
+
+	b.WriteString("## When you are done\n\n")
+	b.WriteString("Report the commit you made (or that there was nothing to commit).\n")
+
+	return b.String()
+}
+
 // writeGoal renders the flow's Goal verbatim under its own heading — verbatim
 // because every fixer must see the same words the implementer did, and a
 // paraphrase drifts a little further each round.

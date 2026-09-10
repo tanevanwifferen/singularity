@@ -242,8 +242,12 @@ func TestAcceptVerdictAcceptsTheFlow(t *testing.T) {
 	if r.Verdict == nil || r.Verdict.Decision != DecisionAccept || r.Verdict.Summary != "does what was asked" {
 		t.Errorf("round verdict = %+v, want the parsed accept", r.Verdict)
 	}
-	if len(q.batches) != 1 {
-		t.Errorf("submitted %d batches, want no round 2 after an accept", len(q.batches))
+	if len(q.batches) != 2 {
+		t.Errorf("submitted %d batches, want the round and its commit task but no round 2 after an accept", len(q.batches))
+	}
+	commit := q.batches[1]
+	if len(commit) != 1 || commit[0].Prompt != CommitPrompt(&got) {
+		t.Errorf("second batch = %+v, want the one-task commit batch", commit)
 	}
 	// running, then accepted: two transitions, and nothing observes an
 	// accepted round under a running flow in between.

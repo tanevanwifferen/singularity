@@ -130,7 +130,8 @@ func (m *Manager) readRoundVerdict(snap *Flow, cur *Round) (Flow, bool) {
 	v, err := readVerdictFile(path)
 	if err == nil {
 		if v.Decision == DecisionAccept {
-			return m.settleRound(snap, cur, RoundAccepted, v, StateAccepted, "")
+			return m.settleRound(snap, cur, RoundAccepted, v, StateAccepted, "",
+				m.submitCommitTask(snap, cur))
 		}
 		// A rejection at the cap ends the flow in the same transition;
 		// below it the flow stays running and the next pass submits the
@@ -139,7 +140,7 @@ func (m *Manager) readRoundVerdict(snap *Flow, cur *Round) (Flow, bool) {
 		if cur.N >= snap.MaxRounds {
 			flowState = StateRejected
 		}
-		return m.settleRound(snap, cur, RoundRejected, v, flowState, "")
+		return m.settleRound(snap, cur, RoundRejected, v, flowState, "", nil)
 	}
 
 	// Unparseable or missing — the fail-open this design refuses (§3.3).
@@ -151,7 +152,7 @@ func (m *Manager) readRoundVerdict(snap *Flow, cur *Round) (Flow, bool) {
 		// Second failure in the same round. Attempt 1's synthetic verdict
 		// stays on the record — it is what tells an operator what happened
 		// — and the round is graded for what it is: concluded nothing.
-		return m.settleRound(snap, cur, RoundErrored, cur.Verdict, StateErrored, unparseableAfterTwo)
+		return m.settleRound(snap, cur, RoundErrored, cur.Verdict, StateErrored, unparseableAfterTwo, nil)
 	}
 	return m.submitReReview(snap, cur, detail)
 }
@@ -264,9 +265,11 @@ func (m *Manager) submitReReview(snap *Flow, cur *Round, detail string) (Flow, b
 // settleRound records a round's outcome and, when that outcome ends the flow,
 // the flow's too — one transition, so nothing observes an accepted round under
 // a running flow. flowState is StateRunning when the flow carries on, in which
-// case the next pass submits the following round.
+// case the next pass submits the following round. orphans are cancelled by
+// apply if the transition does not land — see submitCommitTask, its one
+// caller with anything to pass.
 func (m *Manager) settleRound(snap *Flow, cur *Round, round RoundState, v *Verdict,
-	flowState State, errText string) (Flow, bool) {
+	flowState State, errText string, orphans []queue.Task) (Flow, bool) {
 	now := time.Now()
 	return m.apply(snap, cur, func(f *Flow, r *Round) bool {
 		r.State = round
@@ -278,7 +281,35 @@ func (m *Manager) settleRound(snap *Flow, cur *Round, round RoundState, v *Verdi
 			finishLocked(f, flowState, errText, now)
 		}
 		return true
-	}, nil)
+	}, orphans)
+}
+
+// submitCommitTask fires the one-off commit step the moment a round's verdict
+// is accept — see CommitPrompt for why one is needed at all. It is
+// fire-and-forget on purpose: the flow's own outcome is the review's, already
+// decided, and a commit task that fails or never runs (the daemon dying
+// before this pass persists, m.queue being nil, Add itself erroring) does not
+// undo the accept — an operator reads `git status` and commits by hand the
+// same way §10 of the design already expects for every other flow ending.
+// The task is still returned as an orphan candidate so a transition that
+// loses its race (the flow moved on while Add was in flight) does not leave
+// it running unrecorded.
+func (m *Manager) submitCommitTask(snap *Flow, cur *Round) []queue.Task {
+	if m.queue == nil {
+		return nil
+	}
+	tasks, err := m.queue.Add([]queue.TaskSpec{{
+		QueueID: snap.QueueID,
+		Title:   fmt.Sprintf("%s r%d commit", snap.ID, cur.N),
+		Prompt:  CommitPrompt(snap),
+		WorkDir: snap.WorkDir,
+		Opts:    stepOpts(snap.Opts),
+	}})
+	if err != nil {
+		log.Printf("flow: submitting commit task for round %d of %s: %v", cur.N, snap.ID, err)
+		return nil
+	}
+	return tasks
 }
 
 // finish drives the flow to a terminal state.
