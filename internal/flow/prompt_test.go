@@ -60,6 +60,11 @@ func TestImplementPrompt(t *testing.T) {
 	const wantImplement = "" +
 		"You are implementing a change in an existing codebase.\n" +
 		"\n" +
+		"You are running unattended: no user is available to answer questions,\n" +
+		"clarify the goal, or approve actions. If something is ambiguous or\n" +
+		"underspecified, use your best judgment, make a reasonable assumption, and\n" +
+		"say what you assumed in your report — do not stop and wait for an answer.\n" +
+		"\n" +
 		"## Goal\n" +
 		"\n" +
 		"Make internal/http retry on 429 responses, honouring Retry-After.\n" +
@@ -87,6 +92,11 @@ func TestImplementPromptWithPlan(t *testing.T) {
 	f.Plan = "1. Add a retry-after parser.\n2. Wire it into the client's retry loop."
 	const wantImplement = "" +
 		"You are implementing a change in an existing codebase.\n" +
+		"\n" +
+		"You are running unattended: no user is available to answer questions,\n" +
+		"clarify the goal, or approve actions. If something is ambiguous or\n" +
+		"underspecified, use your best judgment, make a reasonable assumption, and\n" +
+		"say what you assumed in your report — do not stop and wait for an answer.\n" +
 		"\n" +
 		"## Goal\n" +
 		"\n" +
@@ -122,6 +132,11 @@ func TestPlanPrompt(t *testing.T) {
 		"You are planning a change to an existing codebase, before any of it is\n" +
 		"written. Your job is to refine the goal below into a concrete implementation\n" +
 		"approach — not to make the change yourself.\n" +
+		"\n" +
+		"You are running unattended: no user is available to answer questions,\n" +
+		"clarify the goal, or approve actions. If something is ambiguous or\n" +
+		"underspecified, use your best judgment, make a reasonable assumption, and\n" +
+		"say what you assumed in your report — do not stop and wait for an answer.\n" +
 		"\n" +
 		"## Goal\n" +
 		"\n" +
@@ -165,6 +180,11 @@ func TestCommitPrompt(t *testing.T) {
 		"A change in this repository was just reviewed and accepted. Your job is only\n" +
 		"to commit it — do not modify the code.\n" +
 		"\n" +
+		"You are running unattended: no user is available to answer questions,\n" +
+		"clarify the goal, or approve actions. If something is ambiguous or\n" +
+		"underspecified, use your best judgment, make a reasonable assumption, and\n" +
+		"say what you assumed in your report — do not stop and wait for an answer.\n" +
+		"\n" +
 		"## Goal\n" +
 		"\n" +
 		"Make internal/http retry on 429 responses, honouring Retry-After.\n" +
@@ -195,6 +215,11 @@ func TestCommitPrompt(t *testing.T) {
 func TestFixPromptRound3(t *testing.T) {
 	const wantFix = "" +
 		"You are fixing review findings on a change in an existing codebase. This is round 3.\n" +
+		"\n" +
+		"You are running unattended: no user is available to answer questions,\n" +
+		"clarify the goal, or approve actions. If something is ambiguous or\n" +
+		"underspecified, use your best judgment, make a reasonable assumption, and\n" +
+		"say what you assumed in your report — do not stop and wait for an answer.\n" +
 		"\n" +
 		"## Goal\n" +
 		"\n" +
@@ -244,6 +269,11 @@ func TestReviewPrompt(t *testing.T) {
 		"You are reviewing a change another agent just made in an existing codebase.\n" +
 		"You are an adversarial reviewer: your job is to find what is wrong with the\n" +
 		"work, not to be agreeable about it.\n" +
+		"\n" +
+		"You are running unattended: no user is available to answer questions,\n" +
+		"clarify the goal, or approve actions. If something is ambiguous or\n" +
+		"underspecified, use your best judgment, make a reasonable assumption, and\n" +
+		"say what you assumed in your report — do not stop and wait for an answer.\n" +
 		"\n" +
 		"## What was asked of the implementer\n" +
 		"\n" +
@@ -326,6 +356,11 @@ func TestReviewPromptWithReviewGoal(t *testing.T) {
 		"You are reviewing a change another agent just made in an existing codebase.\n" +
 		"You are an adversarial reviewer: your job is to find what is wrong with the\n" +
 		"work, not to be agreeable about it.\n" +
+		"\n" +
+		"You are running unattended: no user is available to answer questions,\n" +
+		"clarify the goal, or approve actions. If something is ambiguous or\n" +
+		"underspecified, use your best judgment, make a reasonable assumption, and\n" +
+		"say what you assumed in your report — do not stop and wait for an answer.\n" +
 		"\n" +
 		"## What was asked of the implementer\n" +
 		"\n" +

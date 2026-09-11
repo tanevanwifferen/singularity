@@ -23,11 +23,22 @@ func RefineTicket(eng *engine.Engine, issue *Issue, repoPath string, focus strin
 	})
 }
 
+// writeNoUserInput reminds the agent that this run is unattended: it has no
+// user to ask for clarification or approval, so it must resolve ambiguity
+// itself and record what it assumed instead of stalling on a question.
+func writeNoUserInput(b *strings.Builder) {
+	b.WriteString("You are running unattended: no user is available to answer questions,\n")
+	b.WriteString("clarify the ticket, or approve actions. If something is ambiguous or\n")
+	b.WriteString("underspecified, use your best judgment, make a reasonable assumption, and\n")
+	b.WriteString("say what you assumed in your output — do not stop and wait for an answer.\n\n")
+}
+
 // buildRefinePrompt constructs the system prompt for the refine-ticket agent.
 func buildRefinePrompt(issue *Issue, repoPath string, focus string, actionsFile string) string {
 	var b strings.Builder
 
 	b.WriteString("You are analyzing a Jira ticket to make it implementation-ready.\n\n")
+	writeNoUserInput(&b)
 
 	b.WriteString("## Ticket\n\n")
 	fmt.Fprintf(&b, "Key:         %s\n", issue.Key)
@@ -114,6 +125,7 @@ func buildCreatePrompt(issue *Issue, rawText string, project string, repoPath st
 	var b strings.Builder
 
 	b.WriteString("You are breaking down a requirement or epic into implementable stories.\n\n")
+	writeNoUserInput(&b)
 
 	b.WriteString("## Requirement\n\n")
 	if issue != nil {
@@ -197,6 +209,7 @@ func buildRefineProposalWithContextPrompt(issue *Issue, existingActions []JiraAc
 	var b strings.Builder
 
 	b.WriteString("You are reviewing and improving an existing Jira ticket proposal.\n\n")
+	writeNoUserInput(&b)
 
 	b.WriteString("## Ticket\n\n")
 	fmt.Fprintf(&b, "Key:         %s\n", issue.Key)
@@ -303,6 +316,7 @@ func buildReviewPrompt(issues []Issue, repoPath string, instruction string, acti
 	var b strings.Builder
 
 	b.WriteString("You are reviewing multiple Jira tickets together to provide a big-picture analysis.\n\n")
+	writeNoUserInput(&b)
 
 	b.WriteString("## Tickets\n\n")
 	for i, issue := range issues {

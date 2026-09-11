@@ -853,7 +853,11 @@ func buildJiraAgentPrompt(issue *service.Issue, extraMsg string) string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\nYou are working in a dedicated worktree/branch for this ticket. " +
-		"Implement the requirements described above. When done, ensure all tests pass.")
+		"Implement the requirements described above. When done, ensure all tests pass.\n\n" +
+		"You are running unattended: no user is available to answer questions or approve " +
+		"actions. If something is ambiguous or underspecified, use your best judgment, make " +
+		"a reasonable assumption, and say what you assumed in your report — do not stop and " +
+		"wait for an answer.")
 	if extraMsg != "" {
 		b.WriteString("\n\nAdditional instructions:\n")
 		b.WriteString(extraMsg)

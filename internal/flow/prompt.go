@@ -21,6 +21,7 @@ func ImplementPrompt(f *Flow) string {
 	var b strings.Builder
 
 	b.WriteString("You are implementing a change in an existing codebase.\n\n")
+	writeNoUserInput(&b)
 	writeGoal(&b, f.Goal)
 	writePlan(&b, f.Plan)
 	fmt.Fprintf(&b, "## Working directory\n\n%s\n\n", f.WorkDir)
@@ -47,6 +48,7 @@ func FixPrompt(f *Flow, prior []*Round) string {
 
 	round := len(prior) + 1
 	fmt.Fprintf(&b, "You are fixing review findings on a change in an existing codebase. This is round %d.\n\n", round)
+	writeNoUserInput(&b)
 	writeGoal(&b, f.Goal)
 	writePlan(&b, f.Plan)
 	fmt.Fprintf(&b, "## Working directory\n\n%s\n\n", f.WorkDir)
@@ -102,6 +104,7 @@ func ReviewPrompt(f *Flow, verdictPath string) string {
 	b.WriteString("You are reviewing a change another agent just made in an existing codebase.\n")
 	b.WriteString("You are an adversarial reviewer: your job is to find what is wrong with the\n")
 	b.WriteString("work, not to be agreeable about it.\n\n")
+	writeNoUserInput(&b)
 
 	b.WriteString("## What was asked of the implementer\n\n")
 	b.WriteString(strings.TrimSpace(f.Goal))
@@ -176,6 +179,7 @@ func PlanPrompt(f *Flow, planPath string) string {
 	b.WriteString("You are planning a change to an existing codebase, before any of it is\n")
 	b.WriteString("written. Your job is to refine the goal below into a concrete implementation\n")
 	b.WriteString("approach — not to make the change yourself.\n\n")
+	writeNoUserInput(&b)
 	writeGoal(&b, f.Goal)
 	fmt.Fprintf(&b, "## Working directory\n\n%s\n\n", f.WorkDir)
 	b.WriteString("Read the codebase as needed to ground the plan in what is actually there: the\n")
@@ -204,6 +208,7 @@ func CommitPrompt(f *Flow) string {
 
 	b.WriteString("A change in this repository was just reviewed and accepted. Your job is only\n")
 	b.WriteString("to commit it — do not modify the code.\n\n")
+	writeNoUserInput(&b)
 	writeGoal(&b, f.Goal)
 	fmt.Fprintf(&b, "## Working directory\n\n%s\n\n", f.WorkDir)
 
@@ -219,6 +224,18 @@ func CommitPrompt(f *Flow) string {
 	b.WriteString("Report the commit you made (or that there was nothing to commit).\n")
 
 	return b.String()
+}
+
+// writeNoUserInput reminds an agent that this run is unattended: nothing reads
+// a question put to "the user", so asking one just stalls the step until it
+// times out. Every prompt in this file carries it, right after the role
+// framing, since that is where a model decides whether it is allowed to stop
+// and ask.
+func writeNoUserInput(b *strings.Builder) {
+	b.WriteString("You are running unattended: no user is available to answer questions,\n")
+	b.WriteString("clarify the goal, or approve actions. If something is ambiguous or\n")
+	b.WriteString("underspecified, use your best judgment, make a reasonable assumption, and\n")
+	b.WriteString("say what you assumed in your report — do not stop and wait for an answer.\n\n")
 }
 
 // writeGoal renders the flow's Goal verbatim under its own heading — verbatim

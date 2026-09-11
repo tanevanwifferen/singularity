@@ -360,6 +360,10 @@ func (e *Engine) ResumeWithHistory(oldAgentID string, userMessage string, opts A
 	var task strings.Builder
 	task.WriteString("You are resuming a conversation that was interrupted by a crash. ")
 	task.WriteString("Below is the original task and the conversation history from before the crash.\n\n")
+	task.WriteString("You are running unattended: no user is available to answer questions or ")
+	task.WriteString("approve actions beyond the message below, if any. If something is ")
+	task.WriteString("ambiguous, use your best judgment and say what you assumed — do not stop ")
+	task.WriteString("and wait for an answer.\n\n")
 	task.WriteString("=== ORIGINAL TASK ===\n")
 	task.WriteString(originalTask)
 	task.WriteString("\n\n=== CONVERSATION HISTORY (before crash) ===\n")

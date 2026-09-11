@@ -368,7 +368,10 @@ func (v *WorktreeView) handleAgentConfirm(msg tea.KeyMsg) tea.Cmd {
 					"You are in a git worktree for branch '%s'. "+
 						"Merge this branch into the main branch (main or master): "+
 						"1) fetch origin, 2) checkout main/master, 3) merge '%s', "+
-						"4) push to remote. Resolve any merge conflicts carefully.",
+						"4) push to remote. Resolve any merge conflicts carefully.\n\n"+
+						"You are running unattended: no user is available to answer questions or "+
+						"approve actions. If something is ambiguous, use your best judgment and "+
+						"say what you assumed in your report — do not stop and wait for an answer.",
 					branch, branch,
 				)
 				id, err := svc.Agent.Start(v.ctx(), path, task, service.AgentOptions{SmartRoute: true})
@@ -424,6 +427,9 @@ func (v *WorktreeView) handleRebaseConfirm(msg tea.KeyMsg) tea.Cmd {
 				rebaseCtx := lastErr
 				task := fmt.Sprintf(
 					"You are in a git worktree at path '%s' on branch '%s'.\n\n"+
+						"You are running unattended: no user is available to answer questions or "+
+						"approve actions. If something is ambiguous, use your best judgment and "+
+						"say what you assumed in your report — do not stop and wait for an answer.\n\n"+
 						"A `git rebase origin/%s` has already been started and there are merge conflicts.\n\n"+
 						"<REBASE CONTEXT>\n%s\n</REBASE CONTEXT>\n\n"+
 						"Your job:\n"+

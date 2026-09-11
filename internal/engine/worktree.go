@@ -166,6 +166,9 @@ func rebaseConflictPrompt(sourceBranch, task string) string {
 	return fmt.Sprintf(
 		"Rebase the current git branch onto %s to resolve merge conflicts. "+
 			"The original task context was: %s\n\n"+
+			"You are running unattended: no user is available to answer questions or approve "+
+			"actions, and there is no way to prompt for input. If something is ambiguous, use "+
+			"your best judgment and proceed — do not stop and wait for an answer.\n\n"+
 			"Steps:\n"+
 			"1. Run: git rebase %s\n"+
 			"2. If there are conflicts, read the conflicting files, understand both sides, and resolve them correctly\n"+
