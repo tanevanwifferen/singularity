@@ -79,6 +79,9 @@ func (v *FlowsView) handleFlowKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "a":
 		return v, v.openSelectedAgent()
 
+	case "t":
+		return v, v.retrySelectedStep()
+
 	// An expanded block takes the tree's height and its j/k: it is a
 	// second thing to scroll, and one pane scrolls at a time. f cycles
 	// findings → request → collapsed, findings first because what the
@@ -218,6 +221,51 @@ func (v *FlowsView) openSelectedAgent() tea.Cmd {
 	}
 	agentID := n.AgentID
 	return func() tea.Msg { return OpenAgentMsg{AgentID: agentID} }
+}
+
+// retrySelectedStep asks the flow to redo the selected step, including one
+// that already finished done. Routed through FlowService.RetryStep rather
+// than straight at Queue.Retry: a flow record never stores a step's own
+// state (§1.1 of internal/flow's tree.go), so requeuing the task alone
+// leaves the flow unaware anything happened — rounds.go settles a round
+// within one tick of its review going done, and apply's terminal guard then
+// refuses every further transition on it, so the flow never reads a rerun
+// review's fresh verdict or re-reviews a rerun work step. RetryStep reopens
+// the step's round (or, for the plan step, the flow) so the reconciler picks
+// the fresh result back up.
+//
+// No confirmation, even though this can revive a terminal flow: RetryStep
+// itself refuses to touch a step, or a flow, with any task in the flow's
+// queue still live — the commit task an accept fires included, which is
+// exactly the moment this view shows a round done while an agent is still
+// in the tree (every round shares one WorkDir with worktree isolation off,
+// so a live task anywhere else in the flow is exactly the hazard a retry
+// must not risk), so there is nothing here a stray keystroke can orphan — and it is
+// itself undoable by retrying again.
+func (v *FlowsView) retrySelectedStep() tea.Cmd {
+	n, ok := v.selectedNode()
+	if !ok || n.Kind != service.FlowNodeStep || n.TaskID == "" {
+		v.statusMsg = "No step here — select a step to retry"
+		return nil
+	}
+	f, ok := v.selectedFlow()
+	if !ok {
+		v.statusMsg = "No flow selected"
+		return nil
+	}
+	svc := v.services
+	if svc == nil {
+		v.statusMsg = "Flow service unavailable"
+		return nil
+	}
+	flowID, taskID, label := f.ID, n.TaskID, n.Label
+	return func() tea.Msg {
+		if _, err := svc.Flow.RetryStep(v.ctx(), flowID, taskID); err != nil {
+			return flowActionMsg{action: "retry", err: err}
+		}
+		return flowActionMsg{action: "retry",
+			note: fmt.Sprintf("Step %q requeued", label)}
+	}
 }
 
 // confirmCancel puts the cancel behind a ConfirmPrompt: it stops the flow's

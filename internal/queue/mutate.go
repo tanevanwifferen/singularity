@@ -84,9 +84,17 @@ func (m *Manager) CancelQueue(queueID string) error {
 	return nil
 }
 
-// Retry puts a failed, cancelled or skipped task back in line. Its attempt
-// counter is reset so the task gets its full retry budget again, and any
-// dependents that were skipped because of it are reconsidered.
+// Retry puts a failed, cancelled, skipped or done task back in line. Its
+// attempt counter is reset so the task gets its full retry budget again, and
+// any dependents that were skipped because of it are reconsidered.
+//
+// Done is included alongside the failure states because an operator may want
+// to redo a step that succeeded — a flow step whose output turned out to be
+// wrong, say — not only recover from one that didn't. refreshBlockedLocked
+// does not walk back down to a done dependent of the retried task, so a task
+// that already ran against the old result stays as it is; the caller sees
+// exactly that in the state it reads back, the same way a retry made behind
+// a flow's back always has.
 func (m *Manager) Retry(taskID string) error {
 	m.mu.Lock()
 	t, ok := m.tasks[taskID]
@@ -95,7 +103,7 @@ func (m *Manager) Retry(taskID string) error {
 		return ErrNotFound
 	}
 	switch t.State {
-	case StateFailed, StateCancelled, StateSkipped:
+	case StateFailed, StateCancelled, StateSkipped, StateDone:
 	default:
 		m.mu.Unlock()
 		return ErrNotRetryable

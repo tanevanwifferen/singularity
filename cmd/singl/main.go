@@ -109,7 +109,7 @@ Commands:
   workflows  list | create | remove | discover   (whole project: one worktree per repo)
   agents     list | get | spawn | resume | kill | remove | output | input | wait | wait-all | watch | watch-all | chat | stats
   queue      add | list | show | graph | wait | cancel | retry | answer | pause | resume | queues | remove
-  flow       start | list | show | tree | wait | cancel | remove   (adversarial review rounds; wait exits 0 only on accept)
+  flow       start | continue | list | show | tree | wait | cancel | remove | retry-step   (adversarial review rounds; wait exits 0 only on accept)
   branches   list | checkout | create | delete | head | compare | merge
   repos      info | open | find
   diff       workdir | branch | file | staged | unstaged | merge-base | all-repos

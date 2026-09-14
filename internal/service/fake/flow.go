@@ -27,6 +27,8 @@ type FlowStub struct {
 	TreeFn   func(ctx context.Context, flowID string) (*service.FlowTree, error)
 	CancelFn func(ctx context.Context, flowID string) error
 	RemoveFn func(ctx context.Context, flowID string) error
+
+	RetryStepFn func(ctx context.Context, flowID, taskID string) (*service.Flow, error)
 }
 
 // FlowStub must satisfy the interface the handler tests will pass it as.
@@ -90,4 +92,12 @@ func (f *FlowStub) Remove(ctx context.Context, flowID string) error {
 		return unavail()
 	}
 	return f.RemoveFn(ctx, flowID)
+}
+
+// RetryStep re-runs one step of the flow's tree.
+func (f *FlowStub) RetryStep(ctx context.Context, flowID, taskID string) (*service.Flow, error) {
+	if f.RetryStepFn == nil {
+		return nil, unavail()
+	}
+	return f.RetryStepFn(ctx, flowID, taskID)
 }

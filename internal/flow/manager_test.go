@@ -897,3 +897,564 @@ func (q *fakeQueue) setError(t *testing.T, id, msg string) {
 	}
 	task.Error = msg
 }
+
+// RetryStep is the operation queue.Retry alone cannot be: these tests prove
+// the flow actually notices a retried step, which is what TestRetryRestartsADoneTask
+// in internal/queue's own manager_test.go cannot show — that test only
+// proves the queue will re-run a done task, never that anything reads the
+// re-run's result.
+
+// TestRetryStepRedoesTheWorkOfATerminalFlow retries a done work step of a
+// flow that already ended rejected at its cap, and shows the flow does not
+// just re-run the step but re-reviews it and reads the new verdict: the
+// thing queue.Retry alone cannot do, because rounds.go settles a round
+// within one tick of its review going done and apply's terminal guard then
+// refuses every further transition on it.
+func TestRetryStepRedoesTheWorkOfATerminalFlow(t *testing.T) {
+	m, q := newDriven(t)
+	f := startFlow(t, m, 1)
+	m.tick()
+
+	r1 := finishSteps(t, m, q, f.ID)
+	writeVerdict(t, m, f.ID, 1, 1, rejectVerdict("still wrong"))
+	m.tick()
+
+	got, err := m.Get(f.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.State != StateRejected {
+		t.Fatalf("flow state = %s, want rejected at the cap before the retry", got.State)
+	}
+
+	out, err := m.RetryStep(f.ID, r1.WorkTaskID)
+	if err != nil {
+		t.Fatalf("RetryStep(work): %v", err)
+	}
+	if out.State != StateRunning || out.Error != "" || out.EndedAt != nil {
+		t.Fatalf("flow after retry = %s / %q / ended %v, want running with no error and not ended",
+			out.State, out.Error, out.EndedAt)
+	}
+	r := out.CurrentRound()
+	if r.State != RoundRunning || r.Verdict != nil || r.N != 1 {
+		t.Fatalf("round after retry = %+v, want round 1 running with its verdict cleared", r)
+	}
+	if r.WorkTaskID == r1.WorkTaskID || r.ReviewTaskID == r1.ReviewTaskID {
+		t.Fatalf("round after retry = %+v, want fresh task IDs, not the old %s/%s",
+			r, r1.WorkTaskID, r1.ReviewTaskID)
+	}
+	if len(q.batches) != 2 {
+		t.Fatalf("submitted %d batches, want the original round plus the retry's", len(q.batches))
+	}
+	retryBatch := q.batches[1]
+	if len(retryBatch) != 2 || retryBatch[1].After[0] != retryBatch[0].Name {
+		t.Fatalf("retry batch = %+v, want a fresh work task and a review depending on it", retryBatch)
+	}
+
+	// The crux: a fresh accept on the retried work now actually lands. Under
+	// queue.Retry alone this verdict would never be read — the flow settled
+	// on the old rejection and apply's terminal guard would refuse to move
+	// it again.
+	finishSteps(t, m, q, f.ID)
+	writeVerdict(t, m, f.ID, 1, 1, acceptVerdict)
+	m.tick()
+
+	final, err := m.Get(f.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if final.State != StateAccepted {
+		t.Fatalf("flow state after the retried round's accept = %s, want accepted", final.State)
+	}
+	if rr := final.CurrentRound(); rr.Verdict == nil || rr.Verdict.Decision != DecisionAccept {
+		t.Fatalf("round verdict = %+v, want the retried review's accept", rr.Verdict)
+	}
+}
+
+// TestRetryStepRedoesTheReviewAlone retries only a done round's review step,
+// leaving the work step exactly as it was, and shows the flow reads the
+// fresh verdict from the same per-attempt path the first review wrote to.
+func TestRetryStepRedoesTheReviewAlone(t *testing.T) {
+	m, q := newDriven(t)
+	f := startFlow(t, m, 1)
+	m.tick()
+
+	r1 := finishSteps(t, m, q, f.ID)
+	writeVerdict(t, m, f.ID, 1, 1, rejectVerdict("wrong verdict"))
+	m.tick()
+
+	out, err := m.RetryStep(f.ID, r1.ReviewTaskID)
+	if err != nil {
+		t.Fatalf("RetryStep(review): %v", err)
+	}
+	r := out.CurrentRound()
+	if r.WorkTaskID != r1.WorkTaskID {
+		t.Fatalf("work task = %s, want the untouched original %s", r.WorkTaskID, r1.WorkTaskID)
+	}
+	if r.ReviewTaskID == r1.ReviewTaskID || r.ReviewAttempt != 1 {
+		t.Fatalf("round after retry = %+v, want a fresh review task still at attempt 1", r)
+	}
+
+	q.setState(t, r.ReviewTaskID, queue.StateDone)
+	writeVerdict(t, m, f.ID, 1, 1, acceptVerdict)
+	m.tick()
+
+	final, err := m.Get(f.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if final.State != StateAccepted {
+		t.Fatalf("flow state = %s, want accepted from the retried review's fresh verdict", final.State)
+	}
+}
+
+// TestRetryStepRefusesWhileAnotherFlowTaskIsLive is the concurrency-safety
+// finding: a flow's rounds all run in one WorkDir with worktree isolation
+// forced off, so retrying a done step while any other task the flow owns
+// could still run risks two agents editing that tree at once.
+func TestRetryStepRefusesWhileAnotherFlowTaskIsLive(t *testing.T) {
+	m, q := newDriven(t)
+	f := startFlow(t, m, 3)
+	m.tick()
+
+	r1 := currentRound(t, m, f.ID)
+	// Work done, review still blocked — the fake queue never advances a
+	// dependent on its own, which stands in for "review is about to run".
+	q.setState(t, r1.WorkTaskID, queue.StateDone)
+
+	_, err := m.RetryStep(f.ID, r1.WorkTaskID)
+	if !errors.Is(err, ErrNotRetryable) {
+		t.Fatalf("RetryStep while the review can still run: err = %v, want ErrNotRetryable", err)
+	}
+	if len(q.batches) != 1 {
+		t.Fatalf("submitted %d batches, want the retry refused before anything was queued", len(q.batches))
+	}
+}
+
+// TestRetryStepRefusesAnEarlierRound is the other half of the finding: only
+// the flow's current round is retryable. An earlier round's fix prompts and
+// findings are already baked into every round after it, so reopening it
+// would rewrite history those later rounds depend on.
+func TestRetryStepRefusesAnEarlierRound(t *testing.T) {
+	m, q := newDriven(t)
+	f := startFlow(t, m, 3)
+	m.tick()
+
+	r1 := finishSteps(t, m, q, f.ID)
+	writeVerdict(t, m, f.ID, 1, 1, rejectVerdict("round 1 findings"))
+	m.tick() // submits round 2
+
+	if got, err := m.Get(f.ID); err != nil || len(got.Rounds) != 2 {
+		t.Fatalf("Get: %v, rounds=%+v, want round 2 submitted", err, got.Rounds)
+	}
+
+	_, err := m.RetryStep(f.ID, r1.WorkTaskID)
+	if !errors.Is(err, ErrNotRetryable) {
+		t.Fatalf("RetryStep on round 1 while round 2 is current: err = %v, want ErrNotRetryable", err)
+	}
+	if !strings.Contains(err.Error(), "not its current round") {
+		t.Errorf("error = %q, want it to say round 1 is not current", err)
+	}
+}
+
+// TestRetryStepRefusesWhileTheCommitTaskIsLive is the hole in the liveness
+// check the record alone cannot close: an accept fires a commit task that
+// is never recorded on the flow (submitCommitTask is fire-and-forget), and
+// RetryStep is the one operation that acts on an accepted flow. The TUI
+// shows the round done the instant the verdict lands, while the committer
+// is still running in the same tree — so the check must read the flow's
+// queue, not just recordedTaskIDs.
+func TestRetryStepRefusesWhileTheCommitTaskIsLive(t *testing.T) {
+	m, q := newDriven(t)
+	f := startFlow(t, m, 1)
+	m.tick()
+
+	r1 := finishSteps(t, m, q, f.ID)
+	writeVerdict(t, m, f.ID, 1, 1, acceptVerdict)
+	m.tick()
+
+	got, err := m.Get(f.ID)
+	if err != nil || got.State != StateAccepted {
+		t.Fatalf("Get: %v, state = %s, want accepted", err, got.State)
+	}
+	if len(q.batches) != 2 || len(q.batches[1]) != 1 {
+		t.Fatalf("submitted batches = %+v, want the round and its commit task", q.batches)
+	}
+	// The fake queue leaves a fresh task pending, which for a commit task
+	// is exactly the "still to run in this tree" the TUI cannot see.
+	commitID := "t3"
+	if _, err := q.Get(commitID); err != nil {
+		t.Fatalf("commit task %s not in the queue: %v", commitID, err)
+	}
+
+	for _, step := range []string{r1.WorkTaskID, r1.ReviewTaskID} {
+		_, err := m.RetryStep(f.ID, step)
+		if !errors.Is(err, ErrNotRetryable) {
+			t.Fatalf("RetryStep(%s) with the commit task pending: err = %v, want ErrNotRetryable", step, err)
+		}
+		if !strings.Contains(err.Error(), commitID) {
+			t.Errorf("error = %q, want it to name the live commit task %s", err, commitID)
+		}
+	}
+	if len(q.batches) != 2 {
+		t.Fatalf("submitted %d batches, want the retry refused before anything was queued", len(q.batches))
+	}
+
+	// Once the committer has finished, the same retry goes through.
+	q.setState(t, commitID, queue.StateDone)
+	out, err := m.RetryStep(f.ID, r1.WorkTaskID)
+	if err != nil {
+		t.Fatalf("RetryStep after the commit task settled: %v", err)
+	}
+	if out.State != StateRunning || out.CurrentRound().WorkTaskID == r1.WorkTaskID {
+		t.Fatalf("flow after retry = %+v, want running on a fresh work task", out)
+	}
+}
+
+// TestRetryStepRefusesAnyLiveTaskInTheFlowQueue: a task an operator queued
+// into flow-<id> by hand is in the same tree for the same reason the commit
+// task is, and the check reads the queue, so it is refused too.
+func TestRetryStepRefusesAnyLiveTaskInTheFlowQueue(t *testing.T) {
+	m, q := newDriven(t)
+	f := startFlow(t, m, 1)
+	m.tick()
+
+	r1 := finishSteps(t, m, q, f.ID)
+	writeVerdict(t, m, f.ID, 1, 1, rejectVerdict("nope"))
+	m.tick()
+
+	q.seed("stray", f.QueueID, queue.StateRunning)
+	if _, err := m.RetryStep(f.ID, r1.WorkTaskID); !errors.Is(err, ErrNotRetryable) {
+		t.Fatalf("RetryStep beside a stray running task in the flow's queue: err = %v, want ErrNotRetryable", err)
+	}
+	// A live task in some OTHER queue is somebody else's tree.
+	q.setState(t, "stray", queue.StateDone)
+	q.seed("elsewhere", "flow-other", queue.StateRunning)
+	if _, err := m.RetryStep(f.ID, r1.WorkTaskID); err != nil {
+		t.Fatalf("RetryStep with only another queue's task live: %v", err)
+	}
+}
+
+// continuedAtRejection drives a one-round flow to its rejection and continues
+// it: the record then has round 1 settled rejected under a RUNNING flow with
+// round 2 not yet submitted — the exact window in which the reconciler's
+// submitRound(2) and an operator's RetryStep can race.
+func continuedAtRejection(t *testing.T, m *Manager, q *fakeQueue) Flow {
+	t.Helper()
+	f := startFlow(t, m, 1)
+	m.tick()
+	finishSteps(t, m, q, f.ID)
+	writeVerdict(t, m, f.ID, 1, 1, rejectVerdict("round 1 findings"))
+	m.tick()
+	if _, err := m.Continue(f.ID, 1); err != nil {
+		t.Fatalf("Continue: %v", err)
+	}
+	snap, err := m.Get(f.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if snap.State != StateRunning || len(snap.Rounds) != 1 || snap.Rounds[0].State != RoundRejected {
+		t.Fatalf("flow after continue = %+v, want running with round 1 settled rejected", snap)
+	}
+	return snap
+}
+
+// TestRetryStepLosesTheRaceToTheNextRound is the round-count hole: retrying
+// round N while it is a settled rejection under a running flow, with the
+// reconciler's submitRound(N+1) already past its snapshot. Round 1 is
+// unchanged by value in that window, so a guard that compared only the round
+// would let both writes land — round 1 reopened AND round 2 appended, two
+// implementers in one tree. Whichever lands second must lose and cancel the
+// tasks it just submitted. Both orderings are driven here through the two
+// halves' own entry points with stale snapshots, which is what the race is.
+func TestRetryStepLosesTheRaceToTheNextRound(t *testing.T) {
+	t.Run("submitRound lands first", func(t *testing.T) {
+		m, q := newDriven(t)
+		snap := continuedAtRejection(t, m, q)
+		stale := snap.Clone()
+
+		// The reconciler's half lands: round 2 is now on the record.
+		if _, changed := m.submitRound(&snap, 2); !changed {
+			t.Fatal("submitRound(2) from the continued snapshot did not land")
+		}
+		before := len(q.cancelledIDs())
+
+		// The retry's half runs from the snapshot it took before that.
+		_, err := m.resubmitRound(&stale, stale.Rounds[0])
+		if !errors.Is(err, errRetryRaced) {
+			t.Fatalf("resubmitRound with round 2 already appended: err = %v, want errRetryRaced", err)
+		}
+		got, gerr := m.Get(snap.ID)
+		if gerr != nil {
+			t.Fatalf("Get: %v", gerr)
+		}
+		if len(got.Rounds) != 2 || got.Rounds[0].State != RoundRejected || got.Rounds[0].WorkTaskID != stale.Rounds[0].WorkTaskID {
+			t.Fatalf("rounds after the lost retry = %+v, want round 1 untouched and round 2 current", got.Rounds)
+		}
+		cancelled := q.cancelledIDs()[before:]
+		if len(cancelled) != 2 {
+			t.Fatalf("cancelled %v after the lost retry, want its two fresh tasks", cancelled)
+		}
+		for _, id := range cancelled {
+			if id == got.Rounds[1].WorkTaskID || id == got.Rounds[1].ReviewTaskID {
+				t.Fatalf("the lost retry cancelled round 2's own task %s", id)
+			}
+		}
+	})
+
+	t.Run("retry lands first", func(t *testing.T) {
+		m, q := newDriven(t)
+		snap := continuedAtRejection(t, m, q)
+		stale := snap.Clone()
+
+		out, err := m.RetryStep(snap.ID, snap.Rounds[0].WorkTaskID)
+		if err != nil {
+			t.Fatalf("RetryStep: %v", err)
+		}
+		if r := out.CurrentRound(); r.State != RoundRunning || r.N != 1 {
+			t.Fatalf("round after retry = %+v, want round 1 reopened", r)
+		}
+		before := len(q.cancelledIDs())
+
+		// The reconciler's half, from its stale snapshot: len(Rounds) is
+		// still 1, so only the last-round-terminal check can refuse it.
+		if _, changed := m.submitRound(&stale, 2); changed {
+			t.Fatal("submitRound(2) landed on a flow whose round 1 was just reopened")
+		}
+		got, gerr := m.Get(snap.ID)
+		if gerr != nil {
+			t.Fatalf("Get: %v", gerr)
+		}
+		if len(got.Rounds) != 1 || got.Rounds[0].State != RoundRunning {
+			t.Fatalf("rounds after the lost submit = %+v, want only the reopened round 1", got.Rounds)
+		}
+		if cancelled := q.cancelledIDs()[before:]; len(cancelled) != 2 {
+			t.Fatalf("cancelled %v after the lost submit, want its two orphaned tasks", cancelled)
+		}
+
+		// And the reconciler proper, re-deriving from the record, now sees
+		// a running round and waits for it rather than opening round 2.
+		batches := len(q.batches)
+		m.tick()
+		if len(q.batches) != batches {
+			t.Fatalf("a tick after the retry submitted %d more batches, want none", len(q.batches)-batches)
+		}
+	})
+}
+
+// writePlanFile puts a plan document where the planner was told to write it.
+func writePlanFile(t *testing.T, m *Manager, flowID, body string) {
+	t.Helper()
+	path := m.planPath(flowID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir plan dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+}
+
+// TestRetryStepRedoesThePlan retries the plan step of a flow whose planner
+// failed, and shows the flow reads the new plan and opens round 1 against
+// it: the pre-round-1 branch of applyRetry.
+func TestRetryStepRedoesThePlan(t *testing.T) {
+	m, q := newDriven(t)
+	req := startReq(t)
+	req.EnablePlanning = true
+	f, err := m.Start(req)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	m.tick()
+
+	got, err := m.Get(f.ID)
+	if err != nil || got.PlanTaskID == "" {
+		t.Fatalf("Get: %v, flow = %+v, want a plan task submitted", err, got)
+	}
+	planID := got.PlanTaskID
+	q.setState(t, planID, queue.StateFailed)
+	m.tick()
+	if got, _ = m.Get(f.ID); got.State != StateErrored {
+		t.Fatalf("flow after the planner failed = %s, want errored", got.State)
+	}
+
+	out, err := m.RetryStep(f.ID, planID)
+	if err != nil {
+		t.Fatalf("RetryStep(plan): %v", err)
+	}
+	if out.State != StateRunning || out.Error != "" || out.EndedAt != nil {
+		t.Fatalf("flow after plan retry = %s / %q / ended %v, want running, no error, not ended",
+			out.State, out.Error, out.EndedAt)
+	}
+	if out.PlanTaskID == planID || out.PlanTaskID == "" || out.Plan != "" || len(out.Rounds) != 0 {
+		t.Fatalf("flow after plan retry = %+v, want a fresh plan task, no plan text and no rounds", out)
+	}
+	if len(q.batches) != 2 || len(q.batches[1]) != 1 || q.batches[1][0].Title != "f1 plan (retry)" {
+		t.Fatalf("submitted batches = %+v, want a second one-task plan batch", q.batches)
+	}
+
+	writePlanFile(t, m, f.ID, "1. Parse the date form.\n")
+	q.setState(t, out.PlanTaskID, queue.StateDone)
+	m.tick()
+
+	final, err := m.Get(f.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if final.Plan != "1. Parse the date form." || len(final.Rounds) != 1 {
+		t.Fatalf("flow after the retried plan settled = %+v, want the plan read and round 1 opened", final)
+	}
+	if !strings.Contains(q.batches[2][0].Prompt, "1. Parse the date form.") {
+		t.Errorf("round 1 work prompt does not carry the retried plan:\n%s", q.batches[2][0].Prompt)
+	}
+
+	// Now that round 1 exists, the plan is history.
+	if _, err := m.RetryStep(f.ID, final.PlanTaskID); !errors.Is(err, ErrNotRetryable) {
+		t.Fatalf("RetryStep(plan) after round 1 opened: err = %v, want ErrNotRetryable", err)
+	}
+}
+
+// TestRetryStepPlanLosesTheRace drives applyRetry's pre-round-1 guard from a
+// stale snapshot: the flow read its plan and opened round 1 while the plan
+// retry's Add was in flight, so the fresh plan task must be cancelled rather
+// than recorded over a plan an implementer has already been given.
+func TestRetryStepPlanLosesTheRace(t *testing.T) {
+	m, q := newDriven(t)
+	req := startReq(t)
+	req.EnablePlanning = true
+	f, err := m.Start(req)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	m.tick()
+	stale, err := m.Get(f.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	// The flow moves on: plan lands, round 1 opens.
+	writePlanFile(t, m, f.ID, "the plan")
+	q.setState(t, stale.PlanTaskID, queue.StateDone)
+	m.tick()
+	if got, _ := m.Get(f.ID); len(got.Rounds) != 1 {
+		t.Fatalf("flow = %+v, want round 1 opened", got)
+	}
+	before := len(q.cancelledIDs())
+
+	_, err = m.resubmitPlan(&stale)
+	if !errors.Is(err, errRetryRaced) {
+		t.Fatalf("resubmitPlan from a pre-round-1 snapshot after round 1 opened: err = %v, want errRetryRaced", err)
+	}
+	got, err := m.Get(f.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.PlanTaskID != stale.PlanTaskID || got.Plan != "the plan" || len(got.Rounds) != 1 {
+		t.Fatalf("flow after the lost plan retry = %+v, want it untouched", got)
+	}
+	cancelled := q.cancelledIDs()[before:]
+	if len(cancelled) != 1 || cancelled[0] == stale.PlanTaskID {
+		t.Fatalf("cancelled %v after the lost plan retry, want exactly its fresh plan task", cancelled)
+	}
+}
+
+// TestRetryStepKeepsTheSyntheticVerdictAtAttemptTwo: at review attempt 2 the
+// round's verdict is attempt 1's synthetic reject, which readRoundVerdict
+// re-records if attempt 2 is unparseable too. A review retry at attempt 2
+// must leave it in place, or a second unparseable verdict after the retry
+// errors the round with no explanation at all.
+func TestRetryStepKeepsTheSyntheticVerdictAtAttemptTwo(t *testing.T) {
+	m, q := newDriven(t)
+	f := startFlow(t, m, 1)
+	m.tick()
+
+	finishSteps(t, m, q, f.ID) // no verdict written: attempt 1 is unparseable
+	m.tick()
+	r := currentRound(t, m, f.ID)
+	if r.ReviewAttempt != 2 || r.Verdict == nil {
+		t.Fatalf("round = %+v, want attempt 2 with the synthetic reject recorded", r)
+	}
+	synthetic := *r.Verdict
+
+	q.setState(t, r.ReviewTaskID, queue.StateDone) // attempt 2 unparseable too
+	m.tick()
+	if got, _ := m.Get(f.ID); got.State != StateErrored || got.Error != unparseableAfterTwo {
+		t.Fatalf("flow = %s / %q, want errored after two unparseable verdicts", got.State, got.Error)
+	}
+
+	out, err := m.RetryStep(f.ID, r.ReviewTaskID)
+	if err != nil {
+		t.Fatalf("RetryStep(review at attempt 2): %v", err)
+	}
+	rr := out.CurrentRound()
+	if rr.ReviewAttempt != 2 || rr.State != RoundRunning {
+		t.Fatalf("round after retry = %+v, want still attempt 2 and running", rr)
+	}
+	if rr.Verdict == nil || !reflect.DeepEqual(*rr.Verdict, synthetic) {
+		t.Fatalf("round verdict after retry = %+v, want attempt 1's synthetic reject kept", rr.Verdict)
+	}
+
+	// The retried attempt 2 is unparseable again: the operator still has
+	// the explanation.
+	q.setState(t, rr.ReviewTaskID, queue.StateDone)
+	m.tick()
+	final, err := m.Get(f.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if final.State != StateErrored || final.Error != unparseableAfterTwo {
+		t.Fatalf("flow = %s / %q, want errored again", final.State, final.Error)
+	}
+	if v := final.CurrentRound().Verdict; v == nil || !reflect.DeepEqual(*v, synthetic) {
+		t.Fatalf("round verdict after the second failure = %+v, want the synthetic reject still on record", v)
+	}
+
+	// Whereas a retry at attempt 1 starts clean, as before.
+	m2, q2 := newDriven(t)
+	f2 := startFlow(t, m2, 1)
+	m2.tick()
+	r2 := finishSteps(t, m2, q2, f2.ID)
+	writeVerdict(t, m2, f2.ID, 1, 1, rejectVerdict("wrong"))
+	m2.tick()
+	out2, err := m2.RetryStep(f2.ID, r2.ReviewTaskID)
+	if err != nil {
+		t.Fatalf("RetryStep(review at attempt 1): %v", err)
+	}
+	if v := out2.CurrentRound().Verdict; v != nil {
+		t.Fatalf("round verdict after an attempt-1 review retry = %+v, want cleared", v)
+	}
+}
+
+// TestRetryStepReportsAQueueRefusalAsItself: a queue that refuses the
+// retry's batch is not a race, and the operator must get the queue's own
+// complaint rather than be sent looking for one.
+func TestRetryStepReportsAQueueRefusalAsItself(t *testing.T) {
+	m, q := newDriven(t)
+	f := startFlow(t, m, 1)
+	m.tick()
+	r1 := finishSteps(t, m, q, f.ID)
+	writeVerdict(t, m, f.ID, 1, 1, rejectVerdict("wrong"))
+	m.tick()
+
+	refusal := fmt.Errorf("%w: no such backend", queue.ErrInvalid)
+	q.mu.Lock()
+	q.addErr = refusal
+	q.mu.Unlock()
+
+	for _, step := range []string{r1.WorkTaskID, r1.ReviewTaskID} {
+		_, err := m.RetryStep(f.ID, step)
+		if !errors.Is(err, queue.ErrInvalid) {
+			t.Fatalf("RetryStep(%s) with Add refusing: err = %v, want the queue's own error", step, err)
+		}
+		if errors.Is(err, ErrNotRetryable) || strings.Contains(err.Error(), "changed while") {
+			t.Errorf("error = %q, reported as a race", err)
+		}
+	}
+	got, err := m.Get(f.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.State != StateRejected || got.CurrentRound().WorkTaskID != r1.WorkTaskID {
+		t.Fatalf("flow after a refused retry = %+v, want it untouched", got)
+	}
+}

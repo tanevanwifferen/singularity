@@ -61,3 +61,8 @@ func (s *remoteFlowService) Cancel(ctx context.Context, flowID string) error {
 func (s *remoteFlowService) Remove(ctx context.Context, flowID string) error {
 	return s.c.FlowRemove(ctx, flowID)
 }
+
+// RetryStep re-runs one step of the flow's tree, including one already done.
+func (s *remoteFlowService) RetryStep(ctx context.Context, flowID, taskID string) (*service.Flow, error) {
+	return s.c.FlowRetryStep(ctx, flowID, taskID)
+}

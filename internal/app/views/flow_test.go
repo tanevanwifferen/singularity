@@ -275,6 +275,63 @@ func TestOpenAgentFromStep(t *testing.T) {
 	}
 }
 
+// 't' retries the selected step through FlowService.RetryStep, including one
+// that's already done — not through Queue.Retry on the bare task ID, which
+// would leave the flow record unaware anything happened (rounds.go settles a
+// round within one tick of its review going done, and apply's terminal guard
+// then refuses every further transition on it). A refusal from the service
+// lands in the flash line rather than anywhere that can take the view down.
+func TestRetryStepFromTree(t *testing.T) {
+	v, stub := loadedFlowsView(t)
+
+	v.Update(tea.KeyMsg{Type: tea.KeyTab})
+	for i := 0; i < 2; i++ {
+		v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	}
+	node, _ := v.selectedNode()
+	if node.ID != "f1/r1/implement" || node.State != "done" {
+		t.Fatalf("cursor on %+v, want the done f1/r1/implement step", node)
+	}
+
+	var gotFlowID, gotTaskID string
+	stub.RetryStepFn = func(_ context.Context, flowID, taskID string) (*service.Flow, error) {
+		gotFlowID, gotTaskID = flowID, taskID
+		f := testFlow()
+		return &f, nil
+	}
+	_, cmd := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	if cmd == nil {
+		t.Fatal("'t' on a step produced no command")
+	}
+	msg := cmd()
+	v.Update(msg)
+	if gotFlowID != "f1" || gotTaskID != node.TaskID {
+		t.Fatalf("RetryStep called with (%q, %q), want (\"f1\", %q)", gotFlowID, gotTaskID, node.TaskID)
+	}
+	if v.statusMsg == "" || strings.Contains(v.statusMsg, "refused") {
+		t.Errorf("statusMsg = %q, want a success flash", v.statusMsg)
+	}
+
+	stub.RetryStepFn = func(context.Context, string, string) (*service.Flow, error) {
+		return nil, service.ErrConflict
+	}
+	_, cmd = v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	v.Update(cmd())
+	if !strings.Contains(v.statusMsg, "refused") {
+		t.Errorf("statusMsg = %q, want it to report the refusal", v.statusMsg)
+	}
+
+	v.treeCursor = 0 // the flow root, which is not a step
+	v.statusMsg = ""
+	_, cmd = v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	if cmd != nil {
+		t.Error("'t' on the root must not retry anything")
+	}
+	if v.statusMsg == "" {
+		t.Error("'t' on the root must explain itself in the flash line")
+	}
+}
+
 // 'n' opens the start modal with the workflow selected and the round cap
 // prefilled, and Enter hands the composed request to the service. This view
 // is repo mode, so the workflow select falls back to the repo path.

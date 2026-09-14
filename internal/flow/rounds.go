@@ -211,6 +211,16 @@ func (m *Manager) submitRound(snap *Flow, n int) (Flow, bool) {
 		if len(f.Rounds) != n-1 {
 			return false
 		}
+		// And the round before must still be settled. The count alone is
+		// blind to RetryStep reopening round n-1 in the same window (its
+		// applyRetry repoints the round, it does not append one): adopting
+		// this batch then would run round n's implementer beside the
+		// retried round's in one tree, and the reconciler would only ever
+		// read round n. applyRetry checks the count for the mirror-image
+		// ordering, so exactly one of the two lands.
+		if last := f.CurrentRound(); last != nil && !last.State.Terminal() {
+			return false
+		}
 		f.State = StateRunning
 		f.Error = ""
 		f.Rounds = append(f.Rounds, &Round{

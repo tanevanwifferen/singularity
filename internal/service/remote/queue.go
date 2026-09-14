@@ -58,7 +58,7 @@ func (s *remoteQueueService) CancelQueue(ctx context.Context, queueID string) er
 	return s.c.QueueCancelQueue(ctx, queueID)
 }
 
-// Retry puts a failed, cancelled or skipped task back in line.
+// Retry puts a failed, cancelled, skipped or done task back in line.
 func (s *remoteQueueService) Retry(ctx context.Context, taskID string) error {
 	return s.c.QueueRetry(ctx, taskID)
 }

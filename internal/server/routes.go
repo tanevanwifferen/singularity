@@ -199,6 +199,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/flow/tree", wrap(s.handleFlowTree))
 	mux.HandleFunc("/api/flow/cancel", wrap(s.handleFlowCancel))
 	mux.HandleFunc("/api/flow/remove", wrap(s.handleFlowRemove))
+	mux.HandleFunc("/api/flow/retry-step", wrap(s.handleFlowRetryStep))
 
 	// Jira.
 	mux.HandleFunc("/api/jira/search", wrap(s.handleJiraSearch))

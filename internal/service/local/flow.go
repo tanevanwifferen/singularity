@@ -127,6 +127,21 @@ func (s *localFlowService) Remove(ctx context.Context, flowID string) error {
 	return mapFlowErr(s.mgr.Remove(flowID))
 }
 
+// RetryStep re-runs one step of the flow's tree, including one already done.
+func (s *localFlowService) RetryStep(ctx context.Context, flowID, taskID string) (*service.Flow, error) {
+	if err := checkCtx(ctx); err != nil {
+		return nil, err
+	}
+	if s.mgr == nil {
+		return nil, service.ErrUnavailable
+	}
+	f, err := s.mgr.RetryStep(flowID, taskID)
+	if err != nil {
+		return nil, mapFlowErr(err)
+	}
+	return &f, nil
+}
+
 // fillAgentStates annotates every step node that names an agent with that
 // agent's engine state. An agent the engine has since forgotten leaves the
 // field empty rather than dropping the node's AgentID: the transcript may be
@@ -164,7 +179,7 @@ func mapFlowErr(err error) error {
 		return errFromSentinel{sentinel: service.ErrNotFound, original: err}
 	case errors.Is(err, flow.ErrInvalid):
 		return errFromSentinel{sentinel: service.ErrInvalidRequest, original: err}
-	case errors.Is(err, flow.ErrActive), errors.Is(err, flow.ErrNotContinuable):
+	case errors.Is(err, flow.ErrActive), errors.Is(err, flow.ErrNotContinuable), errors.Is(err, flow.ErrNotRetryable):
 		return errFromSentinel{sentinel: service.ErrConflict, original: err}
 	}
 	return wrapErr(err)

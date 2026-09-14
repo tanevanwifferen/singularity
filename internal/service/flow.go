@@ -90,4 +90,22 @@ type FlowService interface {
 	// is the only index of its tasks, so dropping it orphans them. Cancel
 	// first. Returns ErrNotFound for an unknown flowID.
 	Remove(ctx context.Context, flowID string) error
+
+	// RetryStep re-runs one step of the flow's tree, including one that
+	// already finished done: the work or review step of its current round,
+	// or the plan step before round 1 has been submitted. Unlike
+	// QueueService.Retry on the same task ID, this is read by the flow — the
+	// round is reopened, so the reconciler re-reviews a retried work step
+	// and re-reads a retried review's fresh verdict, and a terminal flow
+	// goes back to FlowRunning the way Continue leaves it.
+	//
+	// Returns ErrConflict for a step outside the current round, for a step
+	// (or any other task in the flow's queue, the commit task an accept
+	// fires included) that is not terminal yet — every
+	// round shares one WorkDir with worktree isolation off, so retrying
+	// while something else could still be running risks two agents editing
+	// it at once — and for the plan step once round 1 has started.
+	// ErrInvalidRequest for a taskID that names no step of this flow, and
+	// ErrNotFound for an unknown flowID.
+	RetryStep(ctx context.Context, flowID, taskID string) (*Flow, error)
 }

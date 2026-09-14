@@ -83,3 +83,18 @@ func (c *Client) FlowCancel(ctx context.Context, flowID string) error {
 func (c *Client) FlowRemove(ctx context.Context, flowID string) error {
 	return c.post(ctx, "/api/flow/remove", api.FlowIDRequest{FlowID: flowID}, nil)
 }
+
+// FlowRetryStep calls Flow.RetryStep: redoes one step of the flow's tree,
+// including one that already finished done, by reopening its round (or, for
+// the plan step, the flow itself). Refused with ErrConflict for a step
+// outside the current round or one that (or some other task the flow owns)
+// is not terminal yet, and with ErrInvalidRequest for a taskID that names no
+// step of this flow.
+func (c *Client) FlowRetryStep(ctx context.Context, flowID, taskID string) (*api.Flow, error) {
+	var resp api.FlowRetryStepResponse
+	req := api.FlowRetryStepRequest{FlowID: flowID, TaskID: taskID}
+	if err := c.post(ctx, "/api/flow/retry-step", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp.Flow, nil
+}

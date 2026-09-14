@@ -82,3 +82,20 @@ type FlowTreeResponse struct {
 type FlowIDRequest struct {
 	FlowID string `json:"flow_id"`
 }
+
+// FlowRetryStepRequest is the body for POST /api/flow/retry-step: the flow
+// and the task ID of the step to redo — the same task_id a tree node's
+// TreeNode.TaskID carries, so a client acts on exactly the step it is
+// showing without re-deriving which round or attempt it belongs to.
+type FlowRetryStepRequest struct {
+	FlowID string `json:"flow_id"`
+	TaskID string `json:"task_id"`
+}
+
+// FlowRetryStepResponse is the body for POST /api/flow/retry-step, wrapped
+// the way FlowContinueResponse is. The flow comes back as recorded: its
+// round reopened (or, for the plan step, PlanTaskID and Plan reset) and, if
+// it had finished, back to FlowRunning.
+type FlowRetryStepResponse struct {
+	Flow Flow `json:"flow"`
+}

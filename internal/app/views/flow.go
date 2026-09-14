@@ -435,7 +435,7 @@ func (v *FlowsView) CapturesKey(key string) bool {
 
 // ShortHelp returns the status-bar help line.
 func (v *FlowsView) ShortHelp() string {
-	return "n:start  C:continue  c:cancel  D:remove  a:agent  tab:pane  l/h:expand  f:findings  r:refresh  /:filter"
+	return "n:start  C:continue  c:cancel  D:remove  a:agent  t:retry step  tab:pane  l/h:expand  f:findings  r:refresh  /:filter"
 }
 
 // KeyBindings returns the view's bindings for the help overlay.
@@ -446,6 +446,7 @@ func (v *FlowsView) KeyBindings() []components.KeyBinding {
 		{Key: "c", Description: "Cancel the selected flow"},
 		{Key: "D", Description: "Remove the selected flow (cancels it first if still running, closing its agents)"},
 		{Key: "a", Description: "Open the selected step's agent"},
+		{Key: "t", Description: "Retry the selected step, even one that's already done"},
 		{Key: "r", Description: "Refresh flows"},
 		{Key: "Tab", Description: "Switch focus between list and tree"},
 		{Key: "j/k", Description: "Navigate"},

@@ -90,7 +90,12 @@ Verbs:
                                                        block until the queue drains
                                                        (exit 0 done, 1 failed/timeout)
   cancel    --id <task-id> | --queue <id>              stop one task, or a whole queue
-  retry     --id <task-id>                             requeue a failed/cancelled/skipped task
+  retry     --id <task-id>                             requeue a failed/cancelled/skipped/done task
+                                                       (a done task's dependents that already ran
+                                                       keep their stale results — this task's ID
+                                                       does not change, so nothing re-triggers them;
+                                                       for a flow step use "flow retry-step" instead,
+                                                       which reopens the round so the flow rereads it)
   answer    --id <task-id> --message <text>            inert: no task reaches that state in this build
   pause     --queue <id>                               stop dispatching new tasks
   resume    --queue <id>                               lift a pause
@@ -140,6 +145,19 @@ Verbs:
                                                    cancelled/timeout)
   cancel  --id <flow-id>                           stop the flow and its unfinished tasks
   remove  --id <flow-id>                           forget a terminal flow (refused while live)
+  retry-step --id <flow-id> --task <task-id>       redo a step of the current round, including
+                                                   one that already finished done (find its
+                                                   task ID with "flow tree --json"). Reopens the
+                                                   round so the flow rereads the fresh result —
+                                                   a retried work step gets re-reviewed, a
+                                                   retried review's new verdict gets read — and
+                                                   revives a terminal flow. Refused for a step
+                                                   outside the current round or one that (or any
+                                                   other task in the flow's queue, its commit
+                                                   task included) is not done, failed, cancelled
+                                                   or skipped yet: every round shares
+                                                   one working directory with worktree isolation
+                                                   off, so two live steps could edit it at once.
 
 Every verb accepts --json. Exit codes: 0 ok, 1 error, 2 usage error.
 `,

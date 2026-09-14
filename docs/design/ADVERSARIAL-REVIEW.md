@@ -496,9 +496,11 @@ N rounds is roughly 2N agents. The engine tracks `TotalCostUSD`
 per agent but nothing aggregates it; `--max-rounds` and `opts.timeout_secs` are
 the only bounds. Summing round costs into `flow show` is a cheap follow-up.
 
-*Operator interference through the queue.* `queue retry` on a flow's review task
-re-runs it and the flow parses whatever verdict lands. That is a feature — a
-manual re-review is legitimate — but it means `ReviewAttempt` is not the only
+*Operator interference through the queue.* [Revised by §13 — `Flow.RetryStep`
+is now the intended way to redo a step, including a `done` one; this paragraph
+describes the narrower case it grew out of.] `queue retry` on a flow's review
+task re-runs it and the flow parses whatever verdict lands. That is a feature —
+a manual re-review is legitimate — but it means `ReviewAttempt` is not the only
 thing that can produce a second verdict for a round. The reconciler always reads
 the file for the *current* attempt, so the retried task's output is what it sees.
 Relatedly, if a queue named `flow-f3` somehow already exists, `Manager.Add`
@@ -665,3 +667,104 @@ route, since planning rides `POST /api/flow/start` (row 126) like every other
 per-flow option. `PlanPrompt` (`internal/flow/prompt.go`), and a `plan` step
 node in `Flow.Tree`, parented directly under the flow root rather than under a
 round, since it runs before any round exists.
+
+## 13. Retrying a step — a third addition after the original design
+
+**Like §11 and §12, this was not part of the design above.** `queue retry`
+already existed for a task that failed, was cancelled outside the flow, or was
+skipped as another task's dependent — recovery from an accident, not a
+deliberate redo. An operator wanting to redo a step that *succeeded* — an
+implementer whose approach was wrong despite compiling, a reviewer whose
+verdict should not stand — had no move but to cancel the whole flow and start
+another one against the same work dir, discarding every earlier round's
+findings the way §11 already found `flow start --from` would.
+
+**Decision: `queue.Retry` accepts `done` too, but that alone is not the
+feature.** `internal/queue/mutate.go`'s `Retry` was widened to put a `done`
+task back in line the same way it already did a failed one. That is necessary
+but not sufficient for a flow step: `rounds.go` settles a round on the very
+pass that sees its review task `done`, and every one of `apply`'s guards then
+refuses a transition on that round — a `queue retry` on a flow's task
+requeues the agent, but nothing re-reads what it produces. A rerun reviewer's
+verdict lands at the same per-attempt path §3's `readRoundVerdict` already
+stopped reading; a rerun implementer's work is neither re-reviewed nor
+followed by a new round.
+
+`Manager.RetryStep(flowID, taskID)` (`internal/flow/retry.go`) is the
+operation that actually redoes a step. It resolves `taskID` to the work,
+review or plan step it names, submits **fresh** tasks for it — not a
+`queue.Retry` of the old ones, because a retried review must depend on the
+retried work finishing again, and `queue.Retry`'s own doc explains the
+dependency would not re-form: *"`refreshBlockedLocked` does not walk back
+down to a done dependent of the retried task"* — and reopens the round: state
+back to `running`, verdict cleared, fresh task IDs recorded. A terminal flow
+goes back to `running` the same way `Continue` leaves it. The reconciler then
+picks the retried step up exactly as it would a brand new round: a retried
+work step's fresh review is waited on and read; a retried review's fresh
+verdict is read from the same path the first one would have written, since
+the reviewer's own prompt truncates it (`cat > path`, the way every attempt's
+verdict file always has been written).
+
+**Eligibility.** Two refusals, both `ErrNotRetryable` → `CONFLICT` (`internal/
+flow/manager.go`), because the request names a real step and it is state that
+says no, the same distinction `ErrNotContinuable` draws:
+
+- **Only the flow's current round.** An earlier round's work or review is
+  refused by name, pointing at `Continue` instead. `FixPrompt` folds each
+  prior round's findings into every round after it by reference to what
+  actually happened; redoing an old round would rewrite a fact later rounds'
+  prompts and records already depend on. The plan step follows the same rule
+  in its own shape — refused once `len(Rounds) > 0`, since an implementer has
+  by then already read the plan being asked to change.
+- **Quiescence.** The named task, and *every other task in the flow's
+  queue*, must be terminal. Every round runs in the flow's one `WorkDir`
+  with worktree isolation forced off (`submitRound`), so a live task
+  anywhere else in the flow — the round's own other step, a later round's
+  fixer, or the commit task an accept fires — is exactly the hazard a
+  retried step must not be dispatched alongside: two agents editing one
+  working tree at once. The check reads the queue by `QueueID`
+  (`TaskQueue.List`) rather than walking `recordedTaskIDs`, because the
+  record is deliberately not the full set of agents in the tree: the commit
+  task (`submitCommitTask`) is fire-and-forget and never recorded, and
+  `RetryStep` is the one operation that acts on an accepted flow —
+  `Continue` refuses one — at the exact moment the TUI shows the round done
+  and the committer may still be running. `recordedTaskIDs` remains the
+  flow's authority to *cancel* (§4); the retry check only *refuses*, so
+  reading wider is safe. A queue the task manager no longer has cannot be
+  running anything, so it counts as quiescent rather than blocking the retry.
+
+Both checks race the reconciler honestly rather than assume the flow is
+quiescent just because its tasks read terminal a moment ago: `RetryStep`'s
+own apply step (`applyRetry`, `retry.go`) re-compares the *whole* round it
+snapshotted, not just task IDs the way `apply`'s own guard does, because the
+reconciler settling that same round between the liveness check and the write
+changes `State` and `Verdict`, not the task IDs. It also re-checks the round
+*count*: a settled rejection under a running flow (right after `Continue`,
+or below the cap) is a round the reconciler's `submitRound(N+1)` may already
+have in flight, and a by-value comparison of round N alone would let both
+writes land — round N reopened, round N+1 appended, two implementers in one
+tree and the retried round's tasks never read. `submitRound`'s guard
+requires the last round to be terminal for the mirror-image ordering, so
+exactly one of the two lands. A race loses the retry cleanly — the fresh
+tasks it had just submitted are cancelled as orphans, the same as any other
+transition that loses a race here — rather than clobbering a verdict that
+landed at the same instant. A queue that refuses the retry's batch is
+reported as that (the queue's own error), not as a race.
+
+**What `queue retry` on a flow's task still means.** Widening `queue.Retry`
+itself was deliberate, not just a stepping stone: an operator who wants the
+raw queue-level tool still has it, and `internal/queue/mutate.go`'s own doc
+now says so — a `done` task's dependents that already ran are not walked back
+and keep their stale results, because retrying is a task-queue primitive with
+no notion of the flow layered on top of it. `RetryStep` is the flow-aware
+version; nothing stops an operator from bypassing it with a direct `queue
+retry`, the same way `queue cancel` on a flow's task already bypasses
+`Flow.Cancel` (§4) — transparency, not leakage, the reasoning §1 gives for why
+a flow's tasks are visible to `queue list` at all.
+
+**Surfaces.** `POST /api/flow/retry-step` (`api.FlowRetryStepRequest` →
+`api.FlowRetryStepResponse`), `FlowService.RetryStep`, `Client.FlowRetryStep`,
+`singl flow retry-step --id <flow-id> --task <task-id>`, and `t` in the TUI's
+Flows view on a selected step node — no confirmation prompt, since
+`RetryStep`'s own refusals already rule out orphaning or racing a live agent,
+and it is itself undoable by retrying again.

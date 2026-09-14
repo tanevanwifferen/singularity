@@ -203,6 +203,60 @@ func TestHandleFlowContinueDefaultsRounds(t *testing.T) {
 	}
 }
 
+// TestHandleFlowRetryStepHappyPath checks flow_id and task_id both reach the
+// service and the retried flow comes back under the documented key, the same
+// shape TestHandleFlowContinueHappyPath checks for continue.
+func TestHandleFlowRetryStepHappyPath(t *testing.T) {
+	var gotFlowID, gotTaskID string
+	stub := fake.NewFlowStub()
+	stub.RetryStepFn = func(_ context.Context, flowID, taskID string) (*service.Flow, error) {
+		gotFlowID, gotTaskID = flowID, taskID
+		f := sampleFlow()
+		f.State = service.FlowRunning
+		return &f, nil
+	}
+	s := newFlowTestServer(stub)
+
+	rec := httptest.NewRecorder()
+	s.handleFlowRetryStep(rec, postJSON("/api/flow/retry-step", `{"flow_id":"f1","task_id":"t3"}`))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if gotFlowID != "f1" || gotTaskID != "t3" {
+		t.Errorf("service got (%q, %q), want (f1, t3)", gotFlowID, gotTaskID)
+	}
+	resp := decodeResp(t, rec)
+	if !resp.Success {
+		t.Fatalf("success = false, error %q", resp.Error)
+	}
+	data, _ := json.Marshal(resp.Data)
+	for _, want := range []string{`"flow":{`, `"id":"f1"`, `"state":"running"`} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("response missing %s: %s", want, data)
+		}
+	}
+}
+
+// TestHandleFlowRetryStepRequiresTaskID checks the handler's own guard, the
+// one thing the service cannot validate for it: a request with a flow_id but
+// no task_id names nothing to retry.
+func TestHandleFlowRetryStepRequiresTaskID(t *testing.T) {
+	stub := fake.NewFlowStub()
+	stub.RetryStepFn = func(context.Context, string, string) (*service.Flow, error) {
+		t.Fatal("service must not be called without a task_id")
+		return nil, nil
+	}
+	s := newFlowTestServer(stub)
+
+	rec := httptest.NewRecorder()
+	s.handleFlowRetryStep(rec, postJSON("/api/flow/retry-step", `{"flow_id":"f1"}`))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
 // TestHandleFlowListHappyPath checks the state filter reaches the service and
 // the flows come back under the documented key.
 func TestHandleFlowListHappyPath(t *testing.T) {

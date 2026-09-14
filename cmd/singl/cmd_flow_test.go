@@ -434,11 +434,12 @@ func TestFlowHelpCoversEveryVerb(t *testing.T) {
 	}
 	for _, want := range []string{
 		"  start", "  continue", "  list", "  show", "  tree", "  wait", "  cancel", "  remove",
+		"retry-step",
 		"--workdir", "--prompt", "--review-prompt", "--max-rounds", "--title",
 		"--model", "--effort", "--timeout", "--backend", "--context-file",
 		"--allowed-tools", "--reviewer-model", "--reviewer-effort",
 		"--smart-route", "--no-smart-route", "--id", "--state", "--interval",
-		"--rounds",
+		"--rounds", "--task",
 		"--json", // every non-streaming verb takes it
 	} {
 		if !strings.Contains(usage, want) {

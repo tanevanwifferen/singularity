@@ -134,6 +134,32 @@ func (s *Server) handleFlowRemove(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleFlowRetryStep handles POST /api/flow/retry-step.
+func (s *Server) handleFlowRetryStep(w http.ResponseWriter, r *http.Request) {
+	if !s.requireMethod(w, r, http.MethodPost) || !s.requireFlow(w) {
+		return
+	}
+	var req api.FlowRetryStepRequest
+	if err := s.parseJSON(r, &req); err != nil {
+		s.writeCoded(w, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+	if req.FlowID == "" {
+		s.writeCoded(w, api.ErrCodeBadRequest, "flow_id required")
+		return
+	}
+	if req.TaskID == "" {
+		s.writeCoded(w, api.ErrCodeBadRequest, "task_id required")
+		return
+	}
+	f, err := s.Services.Flow.RetryStep(r.Context(), req.FlowID, req.TaskID)
+	if err != nil {
+		s.writeServiceErr(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true, Data: api.FlowRetryStepResponse{Flow: *f}})
+}
+
 // withFlowID is the shared body of the per-flow mutations — withQueueID's
 // counterpart: decode a FlowIDRequest, require flow_id, run op, reply with a
 // bare success. Both of them differ only in the method they call.

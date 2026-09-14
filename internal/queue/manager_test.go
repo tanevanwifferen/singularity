@@ -962,6 +962,34 @@ func TestRetryReopensASkippedDependent(t *testing.T) {
 	}
 }
 
+func TestRetryRestartsADoneTask(t *testing.T) {
+	runner := newFakeRunner(4)
+	m := newTestManager(runner)
+	tasks := mustAdd(t, m, []TaskSpec{{Name: "a", Prompt: "p", WorkDir: "/w"}})
+	id := tasks[0].ID
+
+	m.tick()
+	runner.setTaskState(t, id, "complete", "")
+	m.tick()
+	if got := stateOf(t, m, id); got != StateDone {
+		t.Fatalf("a state = %s, want done", got)
+	}
+
+	if err := m.Retry(id); err != nil {
+		t.Fatalf("Retry on a done task: %v", err)
+	}
+	if got := stateOf(t, m, id); got != StateBlocked && got != StateReady {
+		t.Fatalf("a state after retry = %s, want blocked or ready", got)
+	}
+
+	m.tick()
+	runner.setTaskState(t, id, "complete", "")
+	m.tick()
+	if got := stateOf(t, m, id); got != StateDone {
+		t.Fatalf("a state after re-running = %s, want done", got)
+	}
+}
+
 func TestRetryRejectsRunningTask(t *testing.T) {
 	runner := newFakeRunner(4)
 	m := newTestManager(runner)

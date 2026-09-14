@@ -50,6 +50,13 @@ var (
 	// BAD_REQUEST because the request is well formed — "continue f3" is a
 	// perfectly good ask — and it is the flow's state that refuses it.
 	ErrNotContinuable = errors.New("flow cannot be continued")
+	// ErrNotRetryable means RetryStep was asked to redo a step it cannot:
+	// one outside the flow's current round, one whose task (or any other
+	// task in the flow's queue) is still live, or a plan step after round 1 has
+	// already been submitted. Maps to CONFLICT for the same reason
+	// ErrNotContinuable does — the request names a real step, and it is
+	// state that refuses it, not the request's shape.
+	ErrNotRetryable = errors.New("step cannot be retried")
 )
 
 // maxRounds is the upper bound on a flow's round cap, and defaultRounds the

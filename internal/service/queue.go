@@ -57,9 +57,11 @@ type QueueService interface {
 	// CancelQueue cancels every unfinished task in a queue.
 	CancelQueue(ctx context.Context, queueID string) error
 
-	// Retry puts a failed, cancelled or skipped task back in line with a
-	// fresh retry budget, and un-skips everything that was skipped because
-	// of it. Returns ErrConflict when the task is in any other state.
+	// Retry puts a failed, cancelled, skipped or done task back in line with
+	// a fresh retry budget, and un-skips everything that was skipped because
+	// of it. Retrying a done task is how an operator redoes a step whose
+	// result they don't want, flow steps included. Returns ErrConflict when
+	// the task is in any other state.
 	Retry(ctx context.Context, taskID string) error
 
 	// Answer delivers the operator's reply to a task whose agent stopped to

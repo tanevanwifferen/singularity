@@ -182,6 +182,14 @@ func TestFlowServiceErrorMapping(t *testing.T) {
 		{"cancel unknown flow", func() error { return s.Cancel(ctx, "f404") }, service.ErrNotFound, false},
 		{"remove unknown flow", func() error { return s.Remove(ctx, "f404") }, service.ErrNotFound, false},
 		{"remove live flow", func() error { return s.Remove(ctx, live.ID) }, service.ErrConflict, true},
+		{"retry-step of an unknown flow", func() error {
+			_, err := s.RetryStep(ctx, "f404", "t1")
+			return err
+		}, service.ErrNotFound, false},
+		{"retry-step of a task that names no step of the flow", func() error {
+			_, err := s.RetryStep(ctx, live.ID, "not-a-real-task")
+			return err
+		}, service.ErrInvalidRequest, true},
 		{"start with no goal", func() error {
 			_, err := s.Start(ctx, service.FlowStartRequest{WorkDir: dir})
 			return err

@@ -127,7 +127,7 @@ func (s *localQueueService) CancelQueue(ctx context.Context, queueID string) err
 	return mapQueueErr(s.mgr.CancelQueue(queueID))
 }
 
-// Retry puts a failed, cancelled or skipped task back in line.
+// Retry puts a failed, cancelled, skipped or done task back in line.
 func (s *localQueueService) Retry(ctx context.Context, taskID string) error {
 	if err := checkCtx(ctx); err != nil {
 		return err

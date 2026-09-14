@@ -37,6 +37,8 @@ func cmdFlow(ctx context.Context, verb string, args []string) int {
 		return runFlowCancel(ctx, args)
 	case "remove":
 		return runFlowRemove(ctx, args)
+	case "retry-step":
+		return runFlowRetryStep(ctx, args)
 	default:
 		return nounHelp("flow", verb)
 	}
@@ -366,6 +368,44 @@ func runFlowRemove(ctx context.Context, args []string) int {
 		return die(err)
 	}
 	return reportQueueAction("flow", id, "removed")
+}
+
+// runFlowRetryStep re-runs one step of the flow's tree, including one that
+// already finished done — unlike `queue retry` on the same task ID, this is
+// read by the flow: the step's round is reopened, so the reconciler
+// re-reviews a retried work step and re-reads a retried review's fresh
+// verdict, and a terminal flow goes back to running. Refused (ErrConflict)
+// for a step outside the flow's current round, or for a step — or any other
+// task the flow owns — that is not done/failed/cancelled/skipped yet: every
+// round shares one working directory with worktree isolation off, so
+// retrying while something else could still run risks two agents editing it
+// at once.
+func runFlowRetryStep(ctx context.Context, args []string) int {
+	fs := flag.NewFlagSet("flow-retry-step", flag.ContinueOnError)
+	id := fs.String("id", "", "flow ID (required)")
+	taskID := fs.String("task", "", "task ID of the step to retry, from `flow tree` (required)")
+	if code, done := parseArgs(fs, args); done {
+		return code
+	}
+	if *id == "" {
+		fmt.Fprintln(os.Stderr, "error: --id is required")
+		return 2
+	}
+	if *taskID == "" {
+		fmt.Fprintln(os.Stderr, "error: --task is required")
+		return 2
+	}
+
+	c, err := newClient()
+	if err != nil {
+		return die(err)
+	}
+	tctx, cancel := withTimeout(ctx)
+	defer cancel()
+	if _, err := c.FlowRetryStep(tctx, *id, *taskID); err != nil {
+		return die(err)
+	}
+	return reportQueueAction("flow", *id, "step "+*taskID+" requeued")
 }
 
 // flowIDArg parses the single --id flag the per-flow verbs share. An empty
