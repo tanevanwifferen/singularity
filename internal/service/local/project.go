@@ -3,6 +3,7 @@ package local
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -184,6 +185,83 @@ func (s *localProjectService) Refresh(ctx context.Context, handle service.Projec
 	}
 	p.Refresh()
 	return p.Status(), nil
+}
+
+// UpdateRepos rescans dir for git repos and reconciles the project's config
+// entry with what's found, then reloads the project and reconciles every
+// active workflow's worktrees with the current repo set. The workflow
+// reconciliation is unconditional so a sync that failed halfway (or a
+// hand-edited config) is brought in line by simply rerunning. See
+// service.ProjectService.UpdateRepos.
+func (s *localProjectService) UpdateRepos(ctx context.Context, handle service.ProjectHandle, dir string) (*service.ProjectRepoUpdate, error) {
+	if err := checkCtx(ctx); err != nil {
+		return nil, err
+	}
+	if _, err := s.resolve(handle); err != nil {
+		return nil, err
+	}
+	key, err := s.keyForHandle(handle)
+	if err != nil {
+		return nil, err
+	}
+
+	cfgPath := s.loader.Path()
+	if cfgPath == "" {
+		cfgPath = project.GetDefaultConfigPath()
+	}
+
+	sync, err := project.SyncProjectRepos(cfgPath, key, dir)
+	if err != nil {
+		return nil, wrapErr(err)
+	}
+
+	result := &service.ProjectRepoUpdate{
+		Handle:  handle,
+		Dir:     sync.Dir,
+		Added:   sync.Added,
+		Removed: sync.Removed,
+		Moved:   sync.Moved,
+	}
+
+	// Reload from the (possibly just-updated) config so the in-memory
+	// project reflects the new repo set, and re-register it under the
+	// handle — resolve()/ensure() would otherwise keep serving the stale
+	// cached *project.Project.
+	p, err := s.loader.LoadProject(key)
+	if err != nil {
+		return result, wrapErr(err)
+	}
+	s.mu.Lock()
+	s.handles[handle] = p
+	s.mu.Unlock()
+
+	persisted, err := project.LoadWorkflows(key, p)
+	if err != nil {
+		return result, wrapErr(fmt.Errorf("repos updated but loading workflows to sync failed: %w", err))
+	}
+	if len(persisted) == 0 {
+		return result, nil
+	}
+	stop := func(worktree string) error {
+		return service.TerminateAgentsWithin(ctx, s.agent, worktree)
+	}
+	for _, wf := range persisted {
+		if wf.SyncRepos(p, stop) {
+			result.Workflows = append(result.Workflows, wf.BranchName)
+		}
+		for _, wr := range wf.Repos {
+			if wr.Error != "" {
+				result.WorkflowErrors = append(result.WorkflowErrors, fmt.Sprintf("%s/%s: %s", wf.BranchName, wr.RepoName, wr.Error))
+			}
+		}
+	}
+	sort.Strings(result.WorkflowErrors)
+	// Always persist: a workflow that lost a repo, or gained a worktree,
+	// must be on disk before the next command reads it.
+	if err := project.SaveWorkflows(key, persisted); err != nil {
+		return result, wrapErr(fmt.Errorf("repos updated but saving synced workflows failed: %w", err))
+	}
+	return result, nil
 }
 
 // BranchExists checks which repos in the project carry the named branch.

@@ -19,6 +19,12 @@ type ProjectDef struct {
 	Name         string    `json:"name"`
 	Repos        []RepoDef `json:"repos"`
 	ContextFiles []string  `json:"context_files,omitempty"`
+	// Root is the directory the project's repos were discovered under
+	// (`singularity project init`, or the last explicit --dir passed to
+	// `singl project update`). It anchors later rescans so they never have
+	// to guess a scan directory from the repo paths. Optional: projects
+	// written by hand or by older versions leave it empty.
+	Root string `json:"root,omitempty"`
 }
 
 // RepoDef defines a single repo within a project

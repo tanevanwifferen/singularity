@@ -70,6 +70,38 @@ func TerminateWorkflowAgents(ctx context.Context, agents AgentService, wf *Featu
 	return errors.Join(errs...)
 }
 
+// TerminateAgentsWithin ends every agent whose WorkDir is dir or below it.
+// It is the per-directory counterpart of TerminateWorkflowAgents, used when
+// only one repo's worktree is being removed from a workflow: agents in the
+// workflow's other worktrees keep running. Same semantics otherwise: an
+// unavailable agent service means nothing to kill, vanished agents are
+// ignored, and any other failure is returned so the caller keeps the
+// directory.
+func TerminateAgentsWithin(ctx context.Context, agents AgentService, dir string) error {
+	if agents == nil || dir == "" {
+		return nil
+	}
+	snaps, err := agents.List(ctx)
+	if errors.Is(err, ErrUnavailable) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("list agents: %w", err)
+	}
+	var errs []error
+	for _, snap := range snaps {
+		if !pathWithin(snap.WorkDir, dir) {
+			continue
+		}
+		err := agents.Terminate(ctx, snap.ID)
+		if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrUnavailable) {
+			continue
+		}
+		errs = append(errs, fmt.Errorf("terminate agent %s: %w", snap.ID, err))
+	}
+	return errors.Join(errs...)
+}
+
 // pathWithin reports whether path is dir itself or lies underneath it.
 func pathWithin(path, dir string) bool {
 	if path == "" || dir == "" {

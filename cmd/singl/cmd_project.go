@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 )
@@ -21,6 +22,8 @@ func cmdProject(ctx context.Context, verb string, args []string) int {
 		return runProjectInfo(ctx, args)
 	case "refresh":
 		return runProjectRefresh(ctx, args)
+	case "update":
+		return runProjectUpdate(ctx, args)
 	case "branch-check":
 		return runProjectBranchCheck(ctx, args)
 	case "context":
@@ -164,6 +167,58 @@ func runProjectRefresh(ctx context.Context, args []string) int {
 		return printJSON(st)
 	}
 	md := fmt.Sprintf("## Project refreshed: %s\n\nRepos: %d\n", st.Name, st.RepoCount)
+	return renderMarkdown(md)
+}
+
+func runProjectUpdate(ctx context.Context, args []string) int {
+	fs := flag.NewFlagSet("project-update", flag.ContinueOnError)
+	project := fs.String("project", "", "project handle (see: singl project list)")
+	dir := fs.String("dir", "", "directory to rescan for repos (default: the project's stored root, or its root repo)")
+	if code, done := parseArgs(fs, args); done {
+		return code
+	}
+	handle := service.ProjectHandle(*project)
+	if handle == "" {
+		fmt.Fprintln(os.Stderr, "error: --project is required (use `singl project list` to see available handles)")
+		return 2
+	}
+	c, err := newClient()
+	if err != nil {
+		return die(err)
+	}
+	tctx, cancel := withTimeout(ctx)
+	defer cancel()
+	res, err := c.ProjectUpdateRepos(tctx, handle, *dir)
+	if err != nil {
+		return die(err)
+	}
+	if globals.json {
+		return printJSON(res)
+	}
+	var md string
+	if len(res.Added) == 0 && len(res.Removed) == 0 && len(res.Moved) == 0 {
+		md = fmt.Sprintf("## Project repos: no changes\n\n_Scanned `%s`; no repos added, removed or moved._\n", res.Dir)
+	} else {
+		md = fmt.Sprintf("## Project repos updated\n\n_Scanned `%s`._\n\n", res.Dir)
+		for _, name := range res.Added {
+			md += fmt.Sprintf("- + `%s`  \n", name)
+		}
+		for _, name := range res.Removed {
+			md += fmt.Sprintf("- - `%s`  \n", name)
+		}
+		for _, name := range res.Moved {
+			md += fmt.Sprintf("- ~ `%s` (moved)  \n", name)
+		}
+	}
+	if len(res.Workflows) > 0 {
+		md += fmt.Sprintf("\nWorktrees synced for workflow(s): %s  \n", strings.Join(res.Workflows, ", "))
+	}
+	if len(res.WorkflowErrors) > 0 {
+		md += "\n**Workflow sync problems** (fix and rerun `singl project update`):  \n"
+		for _, e := range res.WorkflowErrors {
+			md += fmt.Sprintf("- %s  \n", e)
+		}
+	}
 	return renderMarkdown(md)
 }
 

@@ -105,6 +105,24 @@ func (s *Server) handleProjectRefresh(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true, Data: st})
 }
 
+// handleProjectUpdate handles POST /api/project/update.
+func (s *Server) handleProjectUpdate(w http.ResponseWriter, r *http.Request) {
+	if !s.requireMethod(w, r, http.MethodPost) || !s.requireServices(w) {
+		return
+	}
+	var req api.ProjectUpdateRequest
+	if err := s.parseJSON(r, &req); err != nil {
+		s.writeCoded(w, api.ErrCodeBadRequest, "invalid request")
+		return
+	}
+	res, err := s.Services.Project.UpdateRepos(r.Context(), req.Handle, req.Dir)
+	if err != nil {
+		s.writeServiceErr(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, api.APIResponse{Success: true, Data: res})
+}
+
 // handleProjectBranchCheck handles POST /api/project/branch/check.
 func (s *Server) handleProjectBranchCheck(w http.ResponseWriter, r *http.Request) {
 	if !s.requireMethod(w, r, http.MethodPost) || !s.requireServices(w) {

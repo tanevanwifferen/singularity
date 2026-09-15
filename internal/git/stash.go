@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -251,6 +252,28 @@ func RemoveWorktree(repoPath, worktreePath string, force bool) error {
 		return fmt.Errorf("failed to remove worktree: %w", err)
 	}
 
+	return nil
+}
+
+// MainRepoOf returns the path of the main repository that worktreePath
+// belongs to, as git resolves it from the worktree's own .git link. Fails
+// when the link is broken (the main repo moved or was deleted).
+func MainRepoOf(worktreePath string) (string, error) {
+	cmd := exec.Command("git", "-C", worktreePath, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve main repo of worktree: %w", err)
+	}
+	return filepath.Dir(strings.TrimSpace(string(out))), nil
+}
+
+// RepairWorktree re-links worktreePath to the repo at repoPath after either
+// side moved on disk (`git worktree repair`). Harmless when nothing is broken.
+func RepairWorktree(repoPath, worktreePath string) error {
+	cmd := exec.Command("git", "-C", repoPath, "worktree", "repair", worktreePath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to repair worktree: %s", strings.TrimSpace(string(out)))
+	}
 	return nil
 }
 

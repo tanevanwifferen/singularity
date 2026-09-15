@@ -26,6 +26,19 @@ type ProjectService interface {
 	// Also fires a ProjectEvent on any active subscription.
 	Refresh(ctx context.Context, handle ProjectHandle) (*ProjectStatus, error)
 
+	// UpdateRepos rescans dir (or, if empty, the project's stored root
+	// directory) for git repositories and reconciles the result with the
+	// project's config: repos found that aren't recorded yet are added,
+	// recorded repos no longer found are removed, and repos that moved
+	// but kept their name have their path updated. The loaded project is
+	// reloaded, and every active workflow for it is then reconciled
+	// against the current repo set (new repos get a worktree created,
+	// removed repos have theirs torn down, agents inside those stopped
+	// first) and re-persisted. The reconciliation runs every call, not
+	// only when the config changed, so a failed or partial earlier sync
+	// is retried simply by running it again.
+	UpdateRepos(ctx context.Context, handle ProjectHandle, dir string) (*ProjectRepoUpdate, error)
+
 	// BranchExists checks which repos in the project carry the named branch.
 	BranchExists(ctx context.Context, handle ProjectHandle, branch string) (*BranchExistence, error)
 

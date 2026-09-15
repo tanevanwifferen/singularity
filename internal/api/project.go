@@ -22,6 +22,15 @@ type ProjectLoadRequest struct {
 	Key string `json:"key"`
 }
 
+// ProjectRepoUpdate = service.ProjectRepoUpdate.
+type ProjectRepoUpdate = service.ProjectRepoUpdate
+
+// ProjectUpdateRequest is the body for POST /api/project/update.
+type ProjectUpdateRequest struct {
+	Handle service.ProjectHandle `json:"project_handle"`
+	Dir    string                `json:"dir,omitempty"`
+}
+
 // ProjectBranchRequest is the body for POST /api/project/branch/check and
 // the legacy /api/project/branch/compare. Carries either a project key or a
 // handle (one of the two must be non-empty).

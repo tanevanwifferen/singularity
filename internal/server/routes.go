@@ -150,6 +150,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/project/info", wrap(s.handleProjectInfo))
 	mux.HandleFunc("/api/project/status", wrap(s.handleProjectStatus))
 	mux.HandleFunc("/api/project/refresh", wrap(s.handleProjectRefresh))
+	mux.HandleFunc("/api/project/update", wrap(s.handleProjectUpdate))
 	mux.HandleFunc("/api/project/branch/check", wrap(s.handleProjectBranchCheck))
 	mux.HandleFunc("/api/project/context", wrap(s.handleProjectContext))
 	mux.HandleFunc("/api/project/config_path", wrap(s.handleProjectConfigPath))

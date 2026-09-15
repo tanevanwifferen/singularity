@@ -212,6 +212,183 @@ func NewFeatureWorkflow(proj *Project, branchName, baseDir string) *FeatureWorkf
 	}
 }
 
+// SyncRepos reconciles fw's tracked repos with proj's current repo list so
+// the workflow's worktrees match the project after subrepos were added,
+// removed or moved. It is idempotent and meant to be re-run until clean:
+//
+//   - a repo in proj that fw doesn't track, or tracks without a working
+//     worktree (earlier create failed), gets a worktree created on fw's
+//     branch;
+//   - a repo fw tracks that is no longer in proj has its worktree removed
+//     and its local feature branch deleted, then is dropped from tracking.
+//     The remote branch is never touched, a worktree with uncommitted
+//     changes is never removed (the repo stays tracked with an Error
+//     explaining why), and a local branch that isn't fully merged is kept
+//     rather than force-deleted. If the original repo itself is gone from
+//     disk, git can no longer manage the worktree: the orphaned worktree
+//     directory is deleted directly and the entry dropped;
+//   - a repo in both whose path changed (moved on disk) has its
+//     OriginalPath updated and the worktree link repaired.
+//
+// stop, if non-nil, is called with a worktree path before that worktree is
+// removed so the caller can end agents working inside it; an error from it
+// keeps the repo tracked with that error and skips the removal.
+//
+// Per-repo failures are recorded on the affected WorkflowRepo's Error field
+// rather than aborting the sync. Returns whether anything changed (tracked
+// set, paths, worktrees, or errors), so callers know to persist fw.
+func (fw *FeatureWorkflow) SyncRepos(proj *Project, stop func(worktreePath string) error) (changed bool) {
+	proj.mu.RLock()
+	current := make(map[string]*Repo, len(proj.Repos))
+	for _, r := range proj.Repos {
+		current[r.Name] = r
+	}
+	proj.mu.RUnlock()
+
+	fw.mu.Lock()
+	sanitized := sanitizeBranchForPath(fw.BranchName)
+	var toCreate, toRemove, toRepair []*WorkflowRepo
+	for name, r := range current {
+		wr, ok := fw.Repos[name]
+		if !ok {
+			wr = &WorkflowRepo{
+				RepoName:      r.Name,
+				OriginalPath:  r.Path,
+				WorktreePath:  filepath.Join(fw.BaseDir, sanitized, r.Name),
+				DefaultBranch: r.DefaultBranch,
+			}
+			fw.Repos[name] = wr
+			changed = true
+		}
+		if wr.OriginalPath != r.Path {
+			wr.OriginalPath = r.Path
+			changed = true
+			if wr.WorktreeCreated {
+				toRepair = append(toRepair, wr)
+			}
+		}
+		if !wr.WorktreeCreated {
+			toCreate = append(toCreate, wr)
+		}
+	}
+	for name, wr := range fw.Repos {
+		if _, ok := current[name]; !ok {
+			toRemove = append(toRemove, wr)
+		}
+	}
+	fw.mu.Unlock()
+
+	setResult := func(wr *WorkflowRepo, errMsg string) {
+		fw.mu.Lock()
+		defer fw.mu.Unlock()
+		if wr.Error != errMsg {
+			wr.Error = errMsg
+			changed = true
+		}
+	}
+
+	forEachRepo(toRepair, func(wr *WorkflowRepo) {
+		if err := git.RepairWorktree(wr.OriginalPath, wr.WorktreePath); err != nil {
+			setResult(wr, fmt.Sprintf("repair worktree after repo moved: %v", err))
+		}
+	})
+
+	forEachRepo(toCreate, func(wr *WorkflowRepo) {
+		path, err := ensureWorktree(wr.OriginalPath, wr.WorktreePath, fw.BranchName, wr.DefaultBranch)
+		if err != nil {
+			setResult(wr, fmt.Sprintf("create worktree: %v", err))
+			return
+		}
+		fw.mu.Lock()
+		wr.WorktreePath = path
+		wr.WorktreeCreated = true
+		wr.Error = ""
+		changed = true
+		fw.mu.Unlock()
+	})
+
+	forEachRepo(toRemove, func(wr *WorkflowRepo) {
+		if err := fw.retireRepo(wr, stop); err != nil {
+			setResult(wr, err.Error())
+			return
+		}
+		fw.mu.Lock()
+		delete(fw.Repos, wr.RepoName)
+		changed = true
+		fw.mu.Unlock()
+	})
+
+	fw.SetProject(proj)
+	return changed
+}
+
+// retireRepo removes wr's worktree and local feature branch for a repo that
+// left the project. See SyncRepos for the safety rules. Returns an error
+// when the repo must stay tracked for a later retry.
+func (fw *FeatureWorkflow) retireRepo(wr *WorkflowRepo, stop func(string) error) error {
+	fw.mu.RLock()
+	created, worktree, original, branch := wr.WorktreeCreated, wr.WorktreePath, wr.OriginalPath, fw.BranchName
+	fw.mu.RUnlock()
+	if !created {
+		return nil
+	}
+
+	_, worktreeErr := os.Stat(worktree)
+	worktreeExists := worktreeErr == nil
+
+	if worktreeExists && stop != nil {
+		if err := stop(worktree); err != nil {
+			return fmt.Errorf("stop agents in worktree: %w", err)
+		}
+	}
+
+	// The repo that owns the worktree: git's own view wins over the
+	// recorded OriginalPath, so a repo that moved (and had its worktree
+	// repaired) is still handled through git rather than mistaken for gone.
+	repo := original
+	if !worktreeExists {
+		if definitelyGone(original) {
+			return nil // repo and worktree both gone: nothing left to clean
+		}
+		// Directory deleted by hand: drop git's stale bookkeeping so the
+		// branch below can be deleted.
+		_ = git.PruneWorktrees(original)
+	} else {
+		resolved, err := git.MainRepoOf(worktree)
+		switch {
+		case err == nil:
+			repo = resolved
+		case definitelyGone(original):
+			// The main repo is gone, so git can no longer manage (or even
+			// read) this worktree; its branch went with the repo. Delete
+			// the orphaned directory ourselves.
+			if err := os.RemoveAll(worktree); err != nil {
+				return fmt.Errorf("remove orphaned worktree (original repo %s is gone): %w", original, err)
+			}
+			return nil
+		default:
+			return fmt.Errorf("worktree %s is unreadable by git (run `git -C %s worktree repair %s`): %w", worktree, original, worktree, err)
+		}
+		dirty, err := git.IsDirty(worktree)
+		if err != nil {
+			return fmt.Errorf("check worktree for uncommitted changes: %w", err)
+		}
+		if dirty {
+			return fmt.Errorf("worktree %s has uncommitted changes; commit or stash them (or remove it with `singl workflows remove`) and rerun", worktree)
+		}
+		if err := git.RemoveWorktree(repo, worktree, false); err != nil {
+			return fmt.Errorf("remove worktree: %w", err)
+		}
+	}
+
+	// Non-forced: a branch with commits not merged into HEAD is left alone so
+	// nothing unpushed is lost. The remote branch is deliberately untouched.
+	if git.BranchExists(repo, branch) {
+		_ = git.DeleteBranch(repo, branch, false)
+	}
+	return nil
+}
+
 // ensureWorktree brings a single repo to the desired state: a worktree of
 // OriginalPath checked out on the workflow branch. It is idempotent — an
 // existing worktree for the branch is adopted (and its real path recorded)

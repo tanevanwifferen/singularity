@@ -273,6 +273,12 @@ Verbs:
   status        --project <handle>
   info          --project <handle>
   refresh       --project <handle>
+  update        --project <handle> [--dir <path>]   rescan for repos added/removed/moved on disk
+                                              (default --dir: the project's stored root) and
+                                              reconcile every workflow's worktrees to match;
+                                              safe to rerun. Agents in a removed worktree are
+                                              stopped first; dirty worktrees and remote
+                                              branches are never deleted.
   branch-check  --project <handle> --branch <name>
   context       --project <handle>
   workflows     list|create|remove|discover   alias for the "singl workflows" noun

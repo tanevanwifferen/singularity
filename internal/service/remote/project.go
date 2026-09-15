@@ -37,6 +37,11 @@ func (s *remoteProjectService) Refresh(ctx context.Context, handle service.Proje
 	return s.c.ProjectRefresh(ctx, handle)
 }
 
+// UpdateRepos rescans dir for git repos and reconciles the project's config.
+func (s *remoteProjectService) UpdateRepos(ctx context.Context, handle service.ProjectHandle, dir string) (*service.ProjectRepoUpdate, error) {
+	return s.c.ProjectUpdateRepos(ctx, handle, dir)
+}
+
 // BranchExists checks which repos in the project carry the named branch.
 func (s *remoteProjectService) BranchExists(ctx context.Context, handle service.ProjectHandle, branch string) (*service.BranchExistence, error) {
 	return s.c.ProjectBranchExists(ctx, handle, branch)

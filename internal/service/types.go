@@ -442,6 +442,22 @@ type ProjectInfo struct {
 	Context      string   `json:"context_summary,omitempty"`
 }
 
+// ProjectRepoUpdate is the result of ProjectService.UpdateRepos: which repos
+// were added to / removed from / moved within the project's config, and
+// which of its active workflows had their worktrees changed to match.
+// WorkflowErrors lists per-repo problems the sync could not resolve
+// (e.g. a worktree with uncommitted changes it refused to remove); rerun
+// after fixing them.
+type ProjectRepoUpdate struct {
+	Handle         ProjectHandle `json:"handle"`
+	Dir            string        `json:"dir"`
+	Added          []string      `json:"added,omitempty"`
+	Removed        []string      `json:"removed,omitempty"`
+	Moved          []string      `json:"moved,omitempty"`
+	Workflows      []string      `json:"workflows_synced,omitempty"`
+	WorkflowErrors []string      `json:"workflow_errors,omitempty"`
+}
+
 // RepoSummary is the per-repo slice of ProjectInfo — just what overview /
 // picker rendering needs without pulling the full RepoInfo over the wire.
 type RepoSummary struct {

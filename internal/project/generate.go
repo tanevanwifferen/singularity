@@ -43,6 +43,7 @@ func GenerateConfigFromDir(dir string) (*ProjectConfig, error) {
 			projectKey: {
 				Name:  projectName,
 				Repos: repos,
+				Root:  abs,
 			},
 		},
 	}
@@ -87,6 +88,212 @@ func InitProjectFromDir(dir, configPath string) (projectKey string, repoCount in
 		return "", 0, err
 	}
 	return projectKey, repoCount, nil
+}
+
+// RepoSyncResult reports what SyncProjectRepos changed in a project's
+// config, by repo name.
+type RepoSyncResult struct {
+	// Dir is the directory that was actually scanned.
+	Dir     string
+	Added   []string
+	Removed []string
+	// Moved lists repos whose folder moved under Dir but kept its name; the
+	// config entry's Path was updated in place.
+	Moved []string
+}
+
+// Changed reports whether the sync altered the repo set.
+func (r RepoSyncResult) Changed() bool {
+	return len(r.Added) > 0 || len(r.Removed) > 0 || len(r.Moved) > 0
+}
+
+// SyncProjectRepos rescans dir for git repositories and reconciles the
+// result with the repos already recorded for project key in the config at
+// configPath: repos newly found under dir are added, and previously
+// recorded repos that were under dir but are no longer found there are
+// removed (covers subrepos added or removed on disk since the project was
+// set up). A recorded repo that still exists on disk as a git repo is never
+// removed, even when the walk failed to reach it (unreadable parent), so a
+// transient scan miss cannot drop a repo. A repo whose folder moved under
+// dir but kept its name is treated as moved and has its Path updated rather
+// than being removed and re-added. Repos that are still found keep their
+// existing Name and DefaultBranch so manual edits survive, and repos
+// recorded outside dir are left untouched regardless of what the scan
+// finds.
+//
+// If dir is "", the project's stored Root is used. Without a stored Root the
+// scan directory is derived from the repo paths only when that is
+// unambiguous: the deepest common ancestor of all repo paths must itself be
+// one of the repos (a root repo with nested subrepos, or a single repo).
+// Anything else (sibling repos under a shared parent) would sweep in every
+// unrelated repo beside them, so an explicit dir is required instead. An
+// explicit dir is recorded as the project's Root when none is stored yet.
+func SyncProjectRepos(configPath, key, dir string) (RepoSyncResult, error) {
+	var res RepoSyncResult
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		return res, err
+	}
+	def, ok := cfg.Projects[key]
+	if !ok {
+		return res, fmt.Errorf("project %q not found in config %q", key, configPath)
+	}
+
+	if dir == "" {
+		dir, err = defaultRescanDir(key, def)
+		if err != nil {
+			return res, err
+		}
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return res, fmt.Errorf("cannot resolve directory: %w", err)
+	}
+	if info, statErr := os.Stat(abs); statErr != nil || !info.IsDir() {
+		return res, fmt.Errorf("%q is not a directory", abs)
+	}
+	res.Dir = abs
+
+	found, err := findGitRepos(abs)
+	if err != nil {
+		return res, fmt.Errorf("scan failed: %w", err)
+	}
+	foundByPath := make(map[string]RepoDef, len(found))
+	foundByName := make(map[string][]RepoDef)
+	for _, r := range found {
+		foundByPath[r.Path] = r
+		foundByName[r.Name] = append(foundByName[r.Name], r)
+	}
+
+	existingPaths := make(map[string]bool, len(def.Repos))
+	claimed := make(map[string]bool, len(def.Repos)) // found paths accounted for
+	for _, r := range def.Repos {
+		existingPaths[r.Path] = true
+	}
+
+	kept := make([]RepoDef, 0, len(def.Repos))
+	for _, r := range def.Repos {
+		switch {
+		case !isUnderDir(r.Path, abs):
+			// Outside the scanned tree: not our business.
+			kept = append(kept, r)
+		case foundByPath[r.Path].Path != "":
+			claimed[r.Path] = true
+			kept = append(kept, r)
+		case !definitelyGone(r.Path):
+			// Still there (or unknowable: unreadable parent, skipped by the
+			// walk with a warning). Never treat a scan miss as removal.
+			kept = append(kept, r)
+		default:
+			// Gone from its recorded path. Same folder name found elsewhere
+			// under dir, and not already a configured repo? It moved.
+			moved := false
+			for _, cand := range foundByName[r.Name] {
+				if existingPaths[cand.Path] || claimed[cand.Path] {
+					continue
+				}
+				claimed[cand.Path] = true
+				r.Path = cand.Path
+				kept = append(kept, r)
+				res.Moved = append(res.Moved, r.Name)
+				moved = true
+				break
+			}
+			if !moved {
+				res.Removed = append(res.Removed, r.Name)
+			}
+		}
+	}
+	for _, r := range found {
+		if existingPaths[r.Path] || claimed[r.Path] {
+			continue
+		}
+		kept = append(kept, r)
+		res.Added = append(res.Added, r.Name)
+	}
+
+	dirty := res.Changed()
+	if def.Root == "" {
+		def.Root = abs
+		dirty = true
+	}
+	if !dirty {
+		return res, nil
+	}
+
+	def.Repos = kept
+	cfg.Projects[key] = def
+	if err := cfg.Validate(); err != nil {
+		return res, err
+	}
+	if err := SaveConfig(configPath, cfg); err != nil {
+		return res, err
+	}
+	return res, nil
+}
+
+// defaultRescanDir picks the directory to rescan for a project when the
+// caller didn't name one. See SyncProjectRepos for the rules.
+func defaultRescanDir(key string, def ProjectDef) (string, error) {
+	if def.Root != "" {
+		return def.Root, nil
+	}
+	if len(def.Repos) == 0 {
+		return "", fmt.Errorf("project %q has no repos to derive a rescan directory from; pass --dir", key)
+	}
+	ancestor := filepath.Clean(def.Repos[0].Path)
+	for _, r := range def.Repos[1:] {
+		ancestor = commonPrefixDir(ancestor, r.Path)
+	}
+	for _, r := range def.Repos {
+		if filepath.Clean(r.Path) == ancestor {
+			return ancestor, nil
+		}
+	}
+	return "", fmt.Errorf("project %q has no stored root and its repos share no root repo (common parent %q would pull in unrelated repos); pass --dir", key, ancestor)
+}
+
+// isGitRepo reports whether path has a .git entry (dir or worktree file).
+func isGitRepo(path string) bool {
+	_, err := os.Stat(filepath.Join(path, ".git"))
+	return err == nil
+}
+
+// definitelyGone reports whether path is known not to be a git repo any
+// more: its .git entry does not exist. A stat that fails for any other
+// reason (permissions, I/O) is inconclusive and reported as not gone, so a
+// rescan errs on the side of keeping a configured repo.
+func definitelyGone(path string) bool {
+	_, err := os.Stat(filepath.Join(path, ".git"))
+	return err != nil && os.IsNotExist(err)
+}
+
+// isUnderDir reports whether path is dir itself or lies within it.
+func isUnderDir(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+// commonPrefixDir returns the deepest directory common to a and b.
+func commonPrefixDir(a, b string) string {
+	sep := string(filepath.Separator)
+	aParts := strings.Split(filepath.Clean(a), sep)
+	bParts := strings.Split(filepath.Clean(b), sep)
+	n := len(aParts)
+	if len(bParts) < n {
+		n = len(bParts)
+	}
+	i := 0
+	for i < n && aParts[i] == bParts[i] {
+		i++
+	}
+	if i <= 1 {
+		return sep
+	}
+	return strings.Join(aParts[:i], sep)
 }
 
 // findGitRepos walks root and collects RepoDefs for every directory that

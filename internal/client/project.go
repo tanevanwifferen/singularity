@@ -53,6 +53,16 @@ func (c *Client) ProjectRefresh(ctx context.Context, handle service.ProjectHandl
 	return &st, nil
 }
 
+// ProjectUpdateRepos calls Project.UpdateRepos.
+func (c *Client) ProjectUpdateRepos(ctx context.Context, handle service.ProjectHandle, dir string) (*api.ProjectRepoUpdate, error) {
+	var res api.ProjectRepoUpdate
+	req := api.ProjectUpdateRequest{Handle: handle, Dir: dir}
+	if err := c.post(ctx, "/api/project/update", req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
 // ProjectBranchExists calls Project.BranchExists.
 func (c *Client) ProjectBranchExists(ctx context.Context, handle service.ProjectHandle, branch string) (*api.BranchExistence, error) {
 	var ex api.BranchExistence

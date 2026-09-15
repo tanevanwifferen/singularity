@@ -287,6 +287,9 @@ func (projectStub) Status(context.Context, service.ProjectHandle) (*service.Proj
 func (projectStub) Refresh(context.Context, service.ProjectHandle) (*service.ProjectStatus, error) {
 	return nil, unavail()
 }
+func (projectStub) UpdateRepos(context.Context, service.ProjectHandle, string) (*service.ProjectRepoUpdate, error) {
+	return nil, unavail()
+}
 func (projectStub) BranchExists(context.Context, service.ProjectHandle, string) (*service.BranchExistence, error) {
 	return nil, unavail()
 }

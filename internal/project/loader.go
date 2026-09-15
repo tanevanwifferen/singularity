@@ -190,6 +190,14 @@ func (l *Loader) RefreshProject(key string) error {
 	return nil
 }
 
+// Path returns the config file this loader was built from, or "" when it
+// was built from an in-memory config (NewLoader instead of NewLoaderFromFile).
+func (l *Loader) Path() string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.path
+}
+
 // Config returns the underlying config
 func (l *Loader) Config() *ProjectConfig {
 	l.mu.RLock()
