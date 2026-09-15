@@ -74,6 +74,9 @@ type ProjectView struct {
 	// Checkout all main branches state (A): checkout default branch in every repo
 	checkoutAllMainResult string
 
+	// Update repos state (u): rescan disk for added/removed/moved repos
+	updateReposResult string
+
 	// Shared confirmation dialog, reused for MR creation, reset-all, detach-all,
 	// sync-to-worktrees and checkout-all-main (only one can be open at a time).
 	confirm components.ConfirmPrompt
@@ -357,6 +360,9 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if v.checkoutAllMainResult != "" {
 			v.checkoutAllMainResult = ""
+		}
+		if v.updateReposResult != "" {
+			v.updateReposResult = ""
 		}
 
 		// Handle new branch creation mode
@@ -664,6 +670,30 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.showBranchCheck = true
 			v.branchCheckName = ""
 			v.branchExistence = nil
+		case "u":
+			// Rescan disk for repos added/removed/moved since the project
+			// was last loaded, and reconcile the project's repo list.
+			if v.proj != nil {
+				added, removed, moved, err := v.proj.RescanRepos(v.projectPath)
+				if err != nil {
+					v.updateReposResult = fmt.Sprintf("✗ update repos: %v", err)
+				} else if len(added) == 0 && len(removed) == 0 && len(moved) == 0 {
+					v.updateReposResult = "✓ no changes — repos on disk match the project"
+				} else {
+					var lines []string
+					for _, name := range added {
+						lines = append(lines, fmt.Sprintf("✓ + %s (added)", name))
+					}
+					for _, name := range removed {
+						lines = append(lines, fmt.Sprintf("✗ - %s (removed)", name))
+					}
+					for _, name := range moved {
+						lines = append(lines, fmt.Sprintf("✓ ~ %s (moved)", name))
+					}
+					v.updateReposResult = strings.Join(lines, "\n")
+				}
+				v.loadData()
+			}
 		case "/":
 			if v.filter != nil {
 				v.filter.Update(msg)
@@ -836,6 +866,10 @@ func (v *ProjectView) View() string {
 		s.WriteString(renderResultLines(v.checkoutAllMainResult))
 		s.WriteString("\n")
 	}
+	if v.updateReposResult != "" {
+		s.WriteString(renderResultLines(v.updateReposResult))
+		s.WriteString("\n")
+	}
 
 	// Repos header
 	s.WriteString(th.StatsStyle.Render(" Repositories "))
@@ -884,7 +918,7 @@ func (v *ProjectView) renderFooterHelp() string {
 		return th.Help.Render("Enter: Confirm  Esc: Cancel")
 	}
 
-	return th.Help.Render(" ↑↓ Navigate  Enter Expand  o Open  c Checkout  C Checkout by name  M Checkout main (all)  n Branch  m MR  b Check  / Filter  r Refresh  X Reset All  D Detach All  W Sync Main→Worktrees")
+	return th.Help.Render(" ↑↓ Navigate  Enter Expand  o Open  c Checkout  C Checkout by name  M Checkout main (all)  n Branch  m MR  b Check  / Filter  r Refresh  u Update repos  X Reset All  D Detach All  W Sync Main→Worktrees")
 }
 
 // ShortHelp returns a contextual short help string.
@@ -892,7 +926,7 @@ func (v *ProjectView) ShortHelp() string {
 	if v.CapturesInput() {
 		return "Enter: Confirm  Esc: Cancel"
 	}
-	return "↑↓ Navigate  Enter Expand  o Open  c Checkout  C Checkout by name  M Checkout main (all)  n Branch  m MR  b Check  / Filter  r Refresh  X Reset All  D Detach All  W Sync Main→Worktrees"
+	return "↑↓ Navigate  Enter Expand  o Open  c Checkout  C Checkout by name  M Checkout main (all)  n Branch  m MR  b Check  / Filter  r Refresh  u Update repos  X Reset All  D Detach All  W Sync Main→Worktrees"
 }
 
 // CapturesInput returns true when the view is in an input mode.
@@ -903,7 +937,7 @@ func (v *ProjectView) CapturesInput() bool {
 // CapturesKey returns true for keys this view handles directly.
 func (v *ProjectView) CapturesKey(key string) bool {
 	switch key {
-	case "r", "o", "b", "c", "C", "n", "m", "M", "X", "D", "W", "enter", "/", "j", "k", "up", "down":
+	case "r", "u", "o", "b", "c", "C", "n", "m", "M", "X", "D", "W", "enter", "/", "j", "k", "up", "down":
 		return true
 	}
 	return false
@@ -952,6 +986,7 @@ func (v *ProjectView) KeyBindings() []components.KeyBinding {
 		{Key: "b", Description: "Check if branch exists in all repos"},
 		{Key: "/", Description: "Filter"},
 		{Key: "r", Description: "Refresh all repos"},
+		{Key: "u", Description: "Update repos: rescan disk for added/removed/moved repos"},
 		{Key: "X", Description: "Reset ALL repos to main (destructive)"},
 		{Key: "D", Description: "Checkout all worktrees of all repos as detached HEAD"},
 		{Key: "W", Description: "Sync main dir to worktree HEADs (detached)"},
