@@ -284,7 +284,10 @@ type MRResult struct {
 // (gh, glab or tea). It generates an intelligent title and description via
 // Claude before calling the CLI.
 func CreateMergeRequestCLI(repoPath string, provider RemoteProvider, baseBranch string) (*MRResult, error) {
-	content, err := GenerateMRContent(repoPath, baseBranch)
+	// "" means "whatever is currently checked out in repoPath" — correct here
+	// since this creates the MR/PR from the branch the caller already has
+	// checked out via the forge CLI (gh/glab/tea infer the source the same way).
+	content, err := GenerateMRContent(repoPath, "", baseBranch)
 	if err != nil || content == nil {
 		content = &MRContent{Title: "Merge feature branch", Description: ""}
 	}

@@ -2,6 +2,8 @@ package git
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -243,12 +245,24 @@ type MRContent struct {
 }
 
 // GenerateMRContent generates an intelligent MR title and description.
-// It collects the commit log and diff stat between baseBranch and HEAD, then
-// asks the configured coding-agent CLI for a concise title and a structured
-// description. Falls back to branch-name-based defaults if it is unavailable.
-func GenerateMRContent(repoPath, baseBranch string) (*MRContent, error) {
+// It collects the commit log and diff stat between baseBranch and
+// sourceBranch, then asks the configured coding-agent CLI for a concise
+// title and a structured description. Falls back to branch-name-based
+// defaults if it is unavailable.
+//
+// sourceBranch may be "" to mean "whatever is currently checked out"
+// (resolved as "HEAD"), which is what callers use when they are about to
+// create an MR/PR from the branch they already have checked out. Callers
+// that let a user pick a source branch that isn't necessarily checked out
+// (e.g. the PR TUI) must pass that branch name explicitly so the diff
+// describes the right branch instead of silently describing HEAD.
+func GenerateMRContent(repoPath, sourceBranch, baseBranch string) (*MRContent, error) {
 	if baseBranch == "" {
 		baseBranch = "main"
+	}
+	sourceRef := sourceBranch
+	if sourceRef == "" {
+		sourceRef = "HEAD"
 	}
 
 	// Fetch origin to ensure we compare against the latest remote state
@@ -257,14 +271,14 @@ func GenerateMRContent(repoPath, baseBranch string) (*MRContent, error) {
 	// Use origin/branch to compare against the remote, not a potentially stale local ref
 	originBase := fmt.Sprintf("origin/%s", baseBranch)
 
-	// Collect commit log: commits on HEAD not yet on the base branch
+	// Collect commit log: commits on sourceRef not yet on the base branch
 	logCmd := exec.Command("git", "-C", repoPath, "log",
 		"--oneline", "--no-decorate",
-		fmt.Sprintf("%s..HEAD", originBase))
+		fmt.Sprintf("%s..%s", originBase, sourceRef))
 	logOut, err := logCmd.Output()
 	if err != nil || strings.TrimSpace(string(logOut)) == "" {
 		// Nothing to describe
-		return fallbackMRContent(repoPath, baseBranch), nil
+		return fallbackMRContent(repoPath, sourceBranch, baseBranch), nil
 	}
 	commits := strings.TrimSpace(string(logOut))
 
@@ -272,9 +286,23 @@ func GenerateMRContent(repoPath, baseBranch string) (*MRContent, error) {
 	// not the tip of the base branch. This avoids showing unrelated changes on
 	// the base branch as removals, keeping the scope accurate.
 	statCmd := exec.Command("git", "-C", repoPath, "diff", "--stat",
-		fmt.Sprintf("%s...HEAD", originBase))
+		fmt.Sprintf("%s...%s", originBase, sourceRef))
 	statOut, _ := statCmd.Output()
 	stat := strings.TrimSpace(string(statOut))
+
+	// GenerateMRTitle and GenerateMRDescription both land here for the same
+	// branch comparison, back-to-back. Cache by the commit log + diff stat
+	// (the actual inputs to the LLM prompt) so the second call reuses the
+	// first call's oneshot answer instead of issuing a second LLM request
+	// with its own, potentially divergent, title/description pair.
+	cache := GetGlobalCache()
+	key := mrContentCacheKey(repoPath, baseBranch, commits, stat)
+	if cached, ok := cache.Get(key); ok {
+		if content, ok := cached.(*MRContent); ok && content != nil {
+			log.Printf("[mr] cache hit for content hash: %s", key)
+			return content, nil
+		}
+	}
 
 	prompt := fmt.Sprintf(`You are writing a merge request for a software project.
 
@@ -296,9 +324,20 @@ Rules:
 
 	content := callAgentForMR(repoPath, prompt)
 	if content != nil {
+		cache.Set(key, content)
 		return content, nil
 	}
-	return fallbackMRContent(repoPath, baseBranch), nil
+	fallback := fallbackMRContent(repoPath, sourceBranch, baseBranch)
+	cache.Set(key, fallback)
+	return fallback, nil
+}
+
+// mrContentCacheKey generates a cache key from the repo, base branch, and the
+// commit log + diff stat that feed the prompt (not the LLM answer, which is
+// what we're trying to avoid recomputing).
+func mrContentCacheKey(repoPath, baseBranch, commits, stat string) string {
+	hash := sha256.Sum256([]byte(commits + "\x00" + stat))
+	return cacheKey("mrcontent", repoPath, baseBranch, hex.EncodeToString(hash[:16]))
 }
 
 // callAgentForMR runs a one-shot prompt on the configured backend and parses
@@ -332,10 +371,16 @@ func callAgentForMR(repoPath, prompt string) *MRContent {
 }
 
 // fallbackMRContent generates a basic title/description from the branch name.
-func fallbackMRContent(repoPath, baseBranch string) *MRContent {
-	branchCmd := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD")
-	branchOut, _ := branchCmd.Output()
-	branch := strings.TrimSpace(string(branchOut))
+// It uses sourceBranch when given (the branch the caller actually asked
+// about); only when sourceBranch is "" does it fall back to inspecting
+// repoPath's checked-out HEAD.
+func fallbackMRContent(repoPath, sourceBranch, baseBranch string) *MRContent {
+	branch := sourceBranch
+	if branch == "" {
+		branchCmd := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+		branchOut, _ := branchCmd.Output()
+		branch = strings.TrimSpace(string(branchOut))
+	}
 	if branch == "" || branch == "HEAD" {
 		branch = "feature"
 	}
@@ -347,76 +392,32 @@ func fallbackMRContent(repoPath, baseBranch string) *MRContent {
 	}
 }
 
-// GenerateMRTitle generates a title for a merge request from commits
+// GenerateMRTitle generates a title for a merge request via the same
+// oneshot-backed generator as GenerateMRContent, so the title and the
+// description are always drawn from one real (or one fallback) source
+// instead of a separate, dead code path. GenerateMRContent caches by commit
+// log + diff stat, so calling this back-to-back with GenerateMRDescription
+// (as callers typically do) issues only one oneshot LLM call, and both
+// values come from the same generated MRContent. sourceBranch is passed
+// through to GenerateMRContent so the diff describes the branch the caller
+// actually asked about, not whatever happens to be checked out in repoPath.
 func GenerateMRTitle(repoPath, sourceBranch, targetBranch string) (string, error) {
-	commits, err := GetCommitsBetween(repoPath, targetBranch, sourceBranch)
+	content, err := GenerateMRContent(repoPath, sourceBranch, targetBranch)
 	if err != nil {
 		return "", err
 	}
-
-	if len(commits) == 0 {
-		return fmt.Sprintf("Merge %s into %s", sourceBranch, targetBranch), nil
-	}
-
-	// Use the first commit message as the title
-	firstCommit := commits[0]
-	title := firstCommit.Subject
-
-	// Add count if multiple commits
-	if len(commits) > 1 {
-		title = fmt.Sprintf("%s (+%d more)", title, len(commits)-1)
-	}
-
-	return title, nil
+	return content.Title, nil
 }
 
-// GenerateMRDescription generates a description for a merge request
+// GenerateMRDescription generates a description for a merge request via the
+// same oneshot-backed generator as GenerateMRTitle. See GenerateMRTitle for
+// how sourceBranch is used.
 func GenerateMRDescription(repoPath, sourceBranch, targetBranch string) (string, error) {
-	commits, err := GetCommitsBetween(repoPath, targetBranch, sourceBranch)
+	content, err := GenerateMRContent(repoPath, sourceBranch, targetBranch)
 	if err != nil {
 		return "", err
 	}
-
-	if len(commits) == 0 {
-		return "", nil
-	}
-
-	var desc strings.Builder
-	desc.WriteString("## Summary\n\n")
-
-	for _, commit := range commits {
-		desc.WriteString(fmt.Sprintf("- %s (%s)\n", commit.Subject, commit.SHA[:7]))
-	}
-
-	// Add diff stats
-	diff, err := GetBranchDiff(repoPath, targetBranch, sourceBranch)
-	if err == nil {
-		desc.WriteString("\n## Changes\n\n")
-		desc.WriteString(fmt.Sprintf("- %d files changed\n", diff.FilesChanged))
-		desc.WriteString(fmt.Sprintf("- %d additions, %d deletions\n", diff.TotalAdditions, diff.TotalDeletions))
-	}
-
-	return desc.String(), nil
-}
-
-// GetCommitsBetween returns commits between two branches
-func GetCommitsBetween(repoPath, fromBranch, toBranch string) ([]CommitInfo, error) {
-	// Simple implementation using git log
-	// In production, use git API for better formatting
-	_ = fromBranch // suppress unused warning
-	_ = toBranch
-	_ = repoPath
-
-	// Placeholder - would use git CLI
-	return []CommitInfo{}, nil
-}
-
-// CommitInfo holds commit information
-type CommitInfo struct {
-	SHA     string
-	Subject string
-	Author  string
-	Date    string
+	return content.Description, nil
 }
 
 // noForgeAuthError builds an actionable "no auth" error: which sources were
