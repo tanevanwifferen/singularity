@@ -675,9 +675,20 @@ func (fw *FeatureWorkflow) PushAll(force bool) error {
 	return nil
 }
 
+// MRCreateFunc creates one merge request for the branch checked out in repoPath.
+type MRCreateFunc func(repoPath string, provider git.RemoteProvider, baseBranch string) (*git.MRResult, error)
+
 // CreateAllMRs creates merge requests sequentially (to respect API rate limits).
 // It detects the remote provider per repo and calls the appropriate CLI.
-func (fw *FeatureWorkflow) CreateAllMRs() error {
+//
+// create performs the actual MR creation. The TUI passes the daemon-backed
+// MRService.CreateCLI here: title/description generation needs the one-shot
+// backend, which only the daemon process installs. nil runs it in-process.
+func (fw *FeatureWorkflow) CreateAllMRs(create MRCreateFunc) error {
+	if create == nil {
+		create = git.CreateMergeRequestCLI
+	}
+
 	fw.mu.Lock()
 	fw.State = WorkflowCreatingMRs
 	fw.mu.Unlock()
@@ -694,7 +705,7 @@ func (fw *FeatureWorkflow) CreateAllMRs() error {
 		}
 
 		base := resolveDefaultBranch(wr)
-		result, err := git.CreateMergeRequestCLI(wr.WorktreePath, provider, base)
+		result, err := create(wr.WorktreePath, provider, base)
 
 		fw.mu.Lock()
 		if err != nil {

@@ -1114,8 +1114,17 @@ func (v *WorkflowsView) handleStartBatchMR() {
 				if wf == nil {
 					return nil
 				}
+				// Route through the daemon: MR title/description generation
+				// needs the one-shot backend, which this process never installs.
+				var create func(string, service.RemoteProvider, string) (*service.MRResult, error)
+				if v.services != nil && v.services.MR != nil {
+					mr, ctx := v.services.MR, v.ctx()
+					create = func(repoPath string, provider service.RemoteProvider, baseBranch string) (*service.MRResult, error) {
+						return mr.CreateCLI(ctx, repoPath, provider, baseBranch)
+					}
+				}
 				return func() tea.Msg {
-					wf.CreateAllMRs()
+					wf.CreateAllMRs(create)
 					return mrDoneMsg{}
 				}
 			})
