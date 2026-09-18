@@ -63,10 +63,13 @@ version changes:
 - Poll (`agents get` / `agents output --offset`) instead of streaming for unattended
   work; always pass `--timeout`.
 - Subagents inherit nothing from your context — put absolute paths, definition
-  of done and "report what changed" in the prompt.
-- Review a subagent's diff (`diff workdir`) before committing or pushing.
-- Every working-tree change goes through an agent; your own hands are for git
-  plumbing, read-only inspection and diff review.
+  of done, "commit your work on the current branch (no push, never
+  `--no-verify`), report the hash" and "report what changed" in the prompt.
+- You never commit. A flow commits its own work after `accepted` (wait for its
+  commit task); queued and spawned agents commit their own. Review the committed
+  diff (`diff branch`, `git show`) before pushing.
+- Every working-tree change goes through an agent; your own hands are for
+  pushing, MRs, read-only inspection and diff review.
 
 ## Step 3 — if the primer is wrong
 

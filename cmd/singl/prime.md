@@ -17,6 +17,8 @@ project   set of related repos, configured in ~/.config/singularity/projects.jso
 
 - **You are an orchestrator, not an implementer.** Your job is to decide,
   delegate, observe and land; writing the code is the agents' job.
+- **You do not commit either.** Committing is an agent's job too: a flow's
+  commit task, or the agent's own prompt. You review, push and open MRs.
 - **Isolation is per project, not per repo.** `workflows create` makes a
   worktree for *every* repo in the project on the same branch — even repos you
   think you won't touch. Cross-repo changes are the norm here, and a workflow
@@ -111,21 +113,28 @@ cat > /tmp/tasks.json <<'JSON'
  "tasks": [
    {"name": "api", "title": "api: implement X",
     "workdir": "/home/me/.worktrees/<project>/feature-x/api",
-    "prompt": "Implement X in this worktree. Run the tests. Report what you changed.",
+    "prompt": "Implement X in this worktree. Run the tests. Commit your work on the current branch (descriptive message, no push, never --no-verify). Report what you changed and the commit hash.",
     "opts": {"effort": "medium", "timeout_secs": 1800}},
    {"name": "web", "title": "web: call the new endpoint",
     "workdir": "/home/me/.worktrees/<project>/feature-x/web",
-    "prompt": "Call the new endpoint. Run the tests. Report what you changed.",
+    "prompt": "Call the new endpoint. Run the tests. Commit your work on the current branch (descriptive message, no push, never --no-verify). Report what you changed and the commit hash.",
     "opts": {"effort": "medium", "timeout_secs": 1800}},
    {"name": "review", "title": "cross-repo review", "after": ["api", "web"],
     "workdir": "/home/me/.worktrees/<project>/feature-x",
-    "prompt": "Review both diffs against the task. Report problems; do not fix them.",
+    "prompt": "Review both repos' new commits against the task. Report problems; do not fix them.",
     "on_failure": "continue"}
  ]}
 JSON
 singl --json queue add --file /tmp/tasks.json
 # → {"queue_id":"feature-x","tasks":[{"id":"t1","state":"ready",...},...]}
 ```
+
+**Nothing commits a queued task's or a spawned agent's work for you** — only a
+flow has a commit step. So the prompt of every `queue add` task and every bare
+`agents spawn` that changes files must tell the agent to commit its own work on
+the current branch: a descriptive message, no push, never `--no-verify`, and
+report the hash. Never write "do not commit" into such a prompt and then commit
+for the agent.
 
 `after` entries name other tasks in the same file (batch-local `name` keys,
 resolved to task IDs daemon-side) or already-assigned task IDs. The batch is
@@ -207,6 +216,40 @@ singl --json flow wait --id f3 --timeout 3600 --interval 5
 `rejected` is a designed outcome, not a malfunction — but it still exits `1`,
 because the work must not be landed on the strength of it. Read the findings
 (`flow show`) and decide by hand.
+
+**An accepted flow commits its own work.** Implement and fix steps are told not
+to commit, so every reviewer reads an uncommitted diff. The moment a round's
+verdict is accept, the daemon fires one more task into the flow's queue
+(`flow-<id>`), in the flow's work dir, titled `<flow-id> r<N> commit`: an agent
+that stages the change, commits it with a descriptive message, and neither
+pushes nor switches branches. The flow is marked `accepted` in the same
+transition that submits it, so **`flow wait` exiting `0` does not mean the
+commit has landed** — the commit agent is usually still running. The task is
+fire-and-forget: it is not recorded on the flow (`flow show` and `flow tree`
+do not list it), and if it fails the flow stays `accepted`.
+
+Wait for it before you touch the branch:
+
+```
+singl --json queue list --queue flow-f3        # the "f3 r<N> commit" task and its state
+singl --json queue wait --queue flow-f3 --timeout 900
+# or: the commit agent shows up in `singl --json agents list` with the flow's work_dir;
+# or: poll until `git -C <workdir> status --porcelain` is empty and HEAD has moved
+```
+
+(`queue wait` on a flow's queue can exit `1` for an earlier round's failed
+step; read the commit task's own state from `queue list`.)
+
+**You never run `git commit` or `singl commit create` in a flow's work dir.** A
+hand commit races the commit agent, which then finds a clean tree. Once the
+commit task is `done`, review the *committed* diff (`git -C <workdir> show`,
+`singl --json diff branch --repo <workdir> --base main --head feature/x`), then
+push and open the MR. If that diff is wrong, start a fix — a flow or an agent —
+never amend by hand. The one fallback: the commit task `failed` (retry it with
+`queue retry --id <task-id>`) or never ran at all (the daemon died between
+accept and submit — no commit task in `queue list`). Then spawn a small agent
+whose only job is to commit that work dir; say so explicitly in its prompt. The
+commit is still an agent's, not yours.
 
 **When the cap is the problem, continue the flow — do not start another one.**
 A `rejected` flow means one thing only: the reviewer was still rejecting when
@@ -341,7 +384,7 @@ one-agent-per-directory check.
 
 ```
 singl --json agents spawn --workdir ~/.worktrees/<project>/feature-x/api \
-  --prompt "Implement X in this worktree. Run the tests. Report what you changed." \
+  --prompt "Implement X in this worktree. Run the tests. Commit your work on the current branch (descriptive message, no push, never --no-verify). Report what you changed and the commit hash." \
   --effort medium --timeout 1800
 # → {"agent_id": "a1b2c3"}
 ```
@@ -425,12 +468,14 @@ or reverted separately. New task ⇒ new agent.
 "Clear a subagent" = `remove`, then `spawn` a fresh one on the same worktree.
 
 **6 — land the work.** The daemon does the git plumbing; don't shell out to git.
+By now the work is committed — by a flow's commit task or by the agent itself,
+as its prompt told it to. You review the committed diff, push and open the MR;
+you do not stage or commit. A leftover uncommitted change is a sign the agent
+did not finish: send it back to an agent, do not commit it yourself.
 
 ```
-singl --json diff workdir     --repo <worktree>
-singl --json commit stage     --repo <worktree> --all             # or --file a --file b
-singl --json commit suggest   --repo <worktree>     # AI commit message from the current diff
-singl --json commit create    --repo <worktree> --message "..."   # → {"status":"committed","hash":...}
+singl --json diff branch      --repo <worktree> --base main --head feature/x   # the committed diff
+singl --json diff workdir     --repo <worktree>     # should be empty: nothing left uncommitted
 singl sync push               --repo <worktree>
 singl --json mr title  --repo <worktree> --source feature/x --target main
 singl --json mr create --repo <worktree> --source feature/x --target main --title "..." --desc "..."
@@ -544,7 +589,10 @@ in for that host, and prints the exact `tea logins add` command when it is not.
   `agents stats` first and do not handle an agent-limit error. Only a bare
   `agents spawn` still fails once the pool's hard cap is reached.
 - Subagents inherit **nothing** from your context. Put everything in `--prompt`:
-  absolute paths, the definition of done, and "report a summary of what changed".
+  absolute paths, the definition of done, "commit your work on the current
+  branch (descriptive message, no push, never `--no-verify`) and report the
+  hash", and "report a summary of what changed". A flow's steps are the
+  exception — its own commit task commits (step 2b).
 - Start every piece of work with a workflow, not a bare worktree — a project's
   repos must be isolated together or the branch cannot be landed as one change.
 - Prefer several small scoped agents over one broad one; when a change spans repos,
@@ -584,7 +632,9 @@ in for that host, and prints the exact `tea logins add` command when it is not.
   failed or the timeout expired.
 - After a wait settles, read the outcome from `queue list --state failed,skipped`
   and the transcripts from `agents output --id <task's agent_id> --offset <n>`.
-- Review a subagent's diff yourself (`diff workdir`) before committing or pushing it.
+- Review a subagent's committed diff yourself (`diff branch`, `git show`)
+  before pushing it. You never commit on an agent's behalf: if the diff is
+  wrong, a fix goes through an agent (or a flow), not an amend by hand.
 - Never `remove` an agent you still want to talk to — `kill` keeps it addressable.
   That only holds for a bare `agents spawn`: killing a queue-dispatched task's
   agent gets it reaped by the scheduler (process terminated — its worktree is
@@ -604,10 +654,11 @@ in for that host, and prints the exact `tea logins add` command when it is not.
   accepted or still-running flow it says why instead), `c` cancels behind a
   confirm, `a` opens the selected step's agent in the Agents view, `r`
   refreshes, `/` filters.
-- What you *do* touch directly, and nothing beyond it: the git plumbing the
-  daemon exposes (`commit`, `sync push`, `mr create`, `workflows create|remove`),
-  reading files and read-only commands to decide what to delegate, and reviewing
-  diffs.
+- What you *do* touch directly, and nothing beyond it: the git plumbing for
+  landing (`sync push`, `mr create`, `workflows create|remove`), reading files
+  and read-only commands to decide what to delegate, and reviewing diffs.
+  Committing is not on that list — it belongs to agents (a flow's commit task,
+  or the agent's own prompt).
 - This is context discipline, not ceremony: you hold the plan and the state of
   the fleet, agents hold the implementation detail. Every file you edit yourself
   is detail you loaded instead of overview you exist to keep.
