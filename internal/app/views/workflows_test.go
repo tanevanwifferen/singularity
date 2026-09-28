@@ -129,3 +129,94 @@ func TestRemoveWorkflowAbortsWhenAgentSurvives(t *testing.T) {
 		t.Errorf("status = %q, want the termination failure surfaced", v.workflowStatusMsg)
 	}
 }
+
+func TestOneLine(t *testing.T) {
+	cases := []struct {
+		name, in string
+		max      int
+		want     string
+	}{
+		{"first non-blank line", "\n  \nfirst\nsecond", 40, "first"},
+		{"fits", "short", 5, "short"},
+		{"cut with ellipsis", "abcdefgh", 4, "abc…"},
+		{"rune safe", "héllo wörld", 6, "héllo…"},
+		{"non-positive max", "abc", 0, ""},
+	}
+	for _, c := range cases {
+		if got := oneLine(c.in, c.max); got != c.want {
+			t.Errorf("%s: oneLine(%q, %d) = %q, want %q", c.name, c.in, c.max, got, c.want)
+		}
+	}
+}
+
+func TestMRLink(t *testing.T) {
+	const url = "https://gitlab.com/group/proj/-/merge_requests/12"
+	cases := map[string]string{
+		"plain url":            url,
+		"url after text":       "Creating...\nView merge request: " + url + "\n",
+		"http url":             "see http://host/pr/1 now",
+		"no url uses one line": "\nsomething odd\nmore",
+		"trailing period":      "View merge request: " + url + ".",
+	}
+	want := map[string]string{
+		"plain url":            url,
+		"url after text":       url,
+		"http url":             "http://host/pr/1",
+		"no url uses one line": "something odd",
+		"trailing period":      url,
+	}
+	for name, in := range cases {
+		if got := mrLink(in, 40); got != want[name] {
+			t.Errorf("%s: mrLink = %q, want %q", name, got, want[name])
+		}
+	}
+	// A URL longer than the budget is never cut.
+	if got := mrLink(url, 10); got != url {
+		t.Errorf("long url was cut: %q", got)
+	}
+}
+
+func TestRenderRepoDetailStaysOneLinePerField(t *testing.T) {
+	proj := flowTestProject()
+	v := NewWorkflowsView(proj)
+	v.width = 80
+	wf := service.NewFeatureWorkflow(proj, "feat/x", t.TempDir())
+	wf.Repos = map[string]*service.WorkflowRepo{
+		"web": {
+			RepoName: "web",
+			MRURL:    "Creating merge request\nView merge request: https://gitlab.com/g/web/-/merge_requests/3\nmore",
+			Error:    "first error line\nsecond line\nthird line",
+		},
+	}
+	out := v.renderRepoDetail(wf)
+	if !strings.Contains(out, "https://gitlab.com/g/web/-/merge_requests/3") {
+		t.Errorf("URL missing from output: %q", out)
+	}
+	for _, junk := range []string{"Creating merge request", "second line", "third line", "more"} {
+		if strings.Contains(out, junk) {
+			t.Errorf("output leaked %q: %q", junk, out)
+		}
+	}
+	// blank lead + one status row + one MR row
+	if n := strings.Count(strings.TrimRight(out, "\n"), "\n"); n != 2 {
+		t.Errorf("expected 3 lines, got %d newlines: %q", n, out)
+	}
+}
+
+func TestMRSummaryLinesAreOneLine(t *testing.T) {
+	proj := flowTestProject()
+	v := NewWorkflowsView(proj)
+	v.width = 80
+	wf := service.NewFeatureWorkflow(proj, "feat/x", t.TempDir())
+	wf.Repos = map[string]*service.WorkflowRepo{
+		"web": {RepoName: "web", MRTitle: "Long LLM title", MRURL: "noise\nView: https://h/o/r/-/merge_requests/9\n"},
+	}
+	v.workflows = append(v.workflows, wf)
+	v.rebuildFilter()
+	v.handleMRDoneMsg()
+	if len(v.mrSummaryLines) != 1 || strings.Contains(v.mrSummaryLines[0], "\n") ||
+		!strings.Contains(v.mrSummaryLines[0], "https://h/o/r/-/merge_requests/9") ||
+		strings.Contains(v.mrSummaryLines[0], "noise") {
+		t.Errorf("bad summary lines: %q", v.mrSummaryLines)
+	}
+}

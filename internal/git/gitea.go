@@ -396,7 +396,12 @@ func createGiteaPull(repoPath, source, target, title, description string) (strin
 		}
 		return "", nil, fmt.Errorf("tea pulls create failed: %s", res.Message())
 	}
-	return extractURL(res.Stdout + "\n" + res.Stderr), gr, nil
+	out := res.Stdout + "\n" + res.Stderr
+	url := ExtractURL(out)
+	if url == "" {
+		return "", gr, noURLError("tea pulls create", out)
+	}
+	return url, gr, nil
 }
 
 // giteaPullNumber extracts the pull index from a Gitea PR URL

@@ -305,7 +305,10 @@ func CreateMergeRequestCLI(repoPath string, provider RemoteProvider, baseBranch 
 		if err != nil {
 			return nil, fmt.Errorf("gh pr create failed: %s", strings.TrimSpace(string(output)))
 		}
-		result.URL = extractURL(string(output))
+		result.URL = ExtractURL(string(output))
+		if result.URL == "" {
+			return nil, noURLError("gh pr create", string(output))
+		}
 		return result, nil
 	case ProviderGitLab:
 		cmd := exec.Command("glab", "mr", "create", "--yes",
@@ -317,7 +320,10 @@ func CreateMergeRequestCLI(repoPath string, provider RemoteProvider, baseBranch 
 		if err != nil {
 			return nil, fmt.Errorf("glab mr create failed: %s", strings.TrimSpace(string(output)))
 		}
-		result.URL = extractURL(string(output))
+		result.URL = ExtractURL(string(output))
+		if result.URL == "" {
+			return nil, noURLError("glab mr create", string(output))
+		}
 		return result, nil
 	case ProviderGitea:
 		// tea defaults --head to the current branch, but being explicit keeps
@@ -349,16 +355,28 @@ func currentBranchName(repoPath string) string {
 	return branch
 }
 
-// extractURL extracts the first https:// URL from CLI output, falling back to
-// the full trimmed output if none is found.
-func extractURL(output string) string {
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "https://") {
-			return line
+// ExtractURL returns the first http(s):// token found anywhere in CLI output
+// (e.g. "View merge request: https://..."), or "" if there is none. It never
+// falls back to the raw output, which can be many lines long.
+func ExtractURL(output string) string {
+	for _, field := range strings.Fields(output) {
+		if strings.HasPrefix(field, "https://") || strings.HasPrefix(field, "http://") {
+			return strings.TrimRight(field, ".,;:)>\"'")
 		}
 	}
-	return strings.TrimSpace(output)
+	return ""
+}
+
+// noURLError reports a forge CLI run that succeeded without printing an MR URL.
+func noURLError(cli, output string) error {
+	first := ""
+	for _, l := range strings.Split(output, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			first = l
+			break
+		}
+	}
+	return fmt.Errorf("%s succeeded but printed no MR URL, so the MR was probably created; check the forge before retrying (%s)", cli, first)
 }
 
 // ProviderStatus reports the provider detected for a repo together with the
