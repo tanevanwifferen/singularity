@@ -68,6 +68,13 @@ version changes:
 - You never commit. A flow commits its own work after `accepted` (wait for its
   commit task); queued and spawned agents commit their own. Review the committed
   diff (`diff branch`, `git show`) before pushing.
+- A rejected review is the flow's to fix, never yours. A rejected *round* is
+  followed by the flow's own fix round automatically — just keep waiting. A
+  flow that *ends* `rejected` (round cap hit), `errored` or `cancelled` is
+  continued with `singl flow continue --id <flow> [--rounds N]`, which keeps
+  the findings and the tree; do not fix the findings by hand and do not start
+  a fresh flow for the same goal. A problem you find yourself while reviewing
+  a committed diff also goes to an agent or flow, not into your editor.
 - Every working-tree change goes through an agent; your own hands are for
   pushing, MRs, read-only inspection and diff review.
 
