@@ -10,10 +10,12 @@ import (
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/clipboard"
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/components"
 	"gitlab.com/tanevanwifferen1/singularity/internal/config"
+	"gitlab.com/tanevanwifferen1/singularity/internal/git"
 	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // pushCheckDoneMsg carries the list of repos that need pushing.
@@ -706,11 +708,7 @@ func (v *WorkflowsView) handleMRDoneMsg() {
 	var lines []string
 	for _, wr := range wf.Repos {
 		if wr.MRURL != "" {
-			title := wr.MRTitle
-			if title == "" {
-				title = "Merge feature branch"
-			}
-			lines = append(lines, fmt.Sprintf("  %s: %s — %s", wr.RepoName, title, wr.MRURL))
+			lines = append(lines, fmt.Sprintf("  %s — %s", wr.RepoName, mrLink(wr.MRURL, modalWidth(v.width)-len(wr.RepoName)-8)))
 		}
 	}
 	v.mrResults = fmt.Sprintf(" Created %d MRs\n   Next: press 'D' to cleanup worktrees when merged", len(lines))
@@ -1008,11 +1006,11 @@ func (v *WorkflowsView) buildMRSummaryText(wf *service.FeatureWorkflow) string {
 		if wr.MRURL == "" {
 			continue
 		}
-		title := wr.MRTitle
+		title := oneLine(wr.MRTitle, 120)
 		if title == "" {
 			title = "Merge feature branch"
 		}
-		b.WriteString(fmt.Sprintf("\n%s — %s\n%s\n", wr.RepoName, title, wr.MRURL))
+		b.WriteString(fmt.Sprintf("\n%s — %s\n%s\n", wr.RepoName, title, mrLink(wr.MRURL, 200)))
 	}
 
 	return strings.TrimRight(b.String(), "\n")
@@ -1820,7 +1818,10 @@ func (v *WorkflowsView) renderRepoDetail(wf *service.FeatureWorkflow) string {
 		}
 
 		if wr.Error != "" {
-			parts = append(parts, th.DashboardErrorStyle.Render(wr.Error))
+			// Forge CLI errors carry their whole output; keep the row to one line.
+			// Budget what the row already holds (indent + parts + separator).
+			used := 6 + lipgloss.Width(strings.Join(parts, " ")) + 1
+			parts = append(parts, th.DashboardErrorStyle.Render(oneLine(wr.Error, max(v.width-used, 20))))
 		}
 
 		s.WriteString("      ")
@@ -1828,20 +1829,52 @@ func (v *WorkflowsView) renderRepoDetail(wf *service.FeatureWorkflow) string {
 		s.WriteString("\n")
 
 		if wr.MRURL != "" {
-			mrLabel := wr.MRTitle
-			if mrLabel == "" {
-				mrLabel = wr.MRURL
-			}
 			s.WriteString("        ")
-			s.WriteString(th.MutedTextStyle.Render("↳ " + mrLabel))
-			s.WriteString("\n")
-			s.WriteString("        ")
-			s.WriteString(th.MutedTextStyle.Render("  " + wr.MRURL))
+			s.WriteString(th.MutedTextStyle.Render("↳ " + mrLink(wr.MRURL, v.detailWidth(10))))
 			s.WriteString("\n")
 		}
 	}
 
 	return s.String()
+}
+
+// detailWidth is the room left for text on a repo detail line after indent,
+// never less than 40 so a narrow or unknown width still shows something useful.
+func (v *WorkflowsView) detailWidth(indent int) int {
+	if w := v.width - indent; w > 40 {
+		return w
+	}
+	return 40
+}
+
+// mrLink reduces a stored MR value to one line. Older workflows may hold the
+// forge CLI's full output there, so the URL token is picked out of it and
+// returned whole (a cut URL is useless); only text with no URL is truncated
+// to maxLen runes.
+func mrLink(s string, maxLen int) string {
+	if url := git.ExtractURL(s); url != "" {
+		return url
+	}
+	return oneLine(s, maxLen)
+}
+
+// oneLine returns the first non-blank line of s, cut to maxLen runes.
+func oneLine(s string, maxLen int) string {
+	line := ""
+	for _, l := range strings.Split(s, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			line = l
+			break
+		}
+	}
+	r := []rune(line)
+	if len(r) <= maxLen {
+		return line
+	}
+	if maxLen < 1 {
+		return ""
+	}
+	return string(r[:maxLen-1]) + "…"
 }
 
 // renderFooterHelp returns contextual help text.
