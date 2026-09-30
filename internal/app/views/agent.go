@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -468,12 +469,24 @@ func (v *AgentView) refreshSelectedAgentOutput() {
 	v.rebuildOutputViewport()
 }
 
+// markdownStyle returns glamour's style for the detected terminal theme with
+// the document color cleared, so body text uses the terminal's own foreground
+// instead of glamour's fixed gray (252 on dark, which reads as washed out).
+func markdownStyle() glamour.TermRendererOption {
+	style := styles.DarkStyleConfig
+	if theme.GetTheme().Type == theme.LightThemeType {
+		style = styles.LightStyleConfig
+	}
+	style.Document.Color = nil
+	return glamour.WithStyles(style)
+}
+
 // markdownRenderer returns a cached glamour renderer for the given width,
 // recreating it if the width has changed.
 func (v *AgentView) markdownRenderer(width int) *glamour.TermRenderer {
 	if v.mdRenderer == nil || v.mdRendererWidth != width {
 		r, err := glamour.NewTermRenderer(
-			glamour.WithAutoStyle(),
+			markdownStyle(),
 			glamour.WithWordWrap(width),
 		)
 		if err != nil {
