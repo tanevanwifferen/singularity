@@ -50,13 +50,14 @@ func TestNewFeatureWorkflow(t *testing.T) {
 		t.Fatalf("expected 3 repos, got %d", len(fw.Repos))
 	}
 
-	// Check worktree paths use sanitized branch name
+	// Check worktree paths use the sanitized branch name and mirror each
+	// repo's on-disk directory under the project root (/tmp), not its name.
 	web := fw.Repos["web"]
 	if web == nil {
 		t.Fatal("expected 'web' repo in workflow")
 	}
-	if web.WorktreePath != "/tmp/worktrees/feature-add-auth/web" {
-		t.Errorf("expected worktree path '/tmp/worktrees/feature-add-auth/web', got %q", web.WorktreePath)
+	if web.WorktreePath != "/tmp/worktrees/feature-add-auth/frontend" {
+		t.Errorf("expected worktree path '/tmp/worktrees/feature-add-auth/frontend', got %q", web.WorktreePath)
 	}
 	if web.OriginalPath != "/tmp/frontend" {
 		t.Errorf("expected original path '/tmp/frontend', got %q", web.OriginalPath)
@@ -66,16 +67,16 @@ func TestNewFeatureWorkflow(t *testing.T) {
 	if api == nil {
 		t.Fatal("expected 'api' repo in workflow")
 	}
-	if api.WorktreePath != "/tmp/worktrees/feature-add-auth/api" {
-		t.Errorf("expected worktree path '/tmp/worktrees/feature-add-auth/api', got %q", api.WorktreePath)
+	if api.WorktreePath != "/tmp/worktrees/feature-add-auth/backend" {
+		t.Errorf("expected worktree path '/tmp/worktrees/feature-add-auth/backend', got %q", api.WorktreePath)
 	}
 
 	lib := fw.Repos["lib"]
 	if lib == nil {
 		t.Fatal("expected 'lib' repo in workflow")
 	}
-	if lib.WorktreePath != "/tmp/worktrees/feature-add-auth/lib" {
-		t.Errorf("expected worktree path '/tmp/worktrees/feature-add-auth/lib', got %q", lib.WorktreePath)
+	if lib.WorktreePath != "/tmp/worktrees/feature-add-auth/shared" {
+		t.Errorf("expected worktree path '/tmp/worktrees/feature-add-auth/shared', got %q", lib.WorktreePath)
 	}
 }
 
@@ -93,8 +94,13 @@ func TestNewFeatureWorkflow_SimpleBranch(t *testing.T) {
 	if app == nil {
 		t.Fatal("expected 'app' repo in workflow")
 	}
-	if app.WorktreePath != "/work/hotfix/app" {
-		t.Errorf("expected worktree path '/work/hotfix/app', got %q", app.WorktreePath)
+	// The worktree mirrors the repo's on-disk location under the project
+	// root (its directory name), not the display name from the config.
+	if app.WorktreePath != "/work/hotfix/repo" {
+		t.Errorf("expected worktree path '/work/hotfix/repo', got %q", app.WorktreePath)
+	}
+	if app.LayoutPath != "repo" {
+		t.Errorf("expected layout path 'repo', got %q", app.LayoutPath)
 	}
 }
 

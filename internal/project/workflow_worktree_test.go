@@ -10,6 +10,17 @@ import (
 	"gitlab.com/tanevanwifferen1/singularity/internal/git"
 )
 
+// resolvedDir returns dir with symlinks resolved, matching how git reports
+// worktree paths.
+func resolvedDir(t *testing.T, dir string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
+}
+
 // initWorkflowTestRepo creates a git repo with one commit on `branch` and
 // returns its path. No remote is configured, so it also exercises the
 // origin/<default> fallback in ensureWorktree.
@@ -96,7 +107,9 @@ func TestCreateAllWorktrees_AllReposIsolated(t *testing.T) {
 // existing worktrees instead of failing on "branch already exists".
 func TestCreateAllWorktrees_Idempotent(t *testing.T) {
 	proj, root := newTestProject(t)
-	baseDir := filepath.Join(root, "worktrees")
+	// git reports worktree paths with symlinks resolved (/private/var on
+	// macOS), so compare against the resolved base dir.
+	baseDir := filepath.Join(resolvedDir(t, root), "worktrees")
 
 	first := NewFeatureWorkflow(proj, "feature/x", baseDir)
 	if err := first.CreateAllWorktrees(); err != nil {
@@ -156,5 +169,60 @@ func TestCreateAllWorktrees_PartialFailure(t *testing.T) {
 	status := fw.Status()
 	if status.WorktreesCreated != 2 || status.Errors != 1 {
 		t.Fatalf("expected 2 created / 1 error, got %d / %d", status.WorktreesCreated, status.Errors)
+	}
+}
+
+// TestCreateAllWorktrees_MirrorsProjectLayout: repos nested below the project
+// root (pdflibrary/librarian) get the same sub-path under the workflow dir,
+// so the workflow dir is a drop-in copy of the project tree.
+func TestCreateAllWorktrees_MirrorsProjectLayout(t *testing.T) {
+	root := resolvedDir(t, t.TempDir())
+	nested := filepath.Join(root, "pdflibrary")
+	defs := []RepoDef{
+		{Name: "web", Path: initWorkflowTestRepo(t, root, "web", "main"), DefaultBranch: "main"},
+		{Name: "librarian", Path: initWorkflowTestRepo(t, nested, "librarian", "main"), DefaultBranch: "main"},
+		{Name: "discord_bot", Path: initWorkflowTestRepo(t, nested, "discord_bot", "main"), DefaultBranch: "main"},
+	}
+	proj := NewProject(ProjectDef{Name: "Test", Repos: defs})
+	if got := proj.Root(); got != root {
+		t.Fatalf("project root %q, want %q", got, root)
+	}
+
+	baseDir := filepath.Join(resolvedDir(t, t.TempDir()), "worktrees")
+	fw := NewFeatureWorkflow(proj, "feature/x", baseDir)
+	if err := fw.CreateAllWorktrees(); err != nil {
+		t.Fatalf("CreateAllWorktrees: %v", err)
+	}
+
+	want := map[string]string{
+		"web":         filepath.Join(fw.WorkflowDir(), "web"),
+		"librarian":   filepath.Join(fw.WorkflowDir(), "pdflibrary", "librarian"),
+		"discord_bot": filepath.Join(fw.WorkflowDir(), "pdflibrary", "discord_bot"),
+	}
+	for name, wantPath := range want {
+		wr := fw.Repos[name]
+		if wr.WorktreePath != wantPath {
+			t.Errorf("repo %s: worktree path %q, want %q", name, wr.WorktreePath, wantPath)
+		}
+		if _, err := os.Stat(filepath.Join(wr.WorktreePath, "file.txt")); err != nil {
+			t.Errorf("repo %s: worktree not checked out: %v", name, err)
+		}
+	}
+
+	// Discovery must recover the same base dir from the nested layout.
+	found, err := DiscoverWorkflows(proj, nil)
+	if err != nil || len(found) != 1 {
+		t.Fatalf("DiscoverWorkflows: %v (%d found)", err, len(found))
+	}
+	if found[0].BaseDir != baseDir {
+		t.Errorf("discovered base dir %q, want %q", found[0].BaseDir, baseDir)
+	}
+
+	// Cleanup must also drop the intermediate pdflibrary/ dir.
+	if err := fw.RemoveAllWorktrees(); err != nil {
+		t.Fatalf("RemoveAllWorktrees: %v", err)
+	}
+	if _, err := os.Stat(fw.WorkflowDir()); !os.IsNotExist(err) {
+		t.Errorf("workflow dir still present after cleanup: %v", err)
 	}
 }

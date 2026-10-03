@@ -50,6 +50,7 @@ type WorkflowRepo struct {
 	RepoName        string `json:"repo_name"`
 	OriginalPath    string `json:"original_path"`
 	WorktreePath    string `json:"worktree_path"`
+	LayoutPath      string `json:"layout_path,omitempty"` // repo's path relative to the project root
 	DefaultBranch   string `json:"default_branch"`
 	WorktreeCreated bool   `json:"worktree_created"`
 	Pushed          bool   `json:"pushed"`
@@ -169,6 +170,10 @@ func SlugifyForPath(name string) string {
 // paths never contain spaces or other shell-hostile characters. If a legacy
 // directory named after the raw project name already exists (created before
 // slugging), it is reused so existing workflows keep resolving.
+//
+// Beneath it, worktrees live at <base>/<branch>/<repo layout path>, where the
+// layout path mirrors where the repo sits under the project root (so nested
+// repos like pdflibrary/librarian keep their tree).
 func DefaultWorkflowBaseDir(projectName string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -191,13 +196,18 @@ func NewFeatureWorkflow(proj *Project, branchName, baseDir string) *FeatureWorkf
 
 	sanitized := sanitizeBranchForPath(branchName)
 	repos := make(map[string]*WorkflowRepo, len(proj.Repos))
+	root := commonRepoRoot(proj.Repos)
 
+	// Mirror the original tree: each worktree lands at the same path relative
+	// to the workflow dir as the repo has relative to the project root, so the
+	// workflow dir is a drop-in copy of the project an agent can start in.
 	for _, r := range proj.Repos {
-		worktreePath := filepath.Join(baseDir, sanitized, r.Name)
+		layout := repoLayoutPath(root, r.Path, r.Name)
 		repos[r.Name] = &WorkflowRepo{
 			RepoName:      r.Name,
 			OriginalPath:  r.Path,
-			WorktreePath:  worktreePath,
+			WorktreePath:  filepath.Join(baseDir, sanitized, layout),
+			LayoutPath:    layout,
 			DefaultBranch: r.DefaultBranch,
 		}
 	}
@@ -410,6 +420,12 @@ func ensureWorktree(repoPath, worktreePath, branch, defaultBranch string) (strin
 
 	defaultBranch = defaultBranchOrMain(defaultBranch)
 
+	// Nested layouts (pdflibrary/librarian) need the intermediate dirs; git
+	// creates the leaf itself.
+	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
+		return "", fmt.Errorf("create worktree parent: %w", err)
+	}
+
 	// The branch exists but is not checked out anywhere: attach a worktree to it
 	// rather than trying to create it again.
 	if git.BranchExists(repoPath, branch) {
@@ -525,16 +541,37 @@ func (fw *FeatureWorkflow) RemoveAllWorktrees() error {
 	})
 
 	// Remove the workflow directory (baseDir/sanitized-branch/) now that
-	// all repo worktrees inside it have been removed.  os.Remove only
-	// succeeds if the directory is empty, so this is safe.  If a repo
-	// worktree removal failed and left files behind, this will be a no-op.
+	// all repo worktrees inside it have been removed, along with any
+	// intermediate dirs a nested layout created.  os.Remove only succeeds
+	// on empty directories, so a worktree that failed to remove and left
+	// files behind is left alone.
 	workflowDir := filepath.Join(fw.BaseDir, sanitizeBranchForPath(fw.BranchName))
+	fw.mu.RLock()
+	for _, wr := range fw.Repos {
+		removeEmptyParents(wr.WorktreePath, workflowDir)
+	}
+	fw.mu.RUnlock()
 	os.Remove(workflowDir)
 
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 	fw.State = WorkflowDone
 	return nil
+}
+
+// removeEmptyParents removes the (empty) directories between path and stop,
+// walking upward and stopping at the first non-empty one. stop itself is
+// not removed.
+func removeEmptyParents(path, stop string) {
+	stop = filepath.Clean(stop)
+	for dir := filepath.Dir(filepath.Clean(path)); dir != stop; dir = filepath.Dir(dir) {
+		if !strings.HasPrefix(dir, stop+string(filepath.Separator)) {
+			return
+		}
+		if err := os.Remove(dir); err != nil {
+			return
+		}
+	}
 }
 
 // HasOpenMRs returns true if any repo in this workflow has an MR URL set,
@@ -897,9 +934,11 @@ func DiscoverWorkflows(proj *Project, skip map[string]bool) ([]*FeatureWorkflow,
 		repoName      string
 		originalPath  string
 		worktreePath  string
+		layoutPath    string
 		defaultBranch string
 	}
 	byBranch := make(map[string][]repoWorktree)
+	root := commonRepoRoot(proj.Repos)
 
 	for _, r := range proj.Repos {
 		worktrees, err := git.GetWorktrees(r.Path)
@@ -923,6 +962,7 @@ func DiscoverWorkflows(proj *Project, skip map[string]bool) ([]*FeatureWorkflow,
 				repoName:      r.Name,
 				originalPath:  r.Path,
 				worktreePath:  wt.Path,
+				layoutPath:    repoLayoutPath(root, r.Path, r.Name),
 				defaultBranch: r.DefaultBranch,
 			})
 		}
@@ -938,13 +978,20 @@ func DiscoverWorkflows(proj *Project, skip map[string]bool) ([]*FeatureWorkflow,
 				RepoName:        rw.repoName,
 				OriginalPath:    rw.originalPath,
 				WorktreePath:    rw.worktreePath,
+				LayoutPath:      rw.layoutPath,
 				DefaultBranch:   rw.defaultBranch,
 				WorktreeCreated: true,
 			}
 			if baseDir == "" {
-				// worktreePath is typically baseDir/sanitized-branch/repoName
-				// go up two levels to get baseDir
-				baseDir = filepath.Dir(filepath.Dir(rw.worktreePath))
+				// worktreePath is typically baseDir/sanitized-branch/<layout>,
+				// where layout may be nested (pdflibrary/librarian). Strip the
+				// layout when it matches; otherwise assume a flat layout.
+				suffix := string(filepath.Separator) + filepath.Clean(rw.layoutPath)
+				if strings.HasSuffix(rw.worktreePath, suffix) {
+					baseDir = filepath.Dir(strings.TrimSuffix(rw.worktreePath, suffix))
+				} else {
+					baseDir = filepath.Dir(filepath.Dir(rw.worktreePath))
+				}
 			}
 		}
 

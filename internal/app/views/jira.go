@@ -786,16 +786,9 @@ func startJiraWorkflow(ctx context.Context, svc *service.Services, issue *servic
 		if err := fw.CreateAllWorktrees(); err != nil {
 			return jiraWorkflowDoneMsg{err: fmt.Errorf("create worktrees: %w", err)}
 		}
+		// The workflow dir mirrors the project tree, so the agent starts at
+		// its root and sees every repo worktree below it.
 		workDir := fw.WorkflowDir()
-		// Use the first worktree's repo path if the workflow dir isn't itself a repo
-		if _, statErr := os.Stat(filepath.Join(workDir, ".git")); os.IsNotExist(statErr) {
-			for _, wr := range fw.Repos {
-				if wr.WorktreeCreated {
-					workDir = wr.WorktreePath
-					break
-				}
-			}
-		}
 		id, err := svc.Agent.Start(ctx, workDir, agentPrompt, service.AgentOptions{SmartRoute: true, WorkflowID: fw.BranchName})
 		if err != nil {
 			return jiraWorkflowDoneMsg{err: fmt.Errorf("start agent: %w", err)}

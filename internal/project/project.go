@@ -2,6 +2,8 @@ package project
 
 import (
 	"fmt"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/git"
@@ -68,6 +70,63 @@ func NewProject(def ProjectDef) *Project {
 		Repos:        repos,
 		ContextFiles: def.ContextFiles,
 	}
+}
+
+// Root returns the deepest directory that contains every repo in the project
+// — the on-disk tree the repos were checked out into. A single-repo project
+// roots at that repo's parent, so its layout path is just the repo directory.
+func (p *Project) Root() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return commonRepoRoot(p.Repos)
+}
+
+// commonRepoRoot is Root without locking; callers already hold p.mu.
+func commonRepoRoot(repos []*Repo) string {
+	root := ""
+	for _, r := range repos {
+		if r.Path == "" {
+			continue
+		}
+		dir := filepath.Dir(filepath.Clean(r.Path))
+		if root == "" {
+			root = dir
+			continue
+		}
+		root = commonDir(root, dir)
+	}
+	return root
+}
+
+// commonDir returns the longest directory that is an ancestor of (or equal
+// to) both a and b.
+func commonDir(a, b string) string {
+	sep := string(filepath.Separator)
+	for {
+		if a == b || strings.HasPrefix(b+sep, a+sep) {
+			return a
+		}
+		parent := filepath.Dir(a)
+		if parent == a {
+			return a
+		}
+		a = parent
+	}
+}
+
+// repoLayoutPath returns where repoPath sits relative to root, i.e. the
+// sub-path a workflow must reproduce so worktrees mirror the original tree
+// (pdflibrary/librarian, not just librarian). Falls back to name when the
+// repo does not live under root.
+func repoLayoutPath(root, repoPath, name string) string {
+	if root == "" || repoPath == "" {
+		return name
+	}
+	rel, err := filepath.Rel(root, filepath.Clean(repoPath))
+	if err != nil || rel == "." || rel == "" || strings.HasPrefix(rel, "..") {
+		return name
+	}
+	return rel
 }
 
 // GetRepo returns a repo by name, or nil if not found
