@@ -46,6 +46,11 @@ type branchStatusDoneMsg struct{}
 // worktreesCreatedMsg signals that worktree creation for a workflow completed.
 type worktreesCreatedMsg struct{}
 
+// flowFromJiraDoneMsg carries the outcome of creating worktrees and starting a
+// flow for a Jira ticket, so the handler can show it instead of the generic
+// "worktrees created" hint.
+type flowFromJiraDoneMsg struct{ status string }
+
 // worktreesRemovedMsg signals that worktree removal for a workflow finished.
 // A non-nil err means the removal was aborted before any worktree was touched
 // because an agent still working in the workflow could not be terminated.
@@ -113,6 +118,7 @@ type WorkflowsView struct {
 	jiraPicker       *JiraPickerState
 	jiraConfirmIssue *service.Issue       // issue pending workflow-start confirmation
 	jiraExtraInput   components.TextInput // optional extra instructions for the agent
+	jiraFlowMode     bool                 // confirm modal: start an adversarial review flow instead of a plain agent
 
 	// Drill-down diff view
 	workflowDiffView *WorkflowDiffView
@@ -575,6 +581,9 @@ func (v *WorkflowsView) handleWorkflowsMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case agentSpawnResultMsg:
 		return v, v.applyAgentSpawnResult(msg)
 
+	case flowFromJiraDoneMsg:
+		return v, v.handleFlowFromJiraDoneMsg(msg)
+
 	case worktreesCreatedMsg:
 		return v, v.handleWorktreesCreatedMsg()
 
@@ -751,12 +760,21 @@ func (v *WorkflowsView) handleJiraWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 	case "enter":
 		issue := v.jiraConfirmIssue
 		extraMsg := v.jiraExtraInput.Value
+		flow := v.jiraFlowMode
 		v.jiraConfirmIssue = nil
+		v.jiraFlowMode = false
 		v.jiraExtraInput.Clear()
+		if flow {
+			return v.startFlowFromJira(issue, extraMsg)
+		}
 		return v.startWorkflowFromJira(issue, extraMsg)
+	case "tab":
+		// Toggle between starting an agent and starting a flow on the new
+		// workflow worktrees. Tab does not collide with text editing.
+		v.jiraFlowMode = !v.jiraFlowMode
 	case "ctrl+e":
 		wf := v.currentWorkflow()
-		if wf != nil {
+		if wf != nil && !v.jiraFlowMode {
 			issue := v.jiraConfirmIssue
 			extraMsg := v.jiraExtraInput.Value
 			v.jiraConfirmIssue = nil
@@ -765,11 +783,61 @@ func (v *WorkflowsView) handleJiraWorkflowConfirm(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "esc":
 		v.jiraConfirmIssue = nil
+		v.jiraFlowMode = false
 		v.jiraExtraInput.Clear()
 	default:
 		v.jiraExtraInput.HandleKey(msg)
 	}
 	return nil
+}
+
+// startFlowFromJira creates a FeatureWorkflow from a Jira issue and starts an
+// adversarial review flow (svc.Flow.Start) in its workflow root.
+func (v *WorkflowsView) startFlowFromJira(issue *service.Issue, extraMsg string) tea.Cmd {
+	if issue == nil || v.proj == nil {
+		return nil
+	}
+	branchName := issueToBranchName(issue)
+	prompt := buildJiraAgentPrompt(issue, extraMsg)
+
+	wf := service.NewFeatureWorkflow(v.proj, branchName, v.workflowBaseDir)
+	v.workflows = append(v.workflows, wf)
+	v.selectedWorkflow = len(v.workflows) - 1
+	v.rebuildFilter()
+
+	svc := v.services
+	ctx := v.ctx()
+	return func() tea.Msg {
+		if err := createWorkflowWorktrees(wf); err != nil {
+			return flowFromJiraDoneMsg{status: fmt.Sprintf("Worktree creation failed: %v", err)}
+		}
+		if svc == nil {
+			return flowFromJiraDoneMsg{status: "Flow engine not available"}
+		}
+		_, err := svc.Flow.Start(ctx, service.FlowStartRequest{
+			Title:    issue.Key + ": " + issue.Summary,
+			IssueKey: issue.Key,
+			Goal:     prompt,
+			WorkDir:  wf.WorkflowDir(),
+		})
+		if err != nil {
+			return flowFromJiraDoneMsg{status: fmt.Sprintf("Flow start failed: %v", err)}
+		}
+		return flowFromJiraDoneMsg{status: fmt.Sprintf("Flow started for %s (%s)", issue.Key, branchName)}
+	}
+}
+
+// createWorkflowWorktrees is a variable so tests can skip real git worktrees.
+var createWorkflowWorktrees = func(wf *service.FeatureWorkflow) error {
+	return wf.CreateAllWorktrees()
+}
+
+// handleFlowFromJiraDoneMsg reports the outcome of a flow started from Jira,
+// keeping it (unlike the worktrees-created hint) on the status line.
+func (v *WorkflowsView) handleFlowFromJiraDoneMsg(msg flowFromJiraDoneMsg) tea.Cmd {
+	v.workflowStatusMsg = msg.status
+	v.saveWorkflows()
+	return tea.Batch(v.refreshWorkflowAgentSnapCmd(), v.refreshBranchStatusCmd())
 }
 
 // startWorkflowFromJira creates a FeatureWorkflow from a Jira issue and spawns an agent.
@@ -1524,21 +1592,30 @@ func (v *WorkflowsView) renderJiraConfirmModal() string {
 	issue := v.jiraConfirmIssue
 	branch := issueToBranchName(issue)
 	input := v.jiraExtraInput.RenderPlain()
+	mode := "Agent"
+	if v.jiraFlowMode {
+		mode = "Flow (adversarial review)"
+	}
 	lines := []string{
 		"",
 		fmt.Sprintf("  Ticket: %s — %s", th.DashboardAccentStyle.Render(issue.Key), issue.Summary),
 		fmt.Sprintf("  Branch: %s", th.MutedTextStyle.Render(branch)),
+		fmt.Sprintf("  Mode:   %s", th.DashboardAccentStyle.Render(mode)),
 		"",
 		"  Custom instructions (optional):",
 		"  " + input,
 		"",
 	}
 	if wf := v.currentWorkflow(); wf != nil {
-		lines = append(lines,
-			fmt.Sprintf("  ctrl+e: Use selected workflow (%s)", th.MutedTextStyle.Render(wf.BranchName)),
-		)
+		if v.jiraFlowMode {
+			lines = append(lines, th.MutedTextStyle.Render("  ctrl+e (use selected workflow) is agent-only; switch with Tab"))
+		} else {
+			lines = append(lines,
+				fmt.Sprintf("  ctrl+e: Use selected workflow (%s)", th.MutedTextStyle.Render(wf.BranchName)),
+			)
+		}
 	}
-	lines = append(lines, "  Enter: New worktrees  Esc: Cancel")
+	lines = append(lines, "  Enter: New worktrees  Tab: Agent/Flow  Esc: Cancel")
 	return renderModal("Start Workflow from Jira", lines, modalWidth(v.width)) + "\n"
 }
 
