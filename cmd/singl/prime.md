@@ -28,7 +28,10 @@ project   set of related repos, configured in ~/.config/singularity/projects.jso
   non-alphanumerics collapsed to `-` ("PBD Development" → `pbd-development`),
   so worktree paths never contain spaces. A legacy directory named after the
   raw project name is reused if it already exists. Slashes in the branch name
-  become dashes in the directory name.
+  become dashes in the directory name. `<repo>` is the repo's path relative to
+  the project root, so a repo nested inside another (root repo `pbd-development`
+  containing `api`) lands at `<branch>/pbd-development/api`; the workflow
+  creates parents before the repos nested in them and removes deepest first.
 - Project handles are `proj-<key>` (the bare key also works); agent IDs, task IDs
   and queue IDs are opaque strings.
 - One agent per directory. The **queue scheduler enforces this**: a task whose

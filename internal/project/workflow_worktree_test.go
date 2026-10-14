@@ -226,3 +226,86 @@ func TestCreateAllWorktrees_MirrorsProjectLayout(t *testing.T) {
 		t.Errorf("workflow dir still present after cleanup: %v", err)
 	}
 }
+
+// nestedTestProject builds a root repo (pbd-development) with a sub-repo
+// living inside it, plus a flat sibling.
+func nestedTestProject(t *testing.T) *Project {
+	t.Helper()
+	root := resolvedDir(t, t.TempDir())
+	rootRepo := initWorkflowTestRepo(t, root, "pbd-development", "main")
+	defs := []RepoDef{
+		{Name: "pbd-development", Path: rootRepo, DefaultBranch: "main"},
+		{Name: "api", Path: initWorkflowTestRepo(t, rootRepo, "api", "main"), DefaultBranch: "main"},
+		{Name: "web", Path: initWorkflowTestRepo(t, rootRepo, "web", "main"), DefaultBranch: "main"},
+	}
+	return NewProject(ProjectDef{Name: "Test", Repos: defs})
+}
+
+// TestCreateAllWorktrees_NestedParentFirst: a sub-repo inside the root repo
+// must not create the root's worktree dir before the root is added. Repeated
+// to catch the former goroutine race.
+func TestCreateAllWorktrees_NestedParentFirst(t *testing.T) {
+	for i := 0; i < 5; i++ {
+		proj := nestedTestProject(t)
+		baseDir := filepath.Join(resolvedDir(t, t.TempDir()), "worktrees")
+		fw := NewFeatureWorkflow(proj, "feature/nested", baseDir)
+
+		if err := fw.CreateAllWorktrees(); err != nil {
+			t.Fatalf("run %d: CreateAllWorktrees: %v", i, err)
+		}
+		rootWT := filepath.Join(fw.WorkflowDir(), "pbd-development")
+		for name, want := range map[string]string{
+			"pbd-development": rootWT,
+			"api":             filepath.Join(rootWT, "api"),
+			"web":             filepath.Join(rootWT, "web"),
+		} {
+			wr := fw.Repos[name]
+			if wr.WorktreePath != want || !wr.WorktreeCreated || wr.Error != "" {
+				t.Fatalf("run %d: repo %s: %+v, want path %q created", i, name, wr, want)
+			}
+			if _, err := os.Stat(filepath.Join(want, "file.txt")); err != nil {
+				t.Fatalf("run %d: repo %s not checked out: %v", i, name, err)
+			}
+		}
+
+		if err := fw.RemoveAllWorktrees(); err != nil {
+			t.Fatalf("run %d: RemoveAllWorktrees: %v", i, err)
+		}
+		for name, wr := range fw.Repos {
+			if wr.WorktreeCreated || wr.Error != "" {
+				t.Errorf("run %d: repo %s not cleanly removed: %+v", i, name, wr)
+			}
+			if wts, _ := git.GetWorktrees(wr.OriginalPath); len(wts) != 1 {
+				t.Errorf("run %d: repo %s still has worktrees: %+v", i, name, wts)
+			}
+		}
+		if _, err := os.Stat(fw.WorkflowDir()); !os.IsNotExist(err) {
+			t.Errorf("run %d: workflow dir still present: %v", i, err)
+		}
+	}
+}
+
+// TestSyncRepos_NestedNewRepoUsesLayout: a repo added later that sits inside
+// another repo lands at its layout path, not directly under the workflow dir.
+func TestSyncRepos_NestedNewRepoUsesLayout(t *testing.T) {
+	proj := nestedTestProject(t)
+	var rootDef RepoDef
+	for _, r := range proj.Repos {
+		if r.Name == "pbd-development" {
+			rootDef = RepoDef{Name: r.Name, Path: r.Path, DefaultBranch: r.DefaultBranch}
+		}
+	}
+	small := NewProject(ProjectDef{Name: "Test", Repos: []RepoDef{rootDef}})
+	baseDir := filepath.Join(resolvedDir(t, t.TempDir()), "worktrees")
+	fw := NewFeatureWorkflow(small, "feature/sync-nested", baseDir)
+	if err := fw.CreateAllWorktrees(); err != nil {
+		t.Fatal(err)
+	}
+
+	fw.SyncRepos(proj, nil)
+	api := fw.Repos["api"]
+	want := filepath.Join(fw.WorkflowDir(), "pbd-development", "api")
+	if api == nil || api.WorktreePath != want || !api.WorktreeCreated || api.Error != "" {
+		t.Fatalf("api after sync: %+v, want path %q", api, want)
+	}
+}
