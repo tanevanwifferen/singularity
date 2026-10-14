@@ -144,6 +144,39 @@ func forEachRepo(repos []*WorkflowRepo, fn func(wr *WorkflowRepo)) {
 	wg.Wait()
 }
 
+// worktreeDepth is the number of path components of wr's worktree path. A
+// worktree nested inside another repo's worktree always has a strictly greater
+// depth than its ancestor.
+func worktreeDepth(wr *WorkflowRepo) int {
+	return len(strings.Split(filepath.Clean(wr.WorktreePath), string(filepath.Separator)))
+}
+
+// forEachRepoByDepth runs fn like forEachRepo, but in levels ordered by
+// worktree path depth: all repos of one depth run concurrently, and a level
+// starts only after the previous one finished. With deepestFirst false parents
+// are handled before the repos nested inside them (creation); with true,
+// children go before their parents (removal). Flat layouts form one level.
+func forEachRepoByDepth(repos []*WorkflowRepo, deepestFirst bool, fn func(wr *WorkflowRepo)) {
+	levels := map[int][]*WorkflowRepo{}
+	depths := make([]int, 0)
+	for _, wr := range repos {
+		d := worktreeDepth(wr)
+		if _, ok := levels[d]; !ok {
+			depths = append(depths, d)
+		}
+		levels[d] = append(levels[d], wr)
+	}
+	sort.Ints(depths)
+	if deepestFirst {
+		for i, j := 0, len(depths)-1; i < j; i, j = i+1, j-1 {
+			depths[i], depths[j] = depths[j], depths[i]
+		}
+	}
+	for _, d := range depths {
+		forEachRepo(levels[d], fn)
+	}
+}
+
 // SlugifyForPath converts a project name/key into a shell-friendly directory
 // name: lowercase, every run of non-alphanumeric characters collapsed to a
 // single '-', leading/trailing dashes trimmed. "PBD Development" → "pbd-development".
@@ -253,6 +286,7 @@ func (fw *FeatureWorkflow) SyncRepos(proj *Project, stop func(worktreePath strin
 	for _, r := range proj.Repos {
 		current[r.Name] = r
 	}
+	root := commonRepoRoot(proj.Repos)
 	proj.mu.RUnlock()
 
 	fw.mu.Lock()
@@ -261,10 +295,12 @@ func (fw *FeatureWorkflow) SyncRepos(proj *Project, stop func(worktreePath strin
 	for name, r := range current {
 		wr, ok := fw.Repos[name]
 		if !ok {
+			layout := repoLayoutPath(root, r.Path, r.Name)
 			wr = &WorkflowRepo{
 				RepoName:      r.Name,
 				OriginalPath:  r.Path,
-				WorktreePath:  filepath.Join(fw.BaseDir, sanitized, r.Name),
+				WorktreePath:  filepath.Join(fw.BaseDir, sanitized, layout),
+				LayoutPath:    layout,
 				DefaultBranch: r.DefaultBranch,
 			}
 			fw.Repos[name] = wr
@@ -303,7 +339,7 @@ func (fw *FeatureWorkflow) SyncRepos(proj *Project, stop func(worktreePath strin
 		}
 	})
 
-	forEachRepo(toCreate, func(wr *WorkflowRepo) {
+	forEachRepoByDepth(toCreate, false, func(wr *WorkflowRepo) {
 		path, err := ensureWorktree(wr.OriginalPath, wr.WorktreePath, fw.BranchName, wr.DefaultBranch)
 		if err != nil {
 			setResult(wr, fmt.Sprintf("create worktree: %v", err))
@@ -317,7 +353,7 @@ func (fw *FeatureWorkflow) SyncRepos(proj *Project, stop func(worktreePath strin
 		fw.mu.Unlock()
 	})
 
-	forEachRepo(toRemove, func(wr *WorkflowRepo) {
+	forEachRepoByDepth(toRemove, true, func(wr *WorkflowRepo) {
 		if err := fw.retireRepo(wr, stop); err != nil {
 			setResult(wr, err.Error())
 			return
@@ -452,9 +488,10 @@ func ensureWorktree(repoPath, worktreePath, branch, defaultBranch string) (strin
 	return worktreePath, nil
 }
 
-// CreateAllWorktrees creates worktrees for all repos in the project concurrently
-// — the workflow is per project, so every repo always gets its own worktree on
-// the same branch. Each repo's error is tracked independently, and repos that
+// CreateAllWorktrees creates worktrees for all repos in the project — the
+// workflow is per project, so every repo always gets its own worktree on the
+// same branch. Repos at the same nesting depth are created concurrently; a
+// repo whose worktree contains others is created before them. Each repo's error is tracked independently, and repos that
 // already have a worktree on the branch are adopted rather than re-created.
 func (fw *FeatureWorkflow) CreateAllWorktrees() error {
 	fw.mu.Lock()
@@ -465,7 +502,7 @@ func (fw *FeatureWorkflow) CreateAllWorktrees() error {
 	for _, wr := range fw.Repos {
 		repos = append(repos, wr)
 	}
-	forEachRepo(repos, func(wr *WorkflowRepo) {
+	forEachRepoByDepth(repos, false, func(wr *WorkflowRepo) {
 		path, err := ensureWorktree(wr.OriginalPath, wr.WorktreePath, fw.BranchName, wr.DefaultBranch)
 
 		fw.mu.Lock()
@@ -497,7 +534,8 @@ func (fw *FeatureWorkflow) CreateAllWorktrees() error {
 	return nil
 }
 
-// RemoveAllWorktrees removes worktrees for all repos concurrently.
+// RemoveAllWorktrees removes worktrees for all repos, deepest first so a parent worktree is
+// never removed while child worktrees still live inside it.
 // Missing or already-removed worktrees are handled gracefully.
 func (fw *FeatureWorkflow) RemoveAllWorktrees() error {
 	fw.mu.Lock()
@@ -510,7 +548,7 @@ func (fw *FeatureWorkflow) RemoveAllWorktrees() error {
 			repos = append(repos, wr)
 		}
 	}
-	forEachRepo(repos, func(wr *WorkflowRepo) {
+	forEachRepoByDepth(repos, true, func(wr *WorkflowRepo) {
 		err := git.RemoveWorktree(wr.OriginalPath, wr.WorktreePath, true)
 
 		fw.mu.Lock()
