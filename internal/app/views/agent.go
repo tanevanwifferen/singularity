@@ -1,6 +1,7 @@
 package views
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -110,7 +111,8 @@ type AgentView struct {
 	jiraPicker       *JiraPickerState
 	jiraConfirmIssue *service.Issue       // issue pending agent-start confirmation
 	jiraExtraInput   components.TextInput // custom instructions for the jira agent
-	jiraConfirmMode  string               // "implement" (default), "refine", or "create"
+	jiraConfirmMode  string               // "implement" (default), "flow", "refine", or "create"
+	proj             *service.Project     // enables starting Jira tickets in a flow
 
 	// Jira refine/create agent tracking. JiraService lives on v.services;
 	// jiraCfg is kept for display (base URL etc.) but credentials are
@@ -1183,10 +1185,17 @@ func (v *AgentView) View() string {
 
 		// Mode indicator
 		modeLabel := "Implement (worktree)"
-		if v.jiraConfirmMode == "refine" {
+		if v.jiraConfirmMode == "flow" {
+			modeLabel = "Implement (flow)"
+		} else if v.jiraConfirmMode == "refine" {
 			modeLabel = "Refine ticket"
 		} else if v.jiraConfirmMode == "create" {
 			modeLabel = "Create stories"
+		}
+
+		hint := "  Enter: Start   Ctrl+r: Refine   Ctrl+s: Stories   Esc: Cancel"
+		if v.proj != nil {
+			hint = "  Enter: Start   Tab: Agent/Flow   Ctrl+r: Refine   Ctrl+s: Stories   Esc: Cancel"
 		}
 
 		s.WriteString("\n")
@@ -1200,7 +1209,7 @@ func (v *AgentView) View() string {
 			"  Custom instructions (optional):",
 			"  " + input,
 			"",
-			"  Enter: Start   Ctrl+r: Refine   Ctrl+s: Stories   Esc: Cancel",
+			hint,
 		}, modalWidth(v.width)))
 		return s.String()
 	}
@@ -1388,6 +1397,7 @@ func (v *AgentView) KeyBindings() []components.KeyBinding {
 	return []components.KeyBinding{
 		{Key: "r", Description: "Refresh agent list"},
 		{Key: "n", Description: "Start new agent task"},
+		{Key: "J", Description: "Start agent from Jira ticket (Tab in the dialog toggles agent/flow)"},
 		{Key: "K", Description: "Kill selected agent"},
 		{Key: "Enter", Description: "View agent output"},
 		{Key: "d/Esc", Description: "Close output pane"},
@@ -1423,12 +1433,23 @@ func (v *AgentView) handleJiraAgentConfirm(msg tea.KeyMsg) tea.Cmd {
 		v.jiraExtraInput.Clear()
 		v.jiraConfirmMode = ""
 		switch mode {
+		case "flow":
+			return v.startFlowFromJira(issue, extraMsg)
 		case "refine":
 			return v.startRefineFromJira(issue, extraMsg)
 		case "create":
 			return v.startCreateFromJira(issue)
 		default:
 			return v.startAgentFromJira(issue, extraMsg)
+		}
+	case "tab":
+		// Toggle between running as an agent and as a flow. Tab does not
+		// collide with text editing (ctrl+w is delete-word in the input). Flows
+		// need a project's workflow worktrees, so without one it does nothing.
+		if v.jiraConfirmMode == "flow" {
+			v.jiraConfirmMode = ""
+		} else if v.proj != nil {
+			v.jiraConfirmMode = "flow"
 		}
 	case "ctrl+r":
 		// Toggle to refine mode
@@ -1472,6 +1493,54 @@ func (v *AgentView) startAgentFromJira(issue *service.Issue, extraMsg string) te
 		})
 		return AgentCreatedMsg{ID: id, Err: err}
 	}
+}
+
+// SetProject enables starting Jira tickets in a flow (workflow across the project's repos).
+func (v *AgentView) SetProject(proj *service.Project) { v.proj = proj }
+
+// createJiraWorkflowDir creates the project's workflow worktrees for a branch and
+// returns the workflow root. A variable so tests need not run git.
+var createJiraWorkflowDir = func(proj *service.Project, branch, jiraURL string) (string, error) {
+	baseDir := filepath.Join(os.TempDir(), "singularity-workflows")
+	fw := service.NewFeatureWorkflow(proj, branch, baseDir)
+	fw.JiraURL = jiraURL
+	if err := fw.CreateAllWorktrees(); err != nil {
+		return "", fmt.Errorf("create worktrees: %w", err)
+	}
+	return fw.WorkflowDir(), nil
+}
+
+// startFlowFromJira creates the project's workflow worktrees for the ticket and
+// starts an adversarial review flow (svc.Flow.Start) in the workflow root, so the
+// ticket shows up in the Flows view with its review rounds.
+func (v *AgentView) startFlowFromJira(issue *service.Issue, extraMsg string) tea.Cmd {
+	if issue == nil || v.services == nil || v.proj == nil {
+		return nil
+	}
+	svc, proj := v.services, v.proj
+	branch := issueToBranchName(issue)
+	ctx := v.ctx()
+	jiraURL := v.jiraCfg.BaseURL + "/browse/" + issue.Key
+	return func() tea.Msg {
+		return AgentCreatedMsg{Err: startJiraFlow(ctx, svc, issue, branch, proj, jiraURL, extraMsg)}
+	}
+}
+
+func startJiraFlow(ctx context.Context, svc *service.Services, issue *service.Issue, branch string, proj *service.Project, jiraURL, extraMsg string) error {
+	workDir, err := createJiraWorkflowDir(proj, branch, jiraURL)
+	if err != nil {
+		return err
+	}
+	_, err = svc.Flow.Start(ctx, service.FlowStartRequest{
+		Title:    issue.Key + ": " + issue.Summary,
+		IssueKey: issue.Key,
+		Goal:     buildJiraAgentPrompt(issue, extraMsg),
+		WorkDir:  workDir,
+	})
+	if err != nil {
+		return fmt.Errorf("start flow: %w", err)
+	}
+	return nil
 }
 
 // startRefineFromJira starts a Jira refine agent for the given issue.

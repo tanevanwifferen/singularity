@@ -284,6 +284,7 @@ func (m *Model) registerCommonViews(router *Router, repoPath string, startFKey i
 		contextFiles = m.proj.ContextFiles
 	}
 	agentView := views.NewAgentView(repoPath, contextFiles)
+	agentView.SetProject(m.proj)
 	router.Register("Agents", agentView, fkey(startFKey+3))
 	if m.cfg != nil {
 		agentView.SetJiraConfig(m.cfg.Jira)
