@@ -496,9 +496,12 @@ func (v *WorktreeView) handleCreateInput(msg tea.KeyMsg) tea.Cmd {
 	default:
 		// Handle text input for path
 		if msg.Paste && len(msg.Runes) > 0 {
-			v.newWorktreePath += string(msg.Runes)
+			v.newWorktreePath += strings.ReplaceAll(string(msg.Runes), " ", "-")
 		} else if len(msg.Runes) == 1 {
 			r := msg.Runes[0]
+			if r == ' ' {
+				r = '-'
+			}
 			if r >= 32 && r <= 126 {
 				v.newWorktreePath += string(r)
 			}
@@ -543,9 +546,12 @@ func (v *WorktreeView) handleNewBranchInput(msg tea.KeyMsg) tea.Cmd {
 		v.newWorktreeBranch = components.DeleteWordEnd(v.newWorktreeBranch)
 	default:
 		if msg.Paste && len(msg.Runes) > 0 {
-			v.newWorktreeBranch += string(msg.Runes)
+			v.newWorktreeBranch += strings.ReplaceAll(string(msg.Runes), " ", "-")
 		} else if len(msg.Runes) == 1 {
 			r := msg.Runes[0]
+			if r == ' ' {
+				r = '-'
+			}
 			if r >= 32 && r <= 126 {
 				v.newWorktreeBranch += string(r)
 			}
