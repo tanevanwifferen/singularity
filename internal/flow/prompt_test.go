@@ -195,17 +195,25 @@ func TestCommitPrompt(t *testing.T) {
 		"\n" +
 		"## Your task\n" +
 		"\n" +
-		"Run `git status` and `git diff` to see what changed. Stage everything relevant\n" +
-		"to the goal above and commit it with a message that describes what changed and\n" +
-		"why, in your own words — do not just repeat the goal verbatim. Do not push, and\n" +
-		"do not create or switch branches.\n" +
+		"The working directory may itself be a git repository, may contain nested git\n" +
+		"repositories (checkouts inside it, at any depth — two, three or more levels\n" +
+		"down), or both. Find every repository, not just the ones directly inside the\n" +
+		"working directory (for example with `find . -name .git -not -path '*/node_modules/*'`),\n" +
+		"and check each of them.\n" +
 		"\n" +
-		"If the working tree is already clean — nothing to commit — say so and stop;\n" +
-		"that is not an error.\n" +
+		"In every repository, run `git status` and `git diff` to see what changed. Stage\n" +
+		"everything relevant to the goal above and commit it with a message that\n" +
+		"describes what changed and why, in your own words — do not just repeat the goal\n" +
+		"verbatim. Do not push, and do not create or switch branches.\n" +
+		"\n" +
+		"If a repository's working tree is already clean — nothing to commit — skip it;\n" +
+		"that is not an error. If every repository is clean, say so and stop.\n" +
 		"\n" +
 		"## When you are done\n" +
 		"\n" +
-		"Report the commit you made (or that there was nothing to commit).\n" +
+		"Report each commit you made, naming its repository by its path relative to the\n" +
+		"working directory (not just the directory's name), or that there was nothing\n" +
+		"to commit.\n" +
 		""
 	if got := CommitPrompt(testFlow()); got != wantCommit {
 		t.Errorf("CommitPrompt():\n%s\nwant:\n%s", got, wantCommit)
