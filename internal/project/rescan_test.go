@@ -149,3 +149,30 @@ func TestRescanReposRefusesToDropMostRepos(t *testing.T) {
 		t.Errorf("len(Repos) = %d after refused rescan, want 4", got)
 	}
 }
+
+func TestSetReposReplacesInPlaceKeepingRepoInfo(t *testing.T) {
+	p := NewProject(ProjectDef{
+		Name: "test",
+		Repos: []RepoDef{
+			{Name: "kept", Path: "/old/kept", DefaultBranch: "main"},
+			{Name: "gone", Path: "/old/gone", DefaultBranch: "main"},
+		},
+	})
+	kept := p.GetRepo("kept")
+	kept.Error = "marker"
+
+	p.SetRepos([]RepoDef{
+		{Name: "kept", Path: "/new/kept", DefaultBranch: "develop"},
+		{Name: "added", Path: "/new/added", DefaultBranch: "main"},
+	})
+
+	if got := p.GetRepo("kept"); got != kept || got.Path != "/new/kept" || got.DefaultBranch != "develop" || got.Error != "marker" {
+		t.Errorf("kept repo = %+v, want same *Repo with updated path/branch", got)
+	}
+	if p.GetRepo("gone") != nil {
+		t.Error("gone repo still present")
+	}
+	if got := p.GetRepo("added"); got == nil || got.Path != "/new/added" {
+		t.Errorf("added repo = %+v", got)
+	}
+}

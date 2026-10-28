@@ -76,6 +76,12 @@ type ProjectView struct {
 
 	// Update repos state (u): rescan disk for added/removed/moved repos
 	updateReposResult string
+	updatingRepos     bool
+
+	// handle identifies proj to the daemon's ProjectService. Empty for a
+	// project discovered from a path (no config entry), which falls back to
+	// an in-memory rescan.
+	handle service.ProjectHandle
 
 	// Shared confirmation dialog, reused for MR creation, reset-all, detach-all,
 	// sync-to-worktrees and checkout-all-main (only one can be open at a time).
@@ -117,6 +123,102 @@ func NewProjectViewWithPath(projectPath string) *ProjectView {
 // SetProject updates the project reference.
 func (v *ProjectView) SetProject(proj *service.Project) {
 	v.proj = proj
+	v.loadData()
+}
+
+// SetHandle sets the daemon handle of the project, used by 'u' to rescan
+// through ProjectService.UpdateRepos.
+func (v *ProjectView) SetHandle(handle service.ProjectHandle) {
+	v.handle = handle
+}
+
+// ProjectReposUpdatedMsg reports the result of a daemon-side repo rescan
+// started with 'u'. The app routes it to the project view (whatever view
+// is active by then) and reloads the workflows view, whose persisted
+// workflows the daemon has just synced.
+type ProjectReposUpdatedMsg struct {
+	Result *service.ProjectRepoUpdate
+	Info   *service.ProjectInfo
+	Err    error
+}
+
+// updateReposCmd rescans the project's repos through the daemon: the config
+// is updated and every workflow's worktrees are reconciled with the new
+// repo set (nested subrepos included). It then fetches the fresh Info so
+// the in-memory project can be brought in line.
+func (v *ProjectView) updateReposCmd() tea.Cmd {
+	svc, handle := v.services, v.handle
+	return func() tea.Msg {
+		res, err := svc.Project.UpdateRepos(v.ctx(), handle, "")
+		if err != nil {
+			return ProjectReposUpdatedMsg{Result: res, Err: err}
+		}
+		info, err := svc.Project.Info(v.ctx(), handle)
+		return ProjectReposUpdatedMsg{Result: res, Info: info, Err: err}
+	}
+}
+
+// HandleReposUpdated applies a finished daemon rescan: the shared project
+// gets the daemon's repo list and the result is shown as a flash message.
+func (v *ProjectView) HandleReposUpdated(msg ProjectReposUpdatedMsg) {
+	v.updatingRepos = false
+	if msg.Info != nil && v.proj != nil {
+		defs := make([]service.RepoDef, 0, len(msg.Info.Repos))
+		for _, r := range msg.Info.Repos {
+			defs = append(defs, service.RepoDef{Name: r.Name, Path: r.Path, DefaultBranch: r.DefaultBranch})
+		}
+		v.proj.SetRepos(defs)
+	}
+
+	var lines []string
+	if res := msg.Result; res != nil {
+		for _, name := range res.Added {
+			lines = append(lines, fmt.Sprintf("✓ + %s (added)", name))
+		}
+		for _, name := range res.Removed {
+			lines = append(lines, fmt.Sprintf("✗ - %s (removed)", name))
+		}
+		for _, name := range res.Moved {
+			lines = append(lines, fmt.Sprintf("✓ ~ %s (moved)", name))
+		}
+		for _, wf := range res.Workflows {
+			lines = append(lines, fmt.Sprintf("✓ workflow %s: worktrees synced", wf))
+		}
+		for _, e := range res.WorkflowErrors {
+			lines = append(lines, fmt.Sprintf("✗ workflow %s", e))
+		}
+	}
+	switch {
+	case msg.Err != nil:
+		lines = append(lines, fmt.Sprintf("✗ update repos: %v", msg.Err))
+	case len(lines) == 0:
+		lines = append(lines, "✓ no changes — repos and workflow worktrees match the disk")
+	}
+	v.updateReposResult = strings.Join(lines, "\n")
+	v.loadData()
+}
+
+// rescanReposLocally is the fallback for a project without a daemon handle:
+// it reconciles the in-memory repo list only.
+func (v *ProjectView) rescanReposLocally() {
+	added, removed, moved, err := v.proj.RescanRepos(v.projectPath)
+	if err != nil {
+		v.updateReposResult = fmt.Sprintf("✗ update repos: %v", err)
+	} else if len(added) == 0 && len(removed) == 0 && len(moved) == 0 {
+		v.updateReposResult = "✓ no changes — repos on disk match the project"
+	} else {
+		var lines []string
+		for _, name := range added {
+			lines = append(lines, fmt.Sprintf("✓ + %s (added)", name))
+		}
+		for _, name := range removed {
+			lines = append(lines, fmt.Sprintf("✗ - %s (removed)", name))
+		}
+		for _, name := range moved {
+			lines = append(lines, fmt.Sprintf("✓ ~ %s (moved)", name))
+		}
+		v.updateReposResult = strings.Join(lines, "\n")
+	}
 	v.loadData()
 }
 
@@ -361,7 +463,7 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.checkoutAllMainResult != "" {
 			v.checkoutAllMainResult = ""
 		}
-		if v.updateReposResult != "" {
+		if v.updateReposResult != "" && !v.updatingRepos {
 			v.updateReposResult = ""
 		}
 
@@ -672,27 +774,17 @@ func (v *ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.branchExistence = nil
 		case "u":
 			// Rescan disk for repos added/removed/moved since the project
-			// was last loaded, and reconcile the project's repo list.
-			if v.proj != nil {
-				added, removed, moved, err := v.proj.RescanRepos(v.projectPath)
-				if err != nil {
-					v.updateReposResult = fmt.Sprintf("✗ update repos: %v", err)
-				} else if len(added) == 0 && len(removed) == 0 && len(moved) == 0 {
-					v.updateReposResult = "✓ no changes — repos on disk match the project"
-				} else {
-					var lines []string
-					for _, name := range added {
-						lines = append(lines, fmt.Sprintf("✓ + %s (added)", name))
-					}
-					for _, name := range removed {
-						lines = append(lines, fmt.Sprintf("✗ - %s (removed)", name))
-					}
-					for _, name := range moved {
-						lines = append(lines, fmt.Sprintf("✓ ~ %s (moved)", name))
-					}
-					v.updateReposResult = strings.Join(lines, "\n")
-				}
-				v.loadData()
+			// was last loaded. With a daemon handle this persists the
+			// config and syncs every workflow's (nested) worktrees;
+			// without one only the in-memory repo list is reconciled.
+			switch {
+			case v.proj == nil || v.updatingRepos:
+			case v.services != nil && v.services.Project != nil && v.handle != "":
+				v.updatingRepos = true
+				v.updateReposResult = "… rescanning repos and syncing workflow worktrees"
+				return v, v.updateReposCmd()
+			default:
+				v.rescanReposLocally()
 			}
 		case "/":
 			if v.filter != nil {
@@ -986,7 +1078,7 @@ func (v *ProjectView) KeyBindings() []components.KeyBinding {
 		{Key: "b", Description: "Check if branch exists in all repos"},
 		{Key: "/", Description: "Filter"},
 		{Key: "r", Description: "Refresh all repos"},
-		{Key: "u", Description: "Update repos: rescan disk for added/removed/moved repos"},
+		{Key: "u", Description: "Update repos: rescan disk for added/removed/moved repos (nested subrepos included), save the project and sync every workflow's worktrees"},
 		{Key: "X", Description: "Reset ALL repos to main (destructive)"},
 		{Key: "D", Description: "Checkout all worktrees of all repos as detached HEAD"},
 		{Key: "W", Description: "Sync main dir to worktree HEADs (detached)"},

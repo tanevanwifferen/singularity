@@ -34,10 +34,11 @@ type Model struct {
 	layout          *Layout
 	connStatus      ConnectionStatus
 	projectMode     bool
-	activeRepoIdx   int                         // index of active repo in project (for [ / ] cycling)
-	projectKeys     []string                    // loaded project keys (for < / > cycling)
-	projectIdx      int                         // index of the active project in projectKeys
-	projects        map[string]*service.Project // all projects, loaded up front and switched in memory
+	activeRepoIdx   int                              // index of active repo in project (for [ / ] cycling)
+	projectKeys     []string                         // loaded project keys (for < / > cycling)
+	projectIdx      int                              // index of the active project in projectKeys
+	projects        map[string]*service.Project      // all projects, loaded up front and switched in memory
+	handles         map[string]service.ProjectHandle // daemon handle per project key
 	cfg             *config.Config
 
 	// agentCancel cancels the goroutine subscribed to AgentService events.
@@ -86,10 +87,12 @@ func (m *Model) SetProject(proj *service.Project) {
 
 // SetProjects installs every loaded project at once and activates activeKey.
 // Projects carry no load state after this point: < / > switching just points
-// the views at another entry of the map.
-func (m *Model) SetProjects(keys []string, projects map[string]*service.Project, activeKey string) {
+// the views at another entry of the map. handles maps each key to the
+// daemon's ProjectHandle for it (may be nil or partial).
+func (m *Model) SetProjects(keys []string, projects map[string]*service.Project, handles map[string]service.ProjectHandle, activeKey string) {
 	m.projectKeys = keys
 	m.projects = projects
+	m.handles = handles
 	m.projectIdx = 0
 	for i, k := range keys {
 		if k == activeKey {
@@ -423,6 +426,7 @@ func (m *Model) initProjectRouter() {
 
 	// Create the project overview view as the first view (landing page)
 	projectView := views.NewProjectView(m.proj)
+	projectView.SetHandle(m.activeHandle())
 
 	router := NewRouter(projectView, "Project")
 	router.viewKeys["Project"] = "f1"
@@ -622,6 +626,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleRefreshMsg(msg)
 	case views.ConfigSavedMsg:
 		return m.handleConfigSavedMsg(msg)
+	case views.ProjectReposUpdatedMsg:
+		return m.handleProjectReposUpdatedMsg(msg)
 	case views.ViewChangeMsg:
 		return m.handleViewChangeMsg(msg)
 	}
@@ -698,6 +704,28 @@ func (m Model) handleRefreshMsg(msg views.RefreshMsg) (tea.Model, tea.Cmd) {
 		if av, ok := m.router.ActiveView().(interface{ Refresh() error }); ok {
 			av.Refresh()
 		}
+	}
+	return m, nil
+}
+
+// activeHandle returns the daemon handle of the active project, or "" when
+// none is known (e.g. a project discovered from a path).
+func (m *Model) activeHandle() service.ProjectHandle {
+	if m.projectIdx < 0 || m.projectIdx >= len(m.projectKeys) {
+		return ""
+	}
+	return m.handles[m.projectKeys[m.projectIdx]]
+}
+
+// handleProjectReposUpdatedMsg applies a finished project repo rescan: the
+// project view takes the new repo list, and the workflows view reloads the
+// workflows the daemon just synced from disk.
+func (m Model) handleProjectReposUpdatedMsg(msg views.ProjectReposUpdatedMsg) (tea.Model, tea.Cmd) {
+	if pv := m.getProjectView(); pv != nil {
+		pv.HandleReposUpdated(msg)
+	}
+	if wv := m.getWorkflowsView(); wv != nil {
+		wv.ReloadWorkflows()
 	}
 	return m, nil
 }

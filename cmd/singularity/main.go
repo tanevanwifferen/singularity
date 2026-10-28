@@ -305,10 +305,12 @@ func runTUI(args []string) int {
 		}
 		if sel != nil {
 			projects := make(map[string]*service.Project, len(sel.Keys))
+			handles := make(map[string]service.ProjectHandle, len(sel.Keys))
 			for _, key := range sel.Keys {
 				projects[key] = service.NewProjectFromInfo(sel.Infos[key])
+				handles[key] = sel.Infos[key].Handle
 			}
-			a.SetProjects(sel.Keys, projects, sel.Key)
+			a.SetProjects(sel.Keys, projects, handles, sel.Key)
 			fmt.Printf("Loaded %d project(s); opening %s.\n", len(sel.Keys), sel.Infos[sel.Key].Name)
 		}
 	}
