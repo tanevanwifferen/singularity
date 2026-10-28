@@ -2,6 +2,7 @@ package project
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -76,7 +77,7 @@ func TestRescanReposNoChanges(t *testing.T) {
 	}
 }
 
-func TestRescanReposEmptyDirFallsBackToFirstRepoParent(t *testing.T) {
+func TestRescanReposEmptyDirScansSingleRepo(t *testing.T) {
 	root := t.TempDir()
 	repoPath := filepath.Join(root, "solo")
 	initGitRepo(t, repoPath)
@@ -92,5 +93,59 @@ func TestRescanReposEmptyDirFallsBackToFirstRepoParent(t *testing.T) {
 	}
 	if len(added) != 0 || len(removed) != 0 || len(moved) != 0 {
 		t.Errorf("expected no changes, got added=%v removed=%v moved=%v", added, removed, moved)
+	}
+}
+
+// nestedProject builds a top repo with nested repos, like pbd-development.
+func nestedProject(t *testing.T) (top string, p *Project) {
+	t.Helper()
+	top = filepath.Join(t.TempDir(), "top")
+	initGitRepo(t, top)
+	defs := []RepoDef{{Name: "top", Path: top, DefaultBranch: "main"}}
+	for _, n := range []string{"api", "web", "worker"} {
+		path := filepath.Join(top, n)
+		initGitRepo(t, path)
+		defs = append(defs, RepoDef{Name: n, Path: path, DefaultBranch: "main"})
+	}
+	return top, NewProject(ProjectDef{Name: "nested", Repos: defs})
+}
+
+func TestRescanReposEmptyDirKeepsNestedRepos(t *testing.T) {
+	_, p := nestedProject(t)
+
+	added, removed, moved, err := p.RescanRepos("")
+	if err != nil {
+		t.Fatalf("RescanRepos: %v", err)
+	}
+	if len(added)+len(removed)+len(moved) != 0 {
+		t.Errorf("expected no changes, got added=%v removed=%v moved=%v", added, removed, moved)
+	}
+	if got := len(p.Repos); got != 4 {
+		t.Errorf("len(Repos) = %d, want 4 (nested repos must survive a rescan)", got)
+	}
+}
+
+func TestRescanReposPrefersConfiguredRoot(t *testing.T) {
+	top, p := nestedProject(t)
+	p.RootDir = top
+
+	if _, _, _, err := p.RescanRepos(""); err != nil {
+		t.Fatalf("RescanRepos: %v", err)
+	}
+	if got := len(p.Repos); got != 4 {
+		t.Errorf("len(Repos) = %d, want 4", got)
+	}
+}
+
+func TestRescanReposRefusesToDropMostRepos(t *testing.T) {
+	top, p := nestedProject(t)
+
+	// Scanning the parent of the top repo finds only the top repo.
+	_, _, _, err := p.RescanRepos(filepath.Dir(top))
+	if err == nil || !strings.Contains(err.Error(), "refusing") {
+		t.Fatalf("err = %v, want a refusal", err)
+	}
+	if got := len(p.Repos); got != 4 {
+		t.Errorf("len(Repos) = %d after refused rescan, want 4", got)
 	}
 }

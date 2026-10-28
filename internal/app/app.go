@@ -320,6 +320,11 @@ func (m *Model) registerCommonViews(router *Router, repoPath string, startFKey i
 	router.Register("Rebase", rebaseView)
 
 	worktreeView := views.NewWorktreeView(repoPath)
+	// Project mode: "new worktree" spans every repo, not just repoPath. m.proj
+	// can stay set while drilled into one repo, so gate on projectMode.
+	if m.projectMode {
+		worktreeView.SetProject(m.proj)
+	}
 	router.Register("Worktrees", worktreeView)
 
 	pipelineView := views.NewPipelineView(repoPath)
@@ -457,6 +462,11 @@ func (m *Model) initProjectRouter() {
 	// Flows with the start modal already open on the selected workflow.
 	if flowsView, ok := router.GetView("Flows").(*views.FlowsView); ok {
 		workflowsView.SetFlowsView(flowsView)
+	}
+
+	// Worktrees created for the whole project show up as a workflow.
+	if worktreeView, ok := router.GetView("Worktrees").(*views.WorktreeView); ok {
+		worktreeView.SetWorkflowsView(workflowsView)
 	}
 
 	// Project-specific submenu views

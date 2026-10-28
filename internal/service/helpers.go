@@ -67,6 +67,7 @@ func NewProjectFromInfo(info *ProjectInfo) *Project {
 	def := ProjectDef{
 		Name:         info.Name,
 		ContextFiles: info.ContextFiles,
+		Root:         info.Root,
 	}
 	for _, r := range info.Repos {
 		def.Repos = append(def.Repos, RepoDef{

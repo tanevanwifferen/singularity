@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/app/clipboard"
@@ -18,6 +19,8 @@ import (
 type WorktreeView struct {
 	viewBase
 	repo      *service.RepoInfo
+	proj      *service.Project // project mode: new worktrees span all repos
+	workflows *WorkflowsView   // project mode: receives the workflow a create makes
 	worktrees []service.Worktree
 	filter    *components.Filter[service.Worktree]
 	loading   bool
@@ -70,6 +73,21 @@ func NewWorktreeView(repoPath string) *WorktreeView {
 	v.filter.SetHeight(v.height)
 
 	return v
+}
+
+// SetProject enables project mode: creating a worktree makes one on the same
+// branch in every repo of the project instead of only the active repo.
+func (v *WorktreeView) SetProject(proj *service.Project) { v.proj = proj }
+
+// SetWorkflowsView wires the Workflows view that adopts workflows created in
+// project mode, so they get push/MR/agent/cleanup like any other workflow.
+func (v *WorktreeView) SetWorkflowsView(wv *WorkflowsView) { v.workflows = wv }
+
+// projectWorktreesCreatedMsg carries the workflow a project-mode create
+// built, back to Update so the Workflows view is touched on the UI loop.
+type projectWorktreesCreatedMsg struct {
+	wf  *service.FeatureWorkflow
+	err error
 }
 
 // Init initializes the worktree view.
@@ -232,6 +250,28 @@ func (v *WorktreeView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case RefreshDoneMsg:
 		v.loading = false
+
+	case projectWorktreesCreatedMsg:
+		if msg.wf != nil && v.workflows != nil {
+			// Skip a workflow where every create failed: nothing to manage.
+			for _, wr := range msg.wf.Repos {
+				if wr.WorktreeCreated {
+					v.workflows.AdoptWorkflow(msg.wf)
+					break
+				}
+			}
+		}
+		if msg.err != nil {
+			v.err = fmt.Errorf("failed to create worktrees: %w", msg.err)
+		} else {
+			v.err = nil
+			v.flashMsg = fmt.Sprintf("✓ worktrees created for '%s' in %d repos — see Workflows", msg.wf.BranchName, len(msg.wf.Repos))
+		}
+		v.loading = true
+		return v, func() tea.Msg {
+			v.loadData()
+			return RefreshDoneMsg{}
+		}
 
 	case worktreeLockDoneMsg:
 		if msg.err != nil {
@@ -459,9 +499,12 @@ func (v *WorktreeView) handleRebaseConfirm(msg tea.KeyMsg) tea.Cmd {
 
 // handleCreateInput handles key events during worktree creation.
 func (v *WorktreeView) handleCreateInput(msg tea.KeyMsg) tea.Cmd {
+	if v.proj != nil {
+		return v.handleProjectCreateInput(msg)
+	}
 	switch msg.String() {
 	case "enter":
-		// If we have a branch selected, create the worktree
+		// If we have a branch selected, create the worktree.
 		if v.newWorktreePath != "" && v.newWorktreeBranch != "" {
 			v.loading = true
 			path := v.newWorktreePath
@@ -510,6 +553,70 @@ func (v *WorktreeView) handleCreateInput(msg tea.KeyMsg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// handleProjectCreateInput handles the create dialog in project mode, where
+// every key is branch-name text (so 'b' is typed, not a toggle) except
+// enter/esc/ctrl+w. Whether the branch is new or existing is decided per repo
+// when the worktree is created, so there is nothing to toggle.
+func (v *WorktreeView) handleProjectCreateInput(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "enter":
+		branch := v.newWorktreeBranch
+		v.showCreate = false
+		v.newWorktreeBranch = ""
+		if branch == "" {
+			return nil
+		}
+		v.loading = true
+		return func() tea.Msg {
+			wf, err := v.createProjectWorktrees(branch)
+			return projectWorktreesCreatedMsg{wf: wf, err: err}
+		}
+	case "esc":
+		v.showCreate = false
+		v.newWorktreeBranch = ""
+	case "ctrl+w":
+		v.newWorktreeBranch = components.DeleteWordEnd(v.newWorktreeBranch)
+	default:
+		if msg.Paste && len(msg.Runes) > 0 {
+			v.newWorktreeBranch += strings.ReplaceAll(string(msg.Runes), " ", "-")
+		} else if len(msg.Runes) == 1 {
+			r := msg.Runes[0]
+			if r == ' ' {
+				r = '-'
+			}
+			if r >= 32 && r <= 126 {
+				v.newWorktreeBranch += string(r)
+			}
+		} else if msg.String() == "backspace" && len(v.newWorktreeBranch) > 0 {
+			v.newWorktreeBranch = v.newWorktreeBranch[:len(v.newWorktreeBranch)-1]
+		}
+	}
+	return nil
+}
+
+// createProjectWorktrees makes one worktree per project repo on branch, laid
+// out under the project's workflow dir (existing ones are adopted). The
+// workflow is returned even on partial failure so the repos that did get a
+// worktree can be managed; the error names the repos that failed.
+func (v *WorktreeView) createProjectWorktrees(branch string) (*service.FeatureWorkflow, error) {
+	wf := service.NewFeatureWorkflow(v.proj, branch, service.DefaultWorkflowBaseDir(v.proj.Name))
+	err := createWorkflowWorktrees(wf)
+	if err == nil {
+		return wf, nil
+	}
+	var failed []string
+	for name, wr := range wf.Repos {
+		if wr.Error != "" {
+			failed = append(failed, fmt.Sprintf("%s (%s)", name, wr.Error))
+		}
+	}
+	sort.Strings(failed)
+	if len(failed) == 0 {
+		return wf, err
+	}
+	return wf, fmt.Errorf("%w: %s", err, strings.Join(failed, "; "))
 }
 
 // handleBranchPicker handles key events during branch selection.
@@ -815,7 +922,11 @@ func (v *WorktreeView) View() string {
 		s.WriteString("\n")
 		s.WriteString(th.DashboardTitle.Render(" │                                            │"))
 		s.WriteString("\n")
-		s.WriteString(fmt.Sprintf(" │ Path: %s%s", v.newWorktreePath, strings.Repeat(" ", max(0, 40-len(v.newWorktreePath)))))
+		if v.proj != nil {
+			s.WriteString(th.Help.Render(fmt.Sprintf(" │ Creates a worktree in all %d repos of the project", len(v.proj.Repos))))
+		} else {
+			s.WriteString(fmt.Sprintf(" │ Path: %s%s", v.newWorktreePath, strings.Repeat(" ", max(0, 40-len(v.newWorktreePath)))))
+		}
 		s.WriteString("\n")
 		s.WriteString(fmt.Sprintf(" │ Branch: %s%s", v.newWorktreeBranch, strings.Repeat(" ", max(0, 37-len(v.newWorktreeBranch)))))
 		s.WriteString("\n")
@@ -823,7 +934,9 @@ func (v *WorktreeView) View() string {
 		s.WriteString("\n")
 		s.WriteString(th.DashboardTitle.Render(" │ Press Enter to create, Esc to cancel      │"))
 		s.WriteString("\n")
-		if v.createNewBranch {
+		if v.proj != nil {
+			s.WriteString(th.Help.Render(" │ Existing branches are reused, others created"))
+		} else if v.createNewBranch {
 			s.WriteString(th.DashboardAccentStyle.Render(" │ [b] Use existing branch (currently new)   │"))
 		} else {
 			s.WriteString(th.Help.Render(" │ [b] Create new branch                      │"))

@@ -6,21 +6,26 @@ import (
 	"sort"
 )
 
-// RescanRepos scans dir (or, if empty, the parent directory of the
-// project's first repo) for git repositories and reconciles p.Repos to
-// match what's on disk: repos found on disk but missing from the project
-// are added, repos in the project but no longer on disk are removed, and
-// repos whose directory moved have their Path updated in place. Returns the
-// names of repos added, removed and moved (each sorted).
+// RescanRepos scans dir (or, if empty, the project's scan root; see
+// defaultScanDir) for git repositories and reconciles p.Repos to match
+// what's on disk: repos found on disk but missing from the project are
+// added, repos in the project but no longer on disk are removed, and repos
+// whose directory moved have their Path updated in place. Returns the names
+// of repos added, removed and moved (each sorted).
+//
+// A scan that would drop most of the project's repos is refused with an
+// error and p.Repos is left untouched: that is what scanning the wrong
+// directory looks like, and a project cut down to one repo silently breaks
+// every multi-repo operation that shares it.
 func (p *Project) RescanRepos(dir string) (added, removed, moved []string, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if dir == "" {
-		if len(p.Repos) == 0 {
-			return nil, nil, nil, fmt.Errorf("no directory to scan: project has no repos and none was given")
+		dir, err = p.defaultScanDir()
+		if err != nil {
+			return nil, nil, nil, err
 		}
-		dir = filepath.Dir(p.Repos[0].Path)
 	}
 
 	cfg, err := GenerateConfigFromDir(dir)
@@ -40,6 +45,16 @@ func (p *Project) RescanRepos(dir string) (added, removed, moved []string, err e
 	existingByName := make(map[string]*Repo, len(p.Repos))
 	for _, r := range p.Repos {
 		existingByName[r.Name] = r
+	}
+
+	var missing int
+	for _, r := range p.Repos {
+		if _, ok := foundByName[r.Name]; !ok {
+			missing++
+		}
+	}
+	if missing >= 2 && missing*2 > len(p.Repos) {
+		return nil, nil, nil, fmt.Errorf("refusing to rescan %s: it would remove %d of %d repos (wrong scan directory?)", dir, missing, len(p.Repos))
 	}
 
 	var kept []*Repo
@@ -67,4 +82,31 @@ func (p *Project) RescanRepos(dir string) (added, removed, moved []string, err e
 	sort.Strings(moved)
 	p.Repos = kept
 	return added, removed, moved, nil
+}
+
+// defaultScanDir picks the directory to rescan when the caller named none.
+// The configured RootDir wins. Otherwise it is the deepest directory shared
+// by every repo path: that is the top repo itself when the project is a repo
+// with nested repos (pbd-development), and the common parent for sibling
+// repos. Scanning the parent of the first repo would miss every nested repo.
+// Callers hold p.mu.
+func (p *Project) defaultScanDir() (string, error) {
+	if p.RootDir != "" {
+		return p.RootDir, nil
+	}
+	ancestor := ""
+	for _, r := range p.Repos {
+		if r.Path == "" {
+			continue
+		}
+		if ancestor == "" {
+			ancestor = filepath.Clean(r.Path)
+			continue
+		}
+		ancestor = commonDir(ancestor, filepath.Clean(r.Path))
+	}
+	if ancestor == "" {
+		return "", fmt.Errorf("no directory to scan: project has no repos and none was given")
+	}
+	return ancestor, nil
 }

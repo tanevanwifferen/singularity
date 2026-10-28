@@ -175,6 +175,36 @@ func (v *WorkflowsView) SetProject(proj *service.Project) {
 	v.proj = proj
 }
 
+// AdoptWorkflow adds wf to the view and persists it, replacing an existing
+// workflow on the same branch (keeping its agent, Jira link and push/MR
+// state). Persisted workflows are loaded first so saving never drops them
+// when the view has not been opened yet.
+func (v *WorkflowsView) AdoptWorkflow(wf *service.FeatureWorkflow) {
+	v.loadWorkflows()
+	idx := -1
+	for i, old := range v.workflows {
+		if old.BranchName != wf.BranchName {
+			continue
+		}
+		idx = i
+		wf.AgentID, wf.JiraURL, wf.CreatedAt = old.AgentID, old.JiraURL, old.CreatedAt
+		for name, wr := range wf.Repos {
+			if o := old.Repos[name]; o != nil {
+				wr.Pushed, wr.MRURL, wr.MRTitle = o.Pushed, o.MRURL, o.MRTitle
+			}
+		}
+		v.workflows[i] = wf
+		break
+	}
+	if idx < 0 {
+		v.workflows = append(v.workflows, wf)
+		idx = len(v.workflows) - 1
+	}
+	v.selectedWorkflow = idx
+	v.rebuildFilter()
+	v.saveWorkflows()
+}
+
 // SetWorkflowDiffView wires the drill-down diff view for showing workflow changes.
 func (v *WorkflowsView) SetWorkflowDiffView(dv *WorkflowDiffView) {
 	v.workflowDiffView = dv

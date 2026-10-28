@@ -14,7 +14,11 @@ type Project struct {
 	Name         string
 	Repos        []*Repo
 	ContextFiles []string // Paths to files injected into agent prompts
-	mu           sync.RWMutex
+	// RootDir is the configured scan root (ProjectDef.Root); empty when the
+	// project was written by hand. RescanRepos scans it in preference to
+	// guessing a directory from the repo paths.
+	RootDir string
+	mu      sync.RWMutex
 }
 
 // Repo represents a single repository within a project
@@ -69,6 +73,7 @@ func NewProject(def ProjectDef) *Project {
 		Name:         def.Name,
 		Repos:        repos,
 		ContextFiles: def.ContextFiles,
+		RootDir:      def.Root,
 	}
 }
 
