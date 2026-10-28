@@ -523,6 +523,7 @@ func buildProjectInfo(handle service.ProjectHandle, key string, p *project.Proje
 		Key:          key,
 		Name:         p.Name,
 		Loaded:       true,
+		Root:         p.RootDir,
 		ContextFiles: p.ContextFiles,
 	}
 	for _, r := range p.Repos {

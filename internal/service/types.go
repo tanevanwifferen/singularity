@@ -435,6 +435,9 @@ type ProjectInfo struct {
 	Name   string        `json:"name"`
 	Repos  []RepoSummary `json:"repos"`
 	Loaded bool          `json:"loaded"`
+	// Root is the project's configured scan root, so a client rebuilding a
+	// *Project keeps rescans anchored to it instead of guessing.
+	Root string `json:"root,omitempty"`
 	// ContextFiles are the project's configured agent-context file paths.
 	// Carried over the wire so a client rebuilding a *Project from this
 	// DTO keeps cross-repo context injection working.

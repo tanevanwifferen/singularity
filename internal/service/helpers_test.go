@@ -44,3 +44,10 @@ func TestNewProjectFromInfoNil(t *testing.T) {
 		t.Errorf("NewProjectFromInfo(nil) = %+v, want nil", proj)
 	}
 }
+
+func TestNewProjectFromInfoKeepsRoot(t *testing.T) {
+	proj := NewProjectFromInfo(&ProjectInfo{Name: "pbd", Root: "/code/pbd", Repos: []RepoSummary{{Name: "pbd", Path: "/code/pbd"}}})
+	if proj.RootDir != "/code/pbd" {
+		t.Errorf("RootDir = %q, want the configured root carried over", proj.RootDir)
+	}
+}
