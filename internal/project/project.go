@@ -77,6 +77,31 @@ func NewProject(def ProjectDef) *Project {
 	}
 }
 
+// SetRepos replaces p's repo list in place with defs, so every view holding
+// this *Project sees the new set (e.g. after the daemon rescanned the
+// project's repos). A repo that is kept (same name) keeps its *Repo and
+// loaded git info, with Path and DefaultBranch updated from defs.
+func (p *Project) SetRepos(defs []RepoDef) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	byName := make(map[string]*Repo, len(p.Repos))
+	for _, r := range p.Repos {
+		byName[r.Name] = r
+	}
+	repos := make([]*Repo, 0, len(defs))
+	for _, rd := range defs {
+		r, ok := byName[rd.Name]
+		if !ok {
+			r = &Repo{Name: rd.Name}
+		}
+		r.Path = rd.Path
+		r.DefaultBranch = rd.DefaultBranch
+		repos = append(repos, r)
+	}
+	p.Repos = repos
+}
+
 // Root returns the deepest directory that contains every repo in the project
 // — the on-disk tree the repos were checked out into. A single-repo project
 // roots at that repo's parent, so its layout path is just the repo directory.

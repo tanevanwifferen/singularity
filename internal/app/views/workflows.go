@@ -243,6 +243,33 @@ func (v *WorkflowsView) loadWorkflows() {
 	v.rebuildFilter()
 }
 
+// ReloadWorkflows replaces the in-memory workflows with what is persisted
+// on disk, keeping the selection on the same branch when it still exists.
+// Called after the daemon synced the workflows' worktrees (project 'u'), so
+// a later save here does not overwrite that sync with stale state.
+func (v *WorkflowsView) ReloadWorkflows() {
+	if v.proj == nil {
+		return
+	}
+	loaded, err := service.LoadWorkflows(v.proj.Name, v.proj)
+	if err != nil {
+		return
+	}
+	selected := ""
+	if wf := v.currentWorkflow(); wf != nil {
+		selected = wf.BranchName
+	}
+	v.workflows = loaded
+	v.selectedWorkflow = 0
+	for i, wf := range loaded {
+		if wf.BranchName == selected {
+			v.selectedWorkflow = i
+			break
+		}
+	}
+	v.rebuildFilter()
+}
+
 func (v *WorkflowsView) rebuildFilter() {
 	items := make([]*service.FeatureWorkflow, len(v.workflows))
 	copy(items, v.workflows)

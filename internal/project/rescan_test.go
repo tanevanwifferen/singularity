@@ -149,3 +149,68 @@ func TestRescanReposRefusesToDropMostRepos(t *testing.T) {
 		t.Errorf("len(Repos) = %d after refused rescan, want 4", got)
 	}
 }
+
+// A root repo with nested subrepos (pbd-development/api-admin, …): with no
+// dir given, the root repo itself must be scanned. Scanning its parent stops
+// at the root repo and would drop every nested subrepo.
+func TestRescanReposEmptyDirScansRootRepoWithNestedSubrepos(t *testing.T) {
+	parent := t.TempDir()
+	rootPath := filepath.Join(parent, "root")
+	subA := filepath.Join(rootPath, "sub-a")
+	subB := filepath.Join(rootPath, "sub-b")
+	subNew := filepath.Join(rootPath, "sub-new")
+	for _, p := range []string{rootPath, subA, subB, subNew} {
+		initGitRepo(t, p)
+	}
+	initGitRepo(t, filepath.Join(parent, "unrelated"))
+
+	p := NewProject(ProjectDef{
+		Name: "test",
+		Repos: []RepoDef{
+			{Name: "root", Path: rootPath, DefaultBranch: "main"},
+			{Name: "sub-a", Path: subA, DefaultBranch: "main"},
+			{Name: "sub-b", Path: subB, DefaultBranch: "main"},
+		},
+	})
+
+	added, removed, moved, err := p.RescanRepos("")
+	if err != nil {
+		t.Fatalf("RescanRepos: %v", err)
+	}
+	if len(removed) != 0 || len(moved) != 0 {
+		t.Errorf("removed=%v moved=%v, want none", removed, moved)
+	}
+	if len(added) != 1 || added[0] != "sub-new" {
+		t.Errorf("added = %v, want [sub-new]", added)
+	}
+	if n := len(p.RepoNames()); n != 4 {
+		t.Errorf("RepoNames = %v, want 4 repos", p.RepoNames())
+	}
+}
+
+func TestSetReposReplacesInPlaceKeepingRepoInfo(t *testing.T) {
+	p := NewProject(ProjectDef{
+		Name: "test",
+		Repos: []RepoDef{
+			{Name: "kept", Path: "/old/kept", DefaultBranch: "main"},
+			{Name: "gone", Path: "/old/gone", DefaultBranch: "main"},
+		},
+	})
+	kept := p.GetRepo("kept")
+	kept.Error = "marker"
+
+	p.SetRepos([]RepoDef{
+		{Name: "kept", Path: "/new/kept", DefaultBranch: "develop"},
+		{Name: "added", Path: "/new/added", DefaultBranch: "main"},
+	})
+
+	if got := p.GetRepo("kept"); got != kept || got.Path != "/new/kept" || got.DefaultBranch != "develop" || got.Error != "marker" {
+		t.Errorf("kept repo = %+v, want same *Repo with updated path/branch", got)
+	}
+	if p.GetRepo("gone") != nil {
+		t.Error("gone repo still present")
+	}
+	if got := p.GetRepo("added"); got == nil || got.Path != "/new/added" {
+		t.Errorf("added repo = %+v", got)
+	}
+}

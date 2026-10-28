@@ -17,6 +17,10 @@ import (
 // error and p.Repos is left untouched: that is what scanning the wrong
 // directory looks like, and a project cut down to one repo silently breaks
 // every multi-repo operation that shares it.
+//
+// RescanRepos only changes p in memory: it neither persists the config nor
+// syncs workflows. ProjectService.UpdateRepos does both and is preferred
+// whenever a daemon is available.
 func (p *Project) RescanRepos(dir string) (added, removed, moved []string, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
