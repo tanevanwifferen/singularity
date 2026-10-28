@@ -167,9 +167,11 @@ func TestComposeFlowOptsRoutingPrecedence(t *testing.T) {
 		{"both pinned routes neither, since the reviewer inherits both",
 			[]string{"--model", "sonnet", "--effort", "high"},
 			api.TaskOptions{Model: "sonnet", Effort: "high"}, "opus", "", false, false},
-		// An effort alone is the exact shape RouteEnabled documents.
+		// An effort alone is the exact shape RouteEnabled documents. The
+		// reviewer's model defaults to sonnet, so the inherited effort leaves
+		// that step fully pinned.
 		{"effort alone is a pin, not a routing request",
-			[]string{"--effort", "medium"}, api.TaskOptions{Effort: "medium"}, "", "", true, true},
+			[]string{"--effort", "medium"}, api.TaskOptions{Effort: "medium"}, "", "", true, false},
 		{"--no-smart-route wins over everything",
 			[]string{"--no-smart-route"}, api.TaskOptions{}, "opus", "high", false, false},
 		{"explicit --smart-route beats the both-pinned default-off",
