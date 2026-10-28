@@ -6,12 +6,20 @@ import (
 	"sort"
 )
 
-// RescanRepos scans dir (or, if empty, the parent directory of the
-// project's first repo) for git repositories and reconciles p.Repos to
+// RescanRepos scans dir for git repositories and reconciles p.Repos to
 // match what's on disk: repos found on disk but missing from the project
 // are added, repos in the project but no longer on disk are removed, and
 // repos whose directory moved have their Path updated in place. Returns the
 // names of repos added, removed and moved (each sorted).
+//
+// If dir is "", the root repo is scanned when one of the project's repos
+// contains all the others (a root repo with nested subrepos); otherwise the
+// parent directory of the project's first repo. Scanning the root repo's
+// parent instead would stop at the root repo and drop every nested subrepo.
+//
+// RescanRepos only changes p in memory: it neither persists the config nor
+// syncs workflows. ProjectService.UpdateRepos does both and is preferred
+// whenever a daemon is available.
 func (p *Project) RescanRepos(dir string) (added, removed, moved []string, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -20,7 +28,13 @@ func (p *Project) RescanRepos(dir string) (added, removed, moved []string, err e
 		if len(p.Repos) == 0 {
 			return nil, nil, nil, fmt.Errorf("no directory to scan: project has no repos and none was given")
 		}
-		dir = filepath.Dir(p.Repos[0].Path)
+		def := ProjectDef{Name: p.Name}
+		for _, r := range p.Repos {
+			def.Repos = append(def.Repos, RepoDef{Name: r.Name, Path: r.Path})
+		}
+		if dir, err = defaultRescanDir(p.Name, def); err != nil {
+			dir, err = filepath.Dir(p.Repos[0].Path), nil
+		}
 	}
 
 	cfg, err := GenerateConfigFromDir(dir)
