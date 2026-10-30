@@ -8,6 +8,7 @@ import (
 	"sort"
 	"testing"
 
+	"gitlab.com/tanevanwifferen1/singularity/internal/git"
 	"gitlab.com/tanevanwifferen1/singularity/internal/project"
 	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 )
@@ -147,7 +148,15 @@ func TestUpdateReposReconcilesWorkflowsWithoutConfigChange(t *testing.T) {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
 	// Simulate an earlier run that updated the config but never finished
-	// the worktree sync: drop web from the persisted workflow by hand.
+	// the worktree sync: web was never added, so the persisted workflow has
+	// no entry for it and the repo has neither worktree nor branch.
+	web := wf.Repos["web"]
+	if err := git.RemoveWorktree(web.OriginalPath, web.WorktreePath, true); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", web.OriginalPath, "branch", "-D", "feature/x").CombinedOutput(); err != nil {
+		t.Fatalf("delete web branch: %s %v", out, err)
+	}
 	delete(wf.Repos, "web")
 	if err := s.SaveWorkflows(ctx, "proj-alpha", []*service.FeatureWorkflow{wf}); err != nil {
 		t.Fatalf("SaveWorkflows: %v", err)
@@ -167,7 +176,7 @@ func TestUpdateReposReconcilesWorkflowsWithoutConfigChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadWorkflows: %v", err)
 	}
-	web := loaded[0].Repos["web"]
+	web = loaded[0].Repos["web"]
 	if web == nil || !web.WorktreeCreated {
 		t.Fatalf("web not brought back into the workflow: %+v", web)
 	}

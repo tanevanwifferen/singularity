@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gitlab.com/tanevanwifferen1/singularity/internal/project"
@@ -86,9 +87,52 @@ func TestCreateWorkflowCreatesWorktreesForEveryRepo(t *testing.T) {
 	}
 }
 
-// TestCreateWorkflowIsIdempotent: re-creating the same branch adopts the
-// existing worktrees and does not duplicate the persisted workflow.
-func TestCreateWorkflowIsIdempotent(t *testing.T) {
+// TestCreateWorkflowRefusesExistingBranch: a branch that already exists in any
+// repo is refused as CONFLICT, naming the repo, and nothing is created or
+// persisted — a workflow must only own a branch it created.
+func TestCreateWorkflowRefusesExistingBranch(t *testing.T) {
+	s, root := newWorkflowTestService(t)
+	ctx := context.Background()
+	baseDir := filepath.Join(root, "worktrees")
+
+	// "main" is every repo's default branch; the second case is a local
+	// feature branch in one repo; the third exists on origin only.
+	api := filepath.Join(root, "api")
+	if out, err := exec.Command("git", "-C", api, "update-ref", "refs/remotes/origin/remote-only", "HEAD").CombinedOutput(); err != nil {
+		t.Fatalf("update-ref: %s %v", out, err)
+	}
+	if out, err := exec.Command("git", "-C", api, "branch", "feature/taken").CombinedOutput(); err != nil {
+		t.Fatalf("branch: %s %v", out, err)
+	}
+
+	for _, branch := range []string{"main", "feature/taken", "remote-only"} {
+		wf, err := s.CreateWorkflow(ctx, "proj-alpha", branch, baseDir)
+		if err == nil || wf != nil {
+			t.Fatalf("%s: CreateWorkflow = (%v, %v), want a refusal", branch, wf, err)
+		}
+		if !errors.Is(err, service.ErrConflict) {
+			t.Errorf("%s: err = %v, want ErrConflict", branch, err)
+		}
+		if !strings.Contains(err.Error(), branch) || !strings.Contains(err.Error(), "api") {
+			t.Errorf("%s: error %q should name the branch and the repo", branch, err)
+		}
+	}
+
+	if _, err := os.Stat(baseDir); !os.IsNotExist(err) {
+		t.Errorf("base dir created despite refusal (stat err %v)", err)
+	}
+	loaded, err := s.LoadWorkflows(ctx, "proj-alpha")
+	if err != nil {
+		t.Fatalf("LoadWorkflows: %v", err)
+	}
+	if len(loaded) != 0 {
+		t.Fatalf("refused create persisted %d workflow(s): %+v", len(loaded), loaded)
+	}
+}
+
+// TestCreateWorkflowSecondCreateRefused: re-running a create no longer adopts
+// the first run's worktrees; the persisted workflow stays the only one.
+func TestCreateWorkflowSecondCreateRefused(t *testing.T) {
 	s, root := newWorkflowTestService(t)
 	ctx := context.Background()
 	baseDir := filepath.Join(root, "worktrees")
@@ -96,20 +140,16 @@ func TestCreateWorkflowIsIdempotent(t *testing.T) {
 	if _, err := s.CreateWorkflow(ctx, "proj-alpha", "feature/x", baseDir); err != nil {
 		t.Fatalf("first CreateWorkflow: %v", err)
 	}
-	wf, err := s.CreateWorkflow(ctx, "proj-alpha", "feature/x", baseDir)
-	if err != nil {
-		t.Fatalf("second CreateWorkflow: %v", err)
-	}
-	if got := wf.Status().WorktreesCreated; got != 2 {
-		t.Errorf("expected 2 worktrees after re-create, got %d", got)
+	if _, err := s.CreateWorkflow(ctx, "proj-alpha", "feature/x", baseDir); !errors.Is(err, service.ErrConflict) {
+		t.Fatalf("second CreateWorkflow err = %v, want ErrConflict", err)
 	}
 
 	loaded, err := s.LoadWorkflows(ctx, "proj-alpha")
 	if err != nil {
 		t.Fatalf("LoadWorkflows: %v", err)
 	}
-	if len(loaded) != 1 {
-		t.Fatalf("expected 1 persisted workflow, got %d", len(loaded))
+	if len(loaded) != 1 || loaded[0].Status().WorktreesCreated != 2 {
+		t.Fatalf("expected the original workflow untouched, got %+v", loaded)
 	}
 }
 

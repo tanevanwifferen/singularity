@@ -259,9 +259,10 @@ func NewFeatureWorkflow(proj *Project, branchName, baseDir string) *FeatureWorkf
 // the workflow's worktrees match the project after subrepos were added,
 // removed or moved. It is idempotent and meant to be re-run until clean:
 //
-//   - a repo in proj that fw doesn't track, or tracks without a working
-//     worktree (earlier create failed), gets a worktree created on fw's
-//     branch;
+//   - a repo in proj that fw doesn't track gets a worktree on a new branch
+//     (refused if the branch already exists there, as in a create), and a
+//     tracked repo without a working worktree (earlier create failed) gets
+//     one on the branch the workflow already owns there;
 //   - a repo fw tracks that is no longer in proj has its worktree removed
 //     and its local feature branch deleted, then is dropped from tracking.
 //     The remote branch is never touched, a worktree with uncommitted
@@ -292,6 +293,7 @@ func (fw *FeatureWorkflow) SyncRepos(proj *Project, stop func(worktreePath strin
 	fw.mu.Lock()
 	sanitized := sanitizeBranchForPath(fw.BranchName)
 	var toCreate, toRemove, toRepair []*WorkflowRepo
+	fresh := map[*WorkflowRepo]bool{} // entries new to the workflow
 	for name, r := range current {
 		wr, ok := fw.Repos[name]
 		if !ok {
@@ -304,6 +306,7 @@ func (fw *FeatureWorkflow) SyncRepos(proj *Project, stop func(worktreePath strin
 				DefaultBranch: r.DefaultBranch,
 			}
 			fw.Repos[name] = wr
+			fresh[wr] = true
 			changed = true
 		}
 		if wr.OriginalPath != r.Path {
@@ -340,7 +343,11 @@ func (fw *FeatureWorkflow) SyncRepos(proj *Project, stop func(worktreePath strin
 	})
 
 	forEachRepoByDepth(toCreate, false, func(wr *WorkflowRepo) {
-		path, err := ensureWorktree(wr.OriginalPath, wr.WorktreePath, fw.BranchName, wr.DefaultBranch)
+		create := reattachWorktree
+		if fresh[wr] {
+			create = ensureWorktree // a repo new to the workflow must get a new branch
+		}
+		path, err := create(wr.OriginalPath, wr.WorktreePath, fw.BranchName, wr.DefaultBranch)
 		if err != nil {
 			setResult(wr, fmt.Sprintf("create worktree: %v", err))
 			return
@@ -435,23 +442,17 @@ func (fw *FeatureWorkflow) retireRepo(wr *WorkflowRepo, stop func(string) error)
 	return nil
 }
 
-// ensureWorktree brings a single repo to the desired state: a worktree of
-// OriginalPath checked out on the workflow branch. It is idempotent — an
-// existing worktree for the branch is adopted (and its real path recorded)
-// instead of failing, so re-running a workflow create is safe.
+// ensureWorktree creates a worktree of repoPath at worktreePath on a brand-new
+// branch cut from the repo's default branch. It never adopts: if the branch
+// already exists (locally, on origin, or as the default branch) or is already
+// checked out in a worktree, it refuses with a *BranchExistsError, because a
+// workflow force-deletes its branch on removal and so may only own a branch
+// it created itself.
 //
-// Returns the adopted/created path, or an error. Callers hold no lock.
+// Returns the created path, or an error. Callers hold no lock.
 func ensureWorktree(repoPath, worktreePath, branch, defaultBranch string) (string, error) {
-	// Already have a worktree on this branch? Adopt it wherever it lives.
-	if worktrees, err := git.GetWorktrees(repoPath); err == nil {
-		for _, wt := range worktrees {
-			if wt.Path == repoPath {
-				continue // main worktree, never a workflow worktree
-			}
-			if wt.Branch == branch {
-				return wt.Path, nil
-			}
-		}
+	if where := branchConflict(repoPath, defaultBranch, branch); where != "" {
+		return "", &BranchExistsError{Branch: branch, Repos: []string{fmt.Sprintf("%s (%s)", repoPath, where)}}
 	}
 
 	defaultBranch = defaultBranchOrMain(defaultBranch)
@@ -460,15 +461,6 @@ func ensureWorktree(repoPath, worktreePath, branch, defaultBranch string) (strin
 	// creates the leaf itself.
 	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
 		return "", fmt.Errorf("create worktree parent: %w", err)
-	}
-
-	// The branch exists but is not checked out anywhere: attach a worktree to it
-	// rather than trying to create it again.
-	if git.BranchExists(repoPath, branch) {
-		if err := git.CreateWorktree(repoPath, worktreePath, branch, false, ""); err != nil {
-			return "", err
-		}
-		return worktreePath, nil
 	}
 
 	// Fresh branch. Prefer origin/<default> so the worktree starts from the
@@ -491,9 +483,19 @@ func ensureWorktree(repoPath, worktreePath, branch, defaultBranch string) (strin
 // CreateAllWorktrees creates worktrees for all repos in the project — the
 // workflow is per project, so every repo always gets its own worktree on the
 // same branch. Repos at the same nesting depth are created concurrently; a
-// repo whose worktree contains others is created before them. Each repo's error is tracked independently, and repos that
-// already have a worktree on the branch are adopted rather than re-created.
+// repo whose worktree contains others is created before them. Each repo's
+// error is tracked independently.
+//
+// The branch must be new: before anything is created every repo is checked
+// and, if the branch exists in any of them (locally or on origin), the whole
+// create is refused with a *BranchExistsError — no worktree or directory is
+// made and fw is left untouched. Nothing is ever adopted, since removing the
+// workflow deletes its branch.
 func (fw *FeatureWorkflow) CreateAllWorktrees() error {
+	if err := fw.CheckBranchAvailable(); err != nil {
+		return err
+	}
+
 	fw.mu.Lock()
 	fw.State = WorkflowInitializing
 	fw.mu.Unlock()

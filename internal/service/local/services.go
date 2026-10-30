@@ -88,6 +88,11 @@ func mapErr(err error) error {
 	if errors.Is(err, git.ErrMRAlreadyExists) {
 		return service.ErrMRAlreadyExists
 	}
+	// A workflow branch that already exists is a state conflict, not a bad request.
+	var branchExists *project.BranchExistsError
+	if errors.As(err, &branchExists) {
+		return service.ErrConflict
+	}
 	msg := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(msg, "already exists for this branch"),

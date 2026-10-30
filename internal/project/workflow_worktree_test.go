@@ -103,58 +103,6 @@ func TestCreateAllWorktrees_AllReposIsolated(t *testing.T) {
 	}
 }
 
-// TestCreateAllWorktrees_Idempotent verifies a repeated create adopts the
-// existing worktrees instead of failing on "branch already exists".
-func TestCreateAllWorktrees_Idempotent(t *testing.T) {
-	proj, root := newTestProject(t)
-	// git reports worktree paths with symlinks resolved (/private/var on
-	// macOS), so compare against the resolved base dir.
-	baseDir := filepath.Join(resolvedDir(t, root), "worktrees")
-
-	first := NewFeatureWorkflow(proj, "feature/x", baseDir)
-	if err := first.CreateAllWorktrees(); err != nil {
-		t.Fatalf("first create: %v", err)
-	}
-
-	second := NewFeatureWorkflow(proj, "feature/x", baseDir)
-	if err := second.CreateAllWorktrees(); err != nil {
-		t.Fatalf("second create: %v", err)
-	}
-	if got := second.Status().WorktreesCreated; got != 3 {
-		t.Fatalf("expected 3 adopted worktrees, got %d", got)
-	}
-	for name, wr := range second.Repos {
-		if wr.WorktreePath != first.Repos[name].WorktreePath {
-			t.Errorf("repo %s: adopted path %q, want %q", name, wr.WorktreePath, first.Repos[name].WorktreePath)
-		}
-	}
-}
-
-// TestCreateAllWorktrees_AdoptsExistingBranch covers a branch that exists in a
-// repo but has no worktree: it must be attached, not recreated.
-func TestCreateAllWorktrees_AdoptsExistingBranch(t *testing.T) {
-	proj, root := newTestProject(t)
-	baseDir := filepath.Join(root, "worktrees")
-
-	web := proj.Repos[0]
-	if err := git.CreateBranch(web.Path, "feature/x", "main"); err != nil {
-		t.Fatalf("pre-create branch: %v", err)
-	}
-	// Leave the repo on its default branch so the branch is free to be moved
-	// into a worktree.
-	if err := git.Checkout(web.Path, "main"); err != nil {
-		t.Fatalf("checkout main: %v", err)
-	}
-
-	fw := NewFeatureWorkflow(proj, "feature/x", baseDir)
-	if err := fw.CreateAllWorktrees(); err != nil {
-		t.Fatalf("CreateAllWorktrees: %v", err)
-	}
-	if got := fw.Status().WorktreesCreated; got != 3 {
-		t.Fatalf("expected 3 worktrees, got %d (%+v)", got, fw.Repos["web"].Error)
-	}
-}
-
 // TestCreateAllWorktrees_PartialFailure checks a broken repo does not stop the
 // others from getting isolated.
 func TestCreateAllWorktrees_PartialFailure(t *testing.T) {
