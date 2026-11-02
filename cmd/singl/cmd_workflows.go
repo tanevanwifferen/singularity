@@ -121,6 +121,12 @@ func runWorkflowCreate(ctx context.Context, args []string) int {
 			continue
 		}
 		md += fmt.Sprintf("- `%s` — `%s`  \n", name, wr.WorktreePath)
+		if wr.BaseRef != "" {
+			md += fmt.Sprintf("  base: `%s` @ `%s`  \n", wr.BaseRef, shortCommit(wr.BaseCommit))
+		}
+		if wr.Warning != "" {
+			md += fmt.Sprintf("  **warning**: %s  \n", wr.Warning)
+		}
 	}
 	if code := renderMarkdown(md); code != 0 {
 		return code
@@ -242,4 +248,12 @@ func drainDiscoveryStream(ctx context.Context, ch <-chan service.DiscoveryProgre
 			return 0
 		}
 	}
+}
+
+// shortCommit abbreviates a commit hash for display.
+func shortCommit(c string) string {
+	if len(c) > 12 {
+		return c[:12]
+	}
+	return c
 }

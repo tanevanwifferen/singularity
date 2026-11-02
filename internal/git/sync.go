@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -69,6 +70,29 @@ func Fetch(repoPath string, remote string) (string, error) {
 		return string(output), fmt.Errorf("fetch failed: %s", strings.TrimSpace(string(output)))
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+// HasRemote reports whether repoPath has a remote named remote.
+func HasRemote(repoPath, remote string) bool {
+	return exec.Command("git", "-C", repoPath, "remote", "get-url", remote).Run() == nil
+}
+
+// FetchBranch fetches only branch from remote (never --all), so the
+// remote-tracking ref origin/<branch> is current. It never prompts for
+// credentials and gives up after timeout.
+func FetchBranch(repoPath, remote, branch string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "fetch", remote, branch)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("timed out after %s", timeout)
+	}
+	if err != nil {
+		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // Pull runs git pull on the current branch.
