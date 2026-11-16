@@ -266,6 +266,18 @@ func (v *AgentView) LoadAgents() {
 	v.loadAgents()
 }
 
+// BlockedCount is the number of agents waiting on an answer from the
+// operator, from the list as last loaded.
+func (v *AgentView) BlockedCount() int {
+	n := 0
+	for _, a := range v.agents {
+		if a.State == service.AgentBlocked {
+			n++
+		}
+	}
+	return n
+}
+
 // loadAgents refreshes the agent list, coalescing concurrent requests.
 //
 // One refresh costs two daemon round-trips plus a glamour re-render of the
@@ -813,7 +825,7 @@ func (v *AgentView) handleOutputPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return v, nil
 	case "i":
 		if v.selectedAgent != nil &&
-			(v.selectedAgent.State == service.AgentRunning || v.selectedAgent.State == service.AgentStarting || v.selectedAgent.State == service.AgentComplete || v.selectedAgent.State == service.AgentKilled || v.selectedAgent.State == service.AgentError) {
+			(v.selectedAgent.State == service.AgentRunning || v.selectedAgent.State == service.AgentBlocked || v.selectedAgent.State == service.AgentStarting || v.selectedAgent.State == service.AgentComplete || v.selectedAgent.State == service.AgentKilled || v.selectedAgent.State == service.AgentError) {
 			v.showMessageInput = true
 			v.messageInput.Clear()
 			v.focus = focusInput
@@ -875,7 +887,7 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "K":
 		// Kill selected agent (capital K to not conflict with vim nav)
 		if item, idx := v.filter.SelectedItem(); idx >= 0 {
-			if item.State == service.AgentRunning || item.State == service.AgentStarting {
+			if item.State == service.AgentRunning || item.State == service.AgentBlocked || item.State == service.AgentStarting {
 				agentID := item.ID
 				v.killConfirm.Show("Kill Agent", fmt.Sprintf("Kill agent %s?", agentID), func() tea.Cmd {
 					if v.services != nil {
@@ -903,7 +915,7 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "i":
 		if v.selectedAgent != nil &&
-			(v.selectedAgent.State == service.AgentRunning || v.selectedAgent.State == service.AgentStarting || v.selectedAgent.State == service.AgentComplete || v.selectedAgent.State == service.AgentKilled || v.selectedAgent.State == service.AgentError) {
+			(v.selectedAgent.State == service.AgentRunning || v.selectedAgent.State == service.AgentBlocked || v.selectedAgent.State == service.AgentStarting || v.selectedAgent.State == service.AgentComplete || v.selectedAgent.State == service.AgentKilled || v.selectedAgent.State == service.AgentError) {
 			v.showMessageInput = true
 			v.messageInput.Clear()
 			v.focus = focusInput
@@ -926,7 +938,7 @@ func (v *AgentView) handleListPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "c":
 		if v.services != nil {
 			if item, idx := v.filter.SelectedItem(); idx >= 0 {
-				if item.State != service.AgentRunning && item.State != service.AgentStarting {
+				if item.State != service.AgentRunning && item.State != service.AgentBlocked && item.State != service.AgentStarting {
 					if strings.HasPrefix(item.ID, "saved:") {
 						// Synthetic saved-proposal entry: remove from tracking, don't touch engine
 						issueKey := strings.TrimPrefix(item.ID, "saved:")
@@ -1026,6 +1038,10 @@ func (v *AgentView) renderAgentItem(agent AgentInfo, index int, selected bool) s
 	case service.AgentRunning:
 		statusIcon = "●"
 		statusStyle = lipgloss.NewStyle().Foreground(th.Info)
+	case service.AgentBlocked:
+		// Waiting on the operator: the Questions view has what it asked.
+		statusIcon = "?"
+		statusStyle = lipgloss.NewStyle().Foreground(th.Warning)
 	case service.AgentComplete:
 		statusIcon = "✓"
 		statusStyle = lipgloss.NewStyle().Foreground(th.Info)
@@ -1068,7 +1084,7 @@ func (v *AgentView) renderAgentItem(agent AgentInfo, index int, selected bool) s
 	line.WriteString(fmt.Sprintf(" %s", th.StatsStyle.Render(displayText)))
 
 	// Time info
-	if agent.State == service.AgentRunning || agent.State == service.AgentStarting {
+	if agent.State == service.AgentRunning || agent.State == service.AgentBlocked || agent.State == service.AgentStarting {
 		if agent.StartedAt != nil {
 			elapsed := time.Since(*agent.StartedAt)
 			line.WriteString(th.MutedTextStyle.Render(fmt.Sprintf(" %s", formatDuration(elapsed))))
@@ -1079,9 +1095,7 @@ func (v *AgentView) renderAgentItem(agent AgentInfo, index int, selected bool) s
 	}
 
 	stateLabel := agent.State.String()
-	if agent.State == service.AgentRunning {
-		stateLabel = "running"
-	} else if agent.State == service.AgentComplete {
+	if agent.State == service.AgentComplete {
 		stateLabel = "done"
 	}
 	line.WriteString(fmt.Sprintf(" %s", statusStyle.Render(stateLabel)))
@@ -1128,7 +1142,7 @@ func (v *AgentView) View() string {
 		var active, done, errored int
 		for _, a := range v.agents {
 			switch a.State {
-			case service.AgentRunning, service.AgentStarting, service.AgentRouting:
+			case service.AgentRunning, service.AgentBlocked, service.AgentStarting, service.AgentRouting:
 				active++
 			case service.AgentComplete:
 				done++
@@ -1324,7 +1338,7 @@ func (v *AgentView) View() string {
 				hint += "  enter:fold/unfold  n/p:block  e:all"
 			}
 			if v.selectedAgent != nil &&
-				(v.selectedAgent.State == service.AgentRunning || v.selectedAgent.State == service.AgentStarting || v.selectedAgent.State == service.AgentComplete || v.selectedAgent.State == service.AgentKilled) {
+				(v.selectedAgent.State == service.AgentRunning || v.selectedAgent.State == service.AgentBlocked || v.selectedAgent.State == service.AgentStarting || v.selectedAgent.State == service.AgentComplete || v.selectedAgent.State == service.AgentKilled) {
 				hint += "  i:send message"
 			} else if v.selectedAgent != nil && v.selectedAgent.State == service.AgentError {
 				hint += "  i:resume with history"

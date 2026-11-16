@@ -72,6 +72,19 @@ Smart routing (Sonnet picks model, effort and the display summary) is on by
 default; --model / --effort override only that part of it, and it is skipped
 only when both are pinned. --no-smart-route turns it off entirely.
 `,
+	"questions": `Usage: singl questions <verb> [flags]
+
+An agent that needs a decision asks through its ask_questions tool, one or
+more questions per call, and reports state "blocked" until every one of them
+is answered. Nothing times out while it waits.
+
+Verbs:
+  list    [--agent <id>]                    open questions, plus answered ones whose agent
+                                            still waits on another from the same call
+  answer  --id <question-id> --message <text>
+                                            answer one question; the agent continues once
+                                            its last open question is answered
+`,
 	"queue": `Usage: singl queue <verb> [flags]
 
 Verbs:
@@ -96,7 +109,8 @@ Verbs:
                                                        does not change, so nothing re-triggers them;
                                                        for a flow step use "flow retry-step" instead,
                                                        which reopens the round so the flow rereads it)
-  answer    --id <task-id> --message <text>            inert: no task reaches that state in this build
+  answer    --id <task-id> --message <text>            answer every open question of a waiting_human task
+                                                       with one text (one by one: singl questions answer)
   pause     --queue <id>                               stop dispatching new tasks
   resume    --queue <id>                               lift a pause
   queues                                               every queue with its state tallies

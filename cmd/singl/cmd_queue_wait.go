@@ -23,11 +23,6 @@ const (
 	// queueWaitAnswerNeeded means a task stopped to ask the operator a
 	// question. That is actionable, not a failure, so the wait returns
 	// early and successfully — the caller is expected to answer it.
-	//
-	// Unreachable in this build: the engine never reports the agent state
-	// that puts a task in waiting_human, so info.Waiting is always 0. The
-	// branch is kept so the decision table stays complete, but the exit
-	// codes documented to operators deliberately omit it.
 	queueWaitAnswerNeeded queueWaitOutcome = "waiting_human"
 	// queueWaitDone means the queue drained and every task is done.
 	queueWaitDone queueWaitOutcome = "done"
@@ -91,16 +86,17 @@ func aggregateQueueInfo(infos []api.QueueInfo) api.QueueInfo {
 }
 
 // queueWaitUsage is the --help preamble. Hoisted out of fs.Usage so the
-// exit-code contract it advertises can be asserted directly: the previous
-// version documented a waiting_human early return the engine can never
-// produce, and nothing in the suite noticed when prime.md was corrected and
-// the help text was not.
+// exit-code contract it advertises can be asserted directly against
+// queueWaitOutcome.exitCode.
 const queueWaitUsage = `Usage: singl queue wait [--queue <id>] [--timeout SECS] [--interval SECS]
 
-Blocks until the queue drains, polling the daemon (no streaming).
+Blocks until the queue drains, polling the daemon (no streaming). Returns
+early when a task is waiting_human: its agent asked a question and nothing
+moves until it is answered (singl questions list / answer).
 
 Exit codes:
   0  the queue drained and every task is done
+  0  a task is waiting_human; the output names it and its question
   1  the queue drained but at least one task failed or was cancelled
   1  --timeout expired
 
@@ -239,6 +235,8 @@ func fmtQueueWait(queueID string, info api.QueueInfo, outcome queueWaitOutcome, 
 			md += fmt.Sprintf("- `%s` %s\n  question: %s\n  `singl queue answer --id %s --message \"...\"`\n",
 				t.ID, taskLabel(t), t.Question, t.ID)
 		}
+		md += "\n`queue answer` gives every open question of the task the same answer; " +
+			"`singl questions list` shows them one by one.\n"
 	case queueWaitFailed:
 		md += "\nDid not finish:\n\n"
 		for _, t := range notable {

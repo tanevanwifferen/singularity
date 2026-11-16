@@ -16,7 +16,7 @@ func (a *Agent) Snapshot() AgentSnapshot {
 		WorkDir:      a.WorkDir,
 		Task:         a.Task,
 		Summary:      a.Summary,
-		State:        a.State,
+		State:        a.reportedStateLocked(),
 		CreatedAt:    a.CreatedAt,
 		StartedAt:    a.StartedAt,
 		EndedAt:      a.EndedAt,
@@ -27,6 +27,16 @@ func (a *Agent) Snapshot() AgentSnapshot {
 		MergeResult:  a.MergeResult,
 		BackendName:  a.backend.Name(),
 	}
+}
+
+// reportedStateLocked is the state observers see: the stored state, except
+// that a running agent with unanswered operator questions reports blocked
+// (see AgentBlocked). Caller holds mu.
+func (a *Agent) reportedStateLocked() AgentState {
+	if a.State == AgentRunning && a.openQuestions > 0 {
+		return AgentBlocked
+	}
+	return a.State
 }
 
 // AgentSnapshot is a point-in-time copy of an agent's state, safe to read without locks.

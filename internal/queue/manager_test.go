@@ -1017,10 +1017,14 @@ func TestWaitingHumanRoundTrip(t *testing.T) {
 	id := tasks[0].ID
 
 	m.tick()
-	runner.setTaskState(t, id, "waiting_human", "")
+	// The runner reports the agent's open questions in the text slot.
+	runner.setTaskState(t, id, "waiting_human", "option A or B?")
 	m.tick()
 	if got := stateOf(t, m, id); got != StateWaitingHuman {
 		t.Fatalf("state = %s, want waiting_human", got)
+	}
+	if task, _ := m.Get(id); task.Question != "option A or B?" {
+		t.Errorf("task question = %q, want the agent's open question", task.Question)
 	}
 	// A waiting task still holds its slot: the subprocess is alive.
 	if !stateOf(t, m, id).Active() {
@@ -1032,6 +1036,9 @@ func TestWaitingHumanRoundTrip(t *testing.T) {
 	}
 	if got := stateOf(t, m, id); got != StateRunning {
 		t.Fatalf("state = %s, want running after an answer", got)
+	}
+	if task, _ := m.Get(id); task.Question != "" {
+		t.Errorf("task question = %q after the answer, want it cleared", task.Question)
 	}
 	runner.mu.Lock()
 	inputs := append([]string(nil), runner.inputs...)

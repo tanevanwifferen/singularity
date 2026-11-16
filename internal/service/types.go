@@ -117,8 +117,13 @@ type (
 	// AgentOptions is the request DTO for StartAgent / ResumeWithHistory.
 	AgentOptions = engine.AgentOptions
 
-	// AgentState enum value (Idle/Routing/Starting/Running/Complete/Error/Killed).
+	// AgentState enum value (Idle/Routing/Starting/Running/Complete/Error/Killed/Blocked).
 	AgentState = engine.AgentState
+
+	// Question is one question an agent asked the operator; QuestionBatch
+	// is the questions of one ask_questions tool call.
+	Question      = engine.Question
+	QuestionBatch = engine.QuestionBatch
 
 	// EngineStats is the aggregate engine snapshot (running/idle/total counts).
 	EngineStats = engine.EngineStats
@@ -310,6 +315,7 @@ const (
 	AgentComplete = engine.AgentComplete
 	AgentError    = engine.AgentError
 	AgentKilled   = engine.AgentKilled
+	AgentBlocked  = engine.AgentBlocked
 )
 
 // TaskState values mirroring internal/queue.

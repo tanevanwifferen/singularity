@@ -67,6 +67,10 @@ const (
 // herdrTaskLine). Base64 keeps multi-line task text on one line.
 const herdrTaskPrefix = "T:"
 
+// herdrBlockedPrefix prefixes the stdin lines that tell the driver the agent
+// started ("B:1") or stopped ("B:0") waiting on operator questions.
+const herdrBlockedPrefix = "B:"
+
 // herdrOutChunkBytes bounds the raw text carried by a single __SINGL_OUT__
 // line. streamOutput's scanner rejects tokens over 1MiB (agent_output.go) and
 // base64 adds a third, so a snapshot larger than this is split across several
@@ -185,6 +189,13 @@ type herdrDriver struct {
 	// herdrFullReadSource), the baseline the fallback read is diffed
 	// against so it yields one turn's output and not the whole session's.
 	fullSnapshot string
+
+	// blocked is true while the agent waits on operator questions, and
+	// blockedSeen records that it did at some point since the turn's wait
+	// was last (re)started. Either one forgives a herdr `timeout`: see
+	// awaitAnswered.
+	blocked     atomic.Bool
+	blockedSeen atomic.Bool
 
 	cleanupOnce sync.Once
 	// shuttingDown stops emit from reporting anything after cleanup has
@@ -343,6 +354,7 @@ func (d *herdrDriver) start() error {
 	// output comes from. Blanking them makes it a top-level session again.
 	raw, err := d.herdr("workspace", "create", "--cwd", cwd, "--label", d.name,
 		"--env", "CLAUDE_NO_ANALYTICS=true",
+		"--env", "MCP_TOOL_TIMEOUT="+mcpToolTimeoutMS,
 		"--env", "CLAUDE_CODE_CHILD_SESSION=",
 		"--env", "CLAUDECODE=",
 		"--env", "CLAUDE_CODE_ENTRYPOINT=",
@@ -461,6 +473,13 @@ func (d *herdrDriver) relay(stdin io.Reader) {
 	for {
 		line, err := r.ReadString('\n')
 		line = strings.TrimRight(line, "\r\n")
+		if strings.HasPrefix(line, herdrBlockedPrefix) {
+			waiting := strings.TrimPrefix(line, herdrBlockedPrefix) == "1"
+			d.blocked.Store(waiting)
+			if waiting {
+				d.blockedSeen.Store(true)
+			}
+		}
 		if strings.HasPrefix(line, herdrTaskPrefix) {
 			text, derr := base64.StdEncoding.DecodeString(strings.TrimPrefix(line, herdrTaskPrefix))
 			if derr != nil {
@@ -509,7 +528,8 @@ func (d *herdrDriver) runTurn(text string) {
 		d.pollLoop(stop)
 	}()
 
-	state := d.prompt(text)
+	d.blockedSeen.Store(d.blocked.Load())
+	state := d.awaitAnswered(d.prompt(text))
 
 	close(stop)
 	<-polled
@@ -519,6 +539,28 @@ func (d *herdrDriver) runTurn(text string) {
 		d.emitFullSnapshot()
 	}
 	d.emit(herdrMarkerState, state)
+}
+
+// awaitAnswered keeps waiting for the turn to settle when herdr's per-turn
+// timeout ran out while the agent was waiting on the operator. A question
+// has no timeout: claude sits in the ask_questions tool call for as long as
+// the answer takes, and to herdr that is just a turn still working. So a
+// `timeout` is not the turn's outcome if the agent was blocked at any point
+// during the wait that produced it — the wait is started again, as often as
+// that stays true.
+func (d *herdrDriver) awaitAnswered(state string) string {
+	for herdrErrorCode(state) == "timeout" && (d.blockedSeen.Swap(false) || d.blocked.Load()) {
+		if d.ctx.Err() != nil {
+			return state
+		}
+		raw, err := d.herdr("agent", "wait", d.name, "--until", "idle", "--until", "done",
+			"--timeout", fmt.Sprint(d.promptTimeout))
+		if err != nil && raw == "" {
+			raw = fmt.Sprintf(`{"error":{"code":"cli_failed","message":%q}}`, err.Error())
+		}
+		state = raw
+	}
+	return state
 }
 
 // prompt submits the text and returns the raw JSON that settled the turn.

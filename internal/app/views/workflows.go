@@ -1450,7 +1450,7 @@ func (v *WorkflowsView) runningAgentCount() int {
 			continue
 		}
 		snap := (*agent)
-		if snap.State == service.AgentRunning || snap.State == service.AgentStarting || snap.State == service.AgentRouting {
+		if snap.State == service.AgentRunning || snap.State == service.AgentBlocked || snap.State == service.AgentStarting || snap.State == service.AgentRouting {
 			count++
 		}
 	}
@@ -1575,7 +1575,7 @@ func (v *WorkflowsView) renderWorkflowItem(wf *service.FeatureWorkflow, index in
 		if agent != nil {
 			snap := (*agent)
 			switch snap.State {
-			case service.AgentRunning, service.AgentStarting, service.AgentRouting:
+			case service.AgentRunning, service.AgentBlocked, service.AgentStarting, service.AgentRouting:
 				line.WriteString(th.DashboardAccentStyle.Render("  agent running"))
 			case service.AgentComplete:
 				line.WriteString(th.StatsStyle.Render("  agent done"))

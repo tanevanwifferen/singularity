@@ -465,3 +465,42 @@ func (slowRouteBackend) OneShotCommand(string) (string, []string) { return "slee
 func (slowRouteBackend) UnattendedSessionCommand(string) (string, []string, error) {
 	return "true", nil, nil
 }
+
+// TestEngineRunnerReportsBlockedAgentAsWaitingHuman: an agent blocked on
+// operator questions reaches the scheduler in the queue's vocabulary, with
+// the questions as its text, and the runner's SendInput is their answer.
+func TestEngineRunnerReportsBlockedAgentAsWaitingHuman(t *testing.T) {
+	eng := engine.New(4)
+	defer eng.Shutdown()
+	runner := NewEngineRunner(eng)
+
+	id, err := eng.StartAgent(t.TempDir(), "task", engine.AgentOptions{
+		Backend: pidBackend{pidFile: filepath.Join(t.TempDir(), "pid")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.AskQuestions(id, []string{"rebase or merge?", "squash?"}); err != nil {
+		t.Fatal(err)
+	}
+
+	state, text, ok := runner.AgentState(id)
+	if !ok || state != agentStateWaitingHuman {
+		t.Fatalf("AgentState = %q (known=%v), want waiting_human", state, ok)
+	}
+	if text != "rebase or merge?\nsquash?" {
+		t.Errorf("question text = %q, want both open questions", text)
+	}
+
+	if err := runner.SendInput(id, "your call"); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range eng.ListQuestions() {
+		if !q.Answered || q.Answer != "your call" {
+			t.Errorf("question %s after SendInput = %+v, want it answered", q.ID, q)
+		}
+	}
+	if state, _, _ := runner.AgentState(id); state == agentStateWaitingHuman {
+		t.Error("agent still reported waiting after every question was answered")
+	}
+}

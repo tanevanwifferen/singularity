@@ -99,9 +99,9 @@ func (l *Layout) RenderTabBar(router *Router) string {
 		}
 		displayKey := strings.ToUpper(key)
 		if name == activeName {
-			tabBar += l.activeTabStyle.Render(fmt.Sprintf("[%s] %s", displayKey, name))
+			tabBar += l.activeTabStyle.Render(fmt.Sprintf("[%s] %s", displayKey, router.TabLabel(name)))
 		} else {
-			tabBar += l.inactiveTabStyle.Render(fmt.Sprintf("%s: %s", displayKey, name))
+			tabBar += l.inactiveTabStyle.Render(fmt.Sprintf("%s: %s", displayKey, router.TabLabel(name)))
 		}
 	}
 

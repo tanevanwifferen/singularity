@@ -202,6 +202,19 @@ func (m Model) flowRefreshCmd() tea.Cmd {
 	return nil
 }
 
+// questionRefreshCmd refreshes the questions view on the same terms as
+// flowRefreshCmd: on the stream tick and on agent events, and only while it
+// is the view on screen.
+func (m Model) questionRefreshCmd() tea.Cmd {
+	if m.router == nil || m.router.ActiveName() != "Questions" {
+		return nil
+	}
+	if qv, ok := m.router.GetView("Questions").(*views.QuestionsView); ok {
+		return qv.RefreshCmd()
+	}
+	return nil
+}
+
 // loadRepo loads the repository
 func (m *Model) loadRepo() {
 	if m.repoPath == "" {
@@ -303,10 +316,13 @@ func (m *Model) registerCommonViews(router *Router, repoPath string, startFKey i
 		flowsView.SetWorkflowsView(wv)
 	}
 
+	// What agents stopped to ask, right after the views that run them.
+	router.Register("Questions", views.NewQuestionsView(), fkey(startFKey+5))
+
 	// Config / settings view
 	if m.cfg != nil {
 		configView := views.NewConfigView(m.cfg)
-		router.Register("Config", configView, fkey(startFKey+5))
+		router.Register("Config", configView, fkey(startFKey+6))
 	}
 
 	// Git operations submenu views (no F-key shortcut)
@@ -611,7 +627,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case views.StreamTickMsg:
 		// Handle at the app level so the tick chain survives view switches.
 		if av := m.getAgentView(); av != nil {
-			return m, tea.Batch(av.AgentTickCmd(), m.flowRefreshCmd())
+			return m, tea.Batch(av.AgentTickCmd(), m.flowRefreshCmd(), m.questionRefreshCmd())
 		}
 		return m, nil
 	case views.AgentUpdateMsg:
@@ -642,7 +658,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // flows view refreshes off the same event: every flow transition is caused
 // by an agent event, so this is the flow stream the TUI does not have.
 func (m Model) handleAgentUpdateMsg(msg views.AgentUpdateMsg) (tea.Model, tea.Cmd) {
-	flowCmd := m.flowRefreshCmd()
+	flowCmd := tea.Batch(m.flowRefreshCmd(), m.questionRefreshCmd())
 	if av := m.getAgentView(); av != nil {
 		return m, tea.Batch(func() tea.Msg {
 			av.LoadAgents()
@@ -857,6 +873,14 @@ func (m Model) handleAppKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) View() string {
 	// If router is initialized, use layout composition
 	if m.router != nil && m.layout != nil {
+		// Flag waiting agents on the Questions tab, whichever view is up.
+		badge := ""
+		if av := m.getAgentView(); av != nil {
+			if n := av.BlockedCount(); n > 0 {
+				badge = fmt.Sprintf("(%d)", n)
+			}
+		}
+		m.router.SetTabBadge("Questions", badge)
 		var base string
 		if m.proj != nil {
 			opts := RenderOpts{ProjectName: m.proj.Name}

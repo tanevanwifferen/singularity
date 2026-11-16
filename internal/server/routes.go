@@ -178,6 +178,13 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/agent/subscribe", wrap(s.handleAgentSubscribe))
 	mux.HandleFunc("/api/agent/subscribe_all", wrap(s.handleAgentSubscribeAll))
 
+	// Operator questions (ask_questions MCP tool).
+	mux.HandleFunc("/api/question/ask", wrap(s.handleQuestionAsk))
+	mux.HandleFunc("/api/question/batch", wrap(s.handleQuestionBatch))
+	mux.HandleFunc("/api/question/cancel", wrap(s.handleQuestionCancel))
+	mux.HandleFunc("/api/question/list", wrap(s.handleQuestionList))
+	mux.HandleFunc("/api/question/answer", wrap(s.handleQuestionAnswer))
+
 	// Queue.
 	mux.HandleFunc("/api/queue/add", wrap(s.handleQueueAdd))
 	mux.HandleFunc("/api/queue/list", wrap(s.handleQueueList))

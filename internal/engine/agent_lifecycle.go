@@ -21,6 +21,7 @@ func (a *Agent) start() error {
 	a.State = AgentStarting
 
 	binary, args := a.backend.Binary(), a.backend.Args(a.model, a.effort, a.maxTurns, a.allowedTools)
+	args = append(args, a.mcpArgs()...)
 	a.cmd = exec.Command(binary, args...)
 	a.cmd.Dir = a.WorkDir
 	a.cmd.Env = a.backend.Env()
@@ -179,6 +180,15 @@ func (a *Agent) waitForExit() {
 	}
 
 	a.closeDone()
+
+	// After closeDone, never before: RemoveAgent and Shutdown hold the
+	// engine lock while they wait on done, and onExit needs engine state.
+	if a.mcpConfigPath != "" {
+		os.Remove(a.mcpConfigPath)
+	}
+	if a.onExit != nil {
+		a.onExit()
+	}
 }
 
 // closeDone closes the done channel exactly once. start() calls this itself

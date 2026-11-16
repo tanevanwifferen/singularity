@@ -14,6 +14,7 @@ import (
 	"gitlab.com/tanevanwifferen1/singularity/internal/daemon"
 	"gitlab.com/tanevanwifferen1/singularity/internal/engine"
 	"gitlab.com/tanevanwifferen1/singularity/internal/project"
+	"gitlab.com/tanevanwifferen1/singularity/internal/questionmcp"
 	"gitlab.com/tanevanwifferen1/singularity/internal/service"
 	"gitlab.com/tanevanwifferen1/singularity/internal/theme"
 )
@@ -42,6 +43,11 @@ func main() {
 			// Not for humans — plain text on stdout, but driven by a
 			// throwaway herdr-driver underneath.
 			os.Exit(engine.RunHerdrOneshot(os.Args[2:]))
+		case "mcp-questions":
+			// Internal: the MCP server an agent's CLI launches for the
+			// ask_questions tool (internal/questionmcp). Not for humans —
+			// it speaks JSON-RPC on stdio.
+			os.Exit(questionmcp.Run(os.Args[2:]))
 		case "help", "-h", "--help":
 			printUsage()
 			return
@@ -71,6 +77,8 @@ Usage:
                                      herdr pane (spawned by the herdr backend)
   singularity herdr-oneshot <prompt> internal: one prompt-in/text-out call
                                      through a throwaway herdr pane
+  singularity mcp-questions …        internal: the MCP server that gives an
+                                     agent its ask_questions tool
   singularity version                print version
   singularity help                   this message
 

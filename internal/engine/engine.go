@@ -74,6 +74,16 @@ type Engine struct {
 	updateMu        sync.RWMutex
 	updateTimers    map[string]*time.Timer
 	timerMu         sync.Mutex
+
+	// Operator questions asked through the ask_questions MCP tool
+	// (questions.go). qMu is taken before any Agent.mu, never after.
+	qMu           sync.Mutex
+	batches       map[string]*questionBatch
+	qSeq          int64
+	reaperRunning bool
+	// bridge is how an agent's MCP server reaches this daemon; the zero
+	// value leaves the tool out of every agent (mcp_config.go).
+	bridge QuestionBridge
 }
 
 // New creates a new agent engine, defaulting to the backend named by the
@@ -91,6 +101,7 @@ func New(maxAgents int) *Engine {
 		defaultBackend: ConfiguredBackend(),
 		updateTimers:   make(map[string]*time.Timer),
 		summarize:      defaultSummarizer,
+		batches:        make(map[string]*questionBatch),
 	}
 }
 
@@ -172,6 +183,8 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 	agent := newAgent(id, projectPath, task, opts, backend)
 	agent.soundCfg = e.soundCfg
 	agent.notify = func() { e.notifyUpdate(id) }
+	agent.bridge = e.bridge
+	agent.onExit = func() { e.dropAgentQuestions(id) }
 	e.agents[id] = agent
 	e.mu.Unlock()
 
@@ -253,22 +266,8 @@ func (e *Engine) StartAgent(projectPath string, task string, opts AgentOptions) 
 		}
 	}
 
-	// Set up timeout if configured
 	if opts.Timeout > 0 {
-		go func() {
-			select {
-			case <-time.After(opts.Timeout):
-				// terminate(), not a bare kill(false): a timeout firing while
-				// the agent is still being smart-routed has no subprocess yet,
-				// so kill's nil-cmd branch would leave the state untouched and
-				// the classifier would go on to start the agent unbounded —
-				// silently voiding the timeout it was just declared to enforce.
-				agent.terminate()
-				agent.appendOutput("system", fmt.Sprintf("Agent killed: timeout after %s", opts.Timeout))
-			case <-agent.Done():
-				// Agent finished before timeout
-			}
-		}()
+		go e.enforceTimeout(agent, opts.Timeout)
 	}
 
 	return id, nil
@@ -282,7 +281,7 @@ func (e *Engine) GetStatus(sessionID string) (AgentState, error) {
 	}
 	agent.mu.Lock()
 	defer agent.mu.Unlock()
-	return agent.State, nil
+	return agent.reportedStateLocked(), nil
 }
 
 // GetOutput returns the agent's output content as a string

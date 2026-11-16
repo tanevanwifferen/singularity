@@ -88,6 +88,30 @@ type Router struct {
 	// Submenu overlay state
 	showSubmenu   bool
 	activeSubmenu *components.Submenu
+
+	// tabBadges holds a short marker shown after a view's name in the tab
+	// bar (e.g. "(2)" on Questions while two agents wait for an answer).
+	tabBadges map[string]string
+}
+
+// SetTabBadge sets or, with an empty badge, clears a view's tab-bar marker.
+func (r *Router) SetTabBadge(name, badge string) {
+	if badge == "" {
+		delete(r.tabBadges, name)
+		return
+	}
+	if r.tabBadges == nil {
+		r.tabBadges = make(map[string]string)
+	}
+	r.tabBadges[name] = badge
+}
+
+// TabLabel is a view's name as the tab bar shows it, badge included.
+func (r *Router) TabLabel(name string) string {
+	if badge := r.tabBadges[name]; badge != "" {
+		return name + " " + badge
+	}
+	return name
 }
 
 // NewRouter creates a new router with the given initial view.

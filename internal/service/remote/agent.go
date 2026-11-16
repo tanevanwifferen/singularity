@@ -142,6 +142,8 @@ func parseAgentState(s string) service.AgentState {
 		return engine.AgentError
 	case "killed":
 		return engine.AgentKilled
+	case "blocked":
+		return engine.AgentBlocked
 	default:
 		return engine.AgentIdle
 	}

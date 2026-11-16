@@ -252,9 +252,13 @@ func (m *Manager) reconcile() []Task {
 			}
 			m.failLocked(t, msg)
 		case o.state == agentStateWaitingHuman:
-			t.State = StateWaitingHuman
-			if q := m.queues[t.QueueID]; q != nil {
-				q.dirty = true
+			// The runner reports the open questions in the text slot.
+			if t.State != StateWaitingHuman || t.Question != o.errTxt {
+				t.State = StateWaitingHuman
+				t.Question = o.errTxt
+				if q := m.queues[t.QueueID]; q != nil {
+					q.dirty = true
+				}
 			}
 		default:
 			// routing / starting / running / idle: still in flight. A task
@@ -302,9 +306,9 @@ func (m *Manager) reconcile() []Task {
 // Agent state names as produced by engine.AgentState.String(). Compared as
 // strings so internal/queue does not import internal/engine.
 //
-// agentStateWaitingHuman is not emitted by the engine yet — it arrives with
-// the human-escalation feature. Handling it now means the queue picks up
-// escalations the moment the engine can report them, with no change here.
+// agentStateWaitingHuman is the exception: it is the queue's own name for an
+// agent the engine reports as blocked on operator questions, translated by
+// the runner (see EngineRunner.AgentState).
 const (
 	agentStateComplete     = "complete"
 	agentStateError        = "error"

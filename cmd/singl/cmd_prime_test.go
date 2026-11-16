@@ -13,7 +13,7 @@ func TestPrimeGuideCoversDispatcher(t *testing.T) {
 	nouns := []string{
 		"status", "workflows", "agents", "branches", "repos", "stash", "sync",
 		"pipeline", "project", "diff", "commit", "mr", "rebase", "forge", "jira",
-		"queue",
+		"queue", "questions",
 	}
 	for _, noun := range nouns {
 		if !strings.Contains(primeGuide, "`"+noun+"`") {
@@ -52,7 +52,8 @@ func TestPrimeGuideTeachesQueueFirst(t *testing.T) {
 		"queue add --file",       // the recommended submit path
 		"queue wait --queue",     // the recommended block path
 		"backpressure",           // capacity no longer errors
-		"waiting_human",          // ...documented as a gap, not as live behaviour
+		"waiting_human",          // a task whose agent asked a question
+		"questions answer",       // ...and how it gets its answer
 		"use_worktree",           // the one-agent-per-directory exemption
 		"scheduler enforces",     // ...which the scheduler now polices
 		"escape hatch",           // agents spawn is still documented
@@ -69,15 +70,13 @@ func TestPrimeGuideTeachesQueueFirst(t *testing.T) {
 		t.Error("primer still frames spawn-then-poll as the main observation step")
 	}
 
-	// waiting_human must be described as a gap, not as a branch to write.
-	// The engine cannot report a stalled agent in this build, so an agent
-	// primed to answer one writes a path it can never take and reaches for
-	// a verb that always returns CONFLICT.
-	if !strings.Contains(primeGuide, "Human escalation is not implemented") {
-		t.Error("primer does not disclose that waiting_human is unreachable in this build")
+	// Human escalation is live: the primer must not still call it a gap, and
+	// must say that queue wait returns early for a question.
+	if strings.Contains(primeGuide, "Human escalation is not implemented") {
+		t.Error("primer still says human escalation is not implemented")
 	}
-	if strings.Contains(primeGuide, "it returns **early** with a notice naming the task ID") {
-		t.Error("primer still documents the waiting_human early return as live queue wait behaviour")
+	if !strings.Contains(primeGuide, "returned **early**") {
+		t.Error("primer does not document queue wait's early return for a waiting_human task")
 	}
 }
 

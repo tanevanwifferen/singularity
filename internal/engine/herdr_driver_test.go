@@ -701,3 +701,66 @@ func TestHerdrDriverLiveIntegration(t *testing.T) {
 		}
 	}
 }
+
+// TestHerdrDriverForgivesTimeoutWhileBlocked: a herdr `timeout` on a turn in
+// which the agent was waiting on the operator is not the turn's outcome —
+// the driver waits again instead of reporting a failed turn.
+func TestHerdrDriverForgivesTimeoutWhileBlocked(t *testing.T) {
+	dir := fakeHerdr(t, "")
+	// The prompt times out; the wait that follows settles the turn.
+	script := `#!/bin/sh
+echo "$*" >> ` + filepath.Join(dir, "calls.log") + `
+case "$1 $2" in
+  "agent get")    echo '{"result":{"agent":{"agent_status":"idle","state_change_seq":1}}}' ;;
+  "agent prompt") echo '{"error":{"code":"timeout","message":"timed out"}}'; exit 1 ;;
+  "agent wait")   echo '{"result":{"agent":{"agent_status":"done"}}}' ;;
+  *) echo '{"result":{"type":"ok"}}' ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "herdr"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	d := newTestDriver(t, &out)
+	before := d.observeAgent()
+
+	// Not blocked: the timeout stands.
+	if got := d.awaitAnswered(d.promptDirect("hi", before)); herdrErrorCode(got) != "timeout" {
+		t.Fatalf("unblocked turn settled as %s, want the timeout reported", got)
+	}
+
+	// Blocked at some point during the wait: forgiven, and waited out.
+	d.blockedSeen.Store(true)
+	got := d.awaitAnswered(d.promptDirect("hi", before))
+	if herdrErrorCode(got) != "" || !strings.Contains(got, `"done"`) {
+		t.Fatalf("blocked turn settled as %s, want the wait's done state", got)
+	}
+	calls, _ := os.ReadFile(filepath.Join(dir, "calls.log"))
+	if !strings.Contains(string(calls), "agent wait singltest --until idle --until done") {
+		t.Errorf("driver did not re-wait after the forgiven timeout:\n%s", calls)
+	}
+}
+
+// TestHerdrRelayTracksBlockedLines: the engine's B:1 / B:0 stdin lines set
+// the driver's blocked flag without being mistaken for prompts.
+func TestHerdrRelayTracksBlockedLines(t *testing.T) {
+	dir := fakeHerdr(t, "")
+	var out bytes.Buffer
+	d := newTestDriver(t, &out)
+
+	d.relay(strings.NewReader("B:1\n"))
+	if !d.blocked.Load() || !d.blockedSeen.Load() {
+		t.Fatal("B:1 did not mark the driver blocked")
+	}
+	d.relay(strings.NewReader("B:0\n"))
+	if d.blocked.Load() {
+		t.Fatal("B:0 did not clear the blocked flag")
+	}
+	if !d.blockedSeen.Load() {
+		t.Error("blockedSeen must survive B:0: the wait in flight was blocked for part of it")
+	}
+	if calls, _ := os.ReadFile(filepath.Join(dir, "calls.log")); strings.Contains(string(calls), "agent prompt") {
+		t.Errorf("a blocked line was submitted as a prompt:\n%s", calls)
+	}
+}

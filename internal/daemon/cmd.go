@@ -163,6 +163,10 @@ func Run(opts RunOptions) error {
 	// the configured cap on the shared instance before any agent starts.
 	srv.Engine().SetMaxAgents(maxAgents)
 
+	// Give agents the ask_questions MCP tool: its server is this binary,
+	// talking back to this listener.
+	srv.Engine().SetQuestionBridge(engine.QuestionBridge{Binary: engine.SingularityBinary(), Server: listenURL})
+
 	// Model aliases and classifier models live in models.json next to
 	// config.json; the file is created with the defaults when absent.
 	engine.SetModels(config.LoadDefaultModelsConfig())

@@ -50,6 +50,7 @@ func New(eng *engine.Engine, projectLoader *project.Loader, jiraCfg config.JiraC
 		Forge:    &localForgeService{},
 		Project:  projSvc,
 		Agent:    agentSvc,
+		Question: &localQuestionService{eng: eng},
 		Queue:    &localQueueService{mgr: taskQueue},
 		Flow:     &localFlowService{mgr: flowMgr, eng: eng},
 		Jira:     newJiraService(eng, jiraCfg),

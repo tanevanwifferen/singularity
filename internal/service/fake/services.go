@@ -30,6 +30,7 @@ func New() *service.Services {
 		Forge:    forgeStub{},
 		Project:  projectStub{},
 		Agent:    agentStub{},
+		Question: questionStub{},
 		Queue:    queueStub{},
 		Flow:     NewFlowStub(),
 		Jira:     jiraStub{},
@@ -361,6 +362,22 @@ func (agentStub) SubscribeAll(context.Context) (<-chan service.AgentEvent, func(
 	return ch, func() {}, nil
 }
 func (agentStub) ReloadModelsConfig() {}
+
+// questionStub -----------------------------------------------------------------
+
+type questionStub struct{}
+
+func (questionStub) Ask(context.Context, string, []string) (service.QuestionBatch, error) {
+	return service.QuestionBatch{}, unavail()
+}
+func (questionStub) Batch(context.Context, string) (service.QuestionBatch, error) {
+	return service.QuestionBatch{}, unavail()
+}
+func (questionStub) Cancel(context.Context, string) error             { return unavail() }
+func (questionStub) List(context.Context) ([]service.Question, error) { return nil, unavail() }
+func (questionStub) Answer(context.Context, string, string) (service.Question, error) {
+	return service.Question{}, unavail()
+}
 
 // queueStub --------------------------------------------------------------------
 

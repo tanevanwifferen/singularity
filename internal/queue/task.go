@@ -45,12 +45,10 @@ const (
 	StateReady State = "ready"
 	// StateRunning means an agent has been dispatched for this task.
 	StateRunning State = "running"
-	// StateWaitingHuman means the agent stopped to ask the operator a
-	// question. Unreachable in this build: the engine never emits the
-	// agent state that produces it (see agentStateWaitingHuman in
-	// scheduler.go), so nothing user-facing may advertise it as live
-	// behaviour. The state machine below keeps the arc because the queue
-	// half is complete; only the engine's report is missing and will resume once Answer is called.
+	// StateWaitingHuman means the agent stopped to ask the operator one or
+	// more questions (the engine reports it blocked, see
+	// agentStateWaitingHuman in scheduler.go) and resumes once they are
+	// all answered.
 	StateWaitingHuman State = "waiting_human"
 	// StateDone means the agent finished successfully.
 	StateDone State = "done"

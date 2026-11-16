@@ -67,12 +67,19 @@ func (r *EngineRunner) StartTask(ctx context.Context, t Task) (string, error) {
 }
 
 // AgentState reports one agent's state name and error text.
+//
+// An agent blocked on operator questions is reported in the queue's own
+// vocabulary, as waiting_human, with the open questions as the text: that is
+// what the scheduler turns into a waiting_human task and its Question.
 func (r *EngineRunner) AgentState(agentID string) (string, string, bool) {
 	a := r.eng.GetAgent(agentID)
 	if a == nil {
 		return "", "", false
 	}
 	snap := a.Snapshot()
+	if snap.State == engine.AgentBlocked {
+		return agentStateWaitingHuman, r.eng.OpenQuestionText(agentID), true
+	}
 	return snap.State.String(), snap.Error, true
 }
 
@@ -102,8 +109,15 @@ func (r *EngineRunner) WorkDirBusy(workDir string) bool {
 	return r.eng.WorkDirOccupied(workDir)
 }
 
-// SendInput delivers a message to a running agent's stdin.
+// SendInput delivers the operator's reply to an agent. An agent blocked on
+// questions is waiting inside a tool call, not on its stdin, so the reply is
+// the answer to every question it has open; `singl questions answer` is the
+// way to answer them one by one. Any other agent gets it as a follow-up.
 func (r *EngineRunner) SendInput(agentID, message string) error {
+	n, err := r.eng.AnswerAgentQuestions(agentID, message)
+	if err != nil || n > 0 {
+		return err
+	}
 	return r.eng.SendInput(agentID, message)
 }
 

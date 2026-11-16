@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -143,22 +141,22 @@ func (b *herdrBackend) Name() string { return "herdr" }
 // (see the type doc and herdr_driver.go). It is resolved the same way
 // daemon.daemonBinary resolves the daemon: self when self is already the
 // singularity binary, else a sibling, else PATH.
-func (b *herdrBackend) Binary() string {
-	if self, err := os.Executable(); err == nil {
-		if filepath.Base(self) == "singularity" {
-			return self
-		}
-		sibling := filepath.Join(filepath.Dir(self), "singularity")
-		if _, err := os.Stat(sibling); err == nil {
-			return sibling
-		}
+func (b *herdrBackend) Binary() string { return SingularityBinary() }
+
+// MCPArgs implements MCPBackend. The args land after the driver's `--`, so
+// they go to claude; --mcp-config takes any number of values and therefore
+// has to stay the last flag.
+func (b *herdrBackend) MCPArgs(configPath string) []string {
+	return []string{"--mcp-config", configPath}
+}
+
+// BlockedInput implements BlockAwareBackend: the driver must not let herdr's
+// per-turn timeout run out on an agent that is waiting for the operator.
+func (b *herdrBackend) BlockedInput(blocked bool) []byte {
+	if blocked {
+		return []byte(herdrBlockedPrefix + "1\n")
 	}
-	if p, err := exec.LookPath("singularity"); err == nil {
-		return p
-	}
-	// Nothing found: exec will fail with a legible "not found" naming the
-	// binary the operator needs on PATH, which beats guessing.
-	return "singularity"
+	return []byte(herdrBlockedPrefix + "0\n")
 }
 
 // herdrTerminationGrace is how long Agent.kill waits, after SIGTERM, for the

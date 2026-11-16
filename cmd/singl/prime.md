@@ -343,14 +343,16 @@ singl --json queue queues                           # every queue with its state
 
 Task states: `blocked` → `ready` → `running` → `done`, plus `failed`,
 `cancelled` and `skipped` (a dependency failed under `on_failure: block`).
-The wire enum also carries `waiting_human`, but nothing in this build ever
-produces it — see Known gaps.
+A running task turns `waiting_human` when its agent stops to ask a question
+(see "Questions" below); it goes back to `running` once the questions are
+answered.
 
 `queue wait` exit codes — the whole point of the verb, so check them:
 
 | Exit | Meaning |
 |---|---|
 | `0` | the queue drained and every task is `done` |
+| `0` | a task is `waiting_human` — returned **early**, naming the task and its question; answer it, then wait again |
 | `1` | the queue drained but at least one task `failed`, was `cancelled` or was `skipped` |
 | `1` | `--timeout` expired (JSON carries `"timed_out": true` and the last tallies) |
 
@@ -444,6 +446,22 @@ multiple ids `--any` returns as soon as the first agent finishes instead of
 waiting for all of them. `wait-all` snapshots the currently active agents and
 waits for those — agents spawned later don't extend the wait. Exit `0` only
 when every waited agent ended `complete`; `1` on `error`/`killed` or timeout.
+
+**Questions.** A `claude` or `herdr` agent has an `ask_questions` tool: when it
+cannot proceed without a decision it asks the operator one or more questions
+in a single call and stops. Its state becomes `blocked` (a queued task:
+`waiting_human`) and stays that way — with no timeout, and without the wait
+counting against `--timeout` — until **every** question of that call has an
+answer. Then the agent gets the answers and carries on.
+
+```
+singl --json questions list                         # [{"id":"q7","agent_id":"...","text":"...","answered":false}, ...]
+singl questions answer --id q7 --message "use the v2 endpoint"
+singl queue answer --id <task-id> --message "..."   # same answer to every open question of that task
+```
+
+Answer what you can from the task you were given; pass anything else on to the
+user rather than guessing — the agent asked because it could not decide alone.
 
 `agents watch --id <id>` and `agents watch-all` stream live to stdout and **block
 until the agent stops** — use them only when a human is watching; `queue wait`,
@@ -553,6 +571,7 @@ idempotent for the repos that already cleaned.
 | Noun | Verbs | Key flags |
 |---|---|---|
 | `status` | — | — |
+| `questions` | list answer | `--agent` (list) `--id` `--message` (answer) |
 | `queue` | add list show graph wait cancel retry answer pause resume queues remove | `--file` `--workdir` `--prompt` `--title` `--after` `--queue` `--id` `--state` `--message` `--model` `--effort` `--timeout` `--interval` `--backend` `--use-worktree` `--context-file` `--allowed-tools` `--max-retries` `--on-failure` `--priority` `--smart-route` `--no-smart-route` |
 | `agents` | list get spawn resume kill remove output input wait wait-all watch watch-all chat stats | `--id` `--workdir` `--prompt` `--message` `--offset` `--tail` `--last` `--full` `--model` `--effort` `--smart-route` `--max-turns` `--timeout` `--interval` `--any` `--backend` |
 | `flow` | start continue list show tree wait cancel remove | `--workdir` `--prompt` `--review-prompt` `--max-rounds` `--rounds` (continue: extra rounds, default 3) `--title` `--id` `--state` `--model` `--effort` `--timeout` `--interval` `--backend` `--context-file` `--allowed-tools` `--reviewer-model` `--reviewer-effort` `--smart-route` `--no-smart-route` (no `--use-worktree`; `--max-retries` is rejected) |
@@ -676,12 +695,12 @@ in for that host, and prints the exact `tea logins add` command when it is not.
   a `--file` document instead. (`--smart-route`/`--no-smart-route` are exposed,
   and routing is on by default just as it is for `agents spawn` — in a `--file`
   document set `"smart_route": false` per task to opt out.)
-- Human escalation is not implemented. `waiting_human` exists in the task-state
-  enum and the queue handles it end to end, but the agent engine has no way to
-  report that an agent stopped to ask something, so no task ever reaches that
-  state: `queue answer` errors with CONFLICT for every input, and `queue wait`
-  never returns a question. Do not write a branch for it — a stuck agent shows
-  up as a task still `running`, which is what `opts.timeout_secs` is for.
+- Only `claude` and `herdr` agents can ask questions: the `ask_questions` tool
+  is an MCP server and `pi` ships without MCP. A stuck `pi` agent shows up as a
+  task still `running`, which is what `opts.timeout_secs` is for.
+- `agents wait` does not return for a `blocked` agent — blocked is not a
+  terminal state. Use `queue wait`, which does return early, or check
+  `questions list` when a wait runs long.
 - **Flows have no cost cap.** N rounds is roughly 2N agents, and nothing
   aggregates their `TotalCostUSD` — not `flow show`, not `flow list`. The only
   bounds are `--max-rounds` (1..20, default 3) and the per-step
@@ -696,9 +715,10 @@ in for that host, and prints the exact `tea logins add` command when it is not.
   `--review-prompt` if you see a flow burning rounds on style; the cap itself is
   yours to raise with `flow continue` when the findings say the work is
   converging, which is a judgement no daemon-side rule makes for you.
-- **Flows inherit the `waiting_human` gap.** A flow cannot stop to ask a
-  question, because nothing in this build ever reaches that state; a stuck step
-  shows up as a task still `running`, bounded only by its timeout.
+- **A flow step that asks a question just waits.** Its task turns
+  `waiting_human` and the flow stays where it is until the question is answered
+  (`questions list`, or `queue wait --queue flow-<id>`, which returns early for
+  it); `flow wait` itself does not report it.
 - **`flow start --max-retries N` exits `2`.** The flag is registered only so it
   can say why: no per-task retry count reaches the daemon for a flow. Use
   `--timeout` for a step and `--max-rounds` for the flow.

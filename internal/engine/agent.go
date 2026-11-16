@@ -23,6 +23,14 @@ const (
 	AgentComplete
 	AgentError
 	AgentKilled
+	// AgentBlocked is a running agent that asked the operator one or more
+	// questions (ask_questions MCP tool, see questions.go) and is waiting
+	// for all of them to be answered. It is derived, not stored: Agent.State
+	// stays AgentRunning underneath and Snapshot reports blocked while the
+	// agent has open questions, so the lifecycle code keeps one notion of
+	// "the process is working". Appended last so the ordinals of the
+	// existing states do not move.
+	AgentBlocked
 )
 
 func (s AgentState) String() string {
@@ -41,6 +49,8 @@ func (s AgentState) String() string {
 		return "error"
 	case AgentKilled:
 		return "killed"
+	case AgentBlocked:
+		return "blocked"
 	default:
 		return "unknown"
 	}
@@ -54,11 +64,12 @@ func (s AgentState) Terminal() bool {
 
 // Active reports whether the state occupies a slot in the engine's agent pool.
 // Routing counts: smart routing is on by default and an agent sits there for
-// the whole classifier round trip, still holding its slot. This is the single
+// the whole classifier round trip, still holding its slot. Blocked counts
+// too: the process is alive in its directory, waiting on the operator. This is the single
 // predicate the capacity check and Stats() report from, so the number the daemon
 // enforces can never diverge from the number it reports.
 func (s AgentState) Active() bool {
-	return s == AgentRunning || s == AgentStarting || s == AgentRouting
+	return s == AgentRunning || s == AgentStarting || s == AgentRouting || s == AgentBlocked
 }
 
 // Agent wraps a coding-agent subprocess with structured output streaming.
@@ -124,6 +135,20 @@ type Agent struct {
 	// summaryOnce guards the one-shot title call so an agent can never be
 	// summarised twice (once per cheap-model call is a real cost).
 	summaryOnce sync.Once
+
+	// Operator questions (questions.go), all guarded by mu. openQuestions is
+	// how many of this agent's questions are still unanswered; blockedSince
+	// and blockedTotal account the time spent waiting on them, which the
+	// agent's timeout does not count against it.
+	openQuestions int
+	blockedSince  time.Time
+	blockedTotal  time.Duration
+
+	// bridge and mcpConfigPath wire the ask_questions MCP server into the
+	// subprocess (mcp_config.go). onExit runs once the subprocess is gone.
+	bridge        QuestionBridge
+	mcpConfigPath string
+	onExit        func()
 }
 
 // OutputEntry represents a single output chunk from the agent.
