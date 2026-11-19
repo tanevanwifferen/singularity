@@ -2,6 +2,8 @@ package engine
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -15,6 +17,7 @@ func (a *Agent) handleBackendEvent(ev *BackendEvent) {
 		}
 
 	case BackendToolUse:
+		a.trackBackgroundWork(ev)
 		summary := formatToolUseSummary(ev.ToolName, ev.ToolInput)
 		entry := OutputEntry{
 			Timestamp: time.Now(),
@@ -71,10 +74,65 @@ func (a *Agent) handleBackendEvent(ev *BackendEvent) {
 	}
 }
 
+// backgroundWorkTools are the tools an agent uses to look at, wait for or
+// stop background work it started. Calling one means the agent is dealing
+// with that work itself, so it no longer counts as abandoned.
+var backgroundWorkTools = map[string]bool{
+	"TaskOutput": true, "BashOutput": true, "TaskStop": true, "KillShell": true, "KillBash": true,
+}
+
+// trackBackgroundWork records tool calls that leave work running after the
+// call returns: a Monitor watch, or any tool started with run_in_background
+// (a Bash command, a sub-agent). See handleResult for what that is used for.
+func (a *Agent) trackBackgroundWork(ev *BackendEvent) {
+	bg, _ := ev.ToolInput["run_in_background"].(bool)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	switch {
+	case backgroundWorkTools[ev.ToolName]:
+		a.backgroundWork = nil
+	case ev.ToolName == "Monitor" || bg:
+		if a.backgroundWork == nil {
+			a.backgroundWork = map[string]string{}
+		}
+		a.backgroundWork[ev.ToolID] = ev.ToolName
+	}
+}
+
 // handleResult processes a BackendResult event: updates cost, transitions state,
 // and triggers worktree merge-back on successful completion.
+//
+// A turn that ends while the agent still has background work it started and
+// never looked at again (a Monitor watch, a run_in_background command) is not
+// a completion: the agent said "waiting for the notification" and stopped,
+// but the scheduler terminates the agent's process the moment the task is
+// terminal, so the work is killed and nobody ever reads its outcome. Neither
+// backend can observe that the work later finishes — herdr's `agent prompt
+// --wait` returns at the first idle, claude's stream-json emits a result per
+// turn — so it is reported as an error, not waited for, and a flow does not
+// go on to review a tree whose tests were never awaited.
 func (a *Agent) handleResult(ev *BackendEvent) {
 	a.mu.Lock()
+	if pending := a.backgroundWork; len(pending) > 0 {
+		a.backgroundWork = nil
+		if !ev.IsResultError {
+			names := map[string]bool{}
+			for _, n := range pending {
+				names[n] = true
+			}
+			var list []string
+			for n := range names {
+				list = append(list, n)
+			}
+			sort.Strings(list)
+			copied := *ev
+			copied.IsResultError = true
+			copied.Content = fmt.Sprintf("agent ended its turn with background work still running (%d started: %s) "+
+				"that it never awaited; the work is killed when the task ends, so this is not a completion. "+
+				"Run it in the foreground or wait for it before ending the turn", len(pending), strings.Join(list, ", "))
+			ev = &copied
+		}
+	}
 	if ev.CostUSD > 0 {
 		a.TotalCostUSD = ev.CostUSD
 	}

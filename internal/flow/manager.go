@@ -269,6 +269,8 @@ func (m *Manager) Start(req StartRequest) (Flow, error) {
 		planOpts = req.Opts
 	}
 
+	base := gitHead(workDir)
+
 	m.mu.Lock()
 	m.seq++
 	id := "f" + strconv.FormatInt(m.seq, 10)
@@ -280,6 +282,7 @@ func (m *Manager) Start(req StartRequest) (Flow, error) {
 		Goal:           goal,
 		ReviewGoal:     strings.TrimSpace(req.ReviewGoal),
 		WorkDir:        workDir,
+		BaseHead:       base,
 		MaxRounds:      rounds,
 		Opts:           req.Opts,
 		ReviewOpts:     reviewOpts,

@@ -73,9 +73,8 @@ func TestImplementPrompt(t *testing.T) {
 		"\n" +
 		"/srv/work/singularity\n" +
 		"\n" +
-		"All work happens in that directory. Do not create a branch, a worktree or a\n" +
-		"commit unless the goal asks for one.\n" +
-		"\n" +
+		"All work happens in that directory. Do not create a branch or a worktree.\n" +
+		"\n" + wantNoCommit +
 		"## When you are done\n" +
 		"\n" +
 		"Report what you changed: the files you touched and, for each, what changed and\n" +
@@ -111,9 +110,8 @@ func TestImplementPromptWithPlan(t *testing.T) {
 		"\n" +
 		"/srv/work/singularity\n" +
 		"\n" +
-		"All work happens in that directory. Do not create a branch, a worktree or a\n" +
-		"commit unless the goal asks for one.\n" +
-		"\n" +
+		"All work happens in that directory. Do not create a branch or a worktree.\n" +
+		"\n" + wantNoCommit +
 		"## When you are done\n" +
 		"\n" +
 		"Report what you changed: the files you touched and, for each, what changed and\n" +
@@ -124,6 +122,17 @@ func TestImplementPromptWithPlan(t *testing.T) {
 		t.Errorf("ImplementPrompt() with plan:\n%s\nwant:\n%s", got, wantImplement)
 	}
 }
+
+// wantNoCommit is the work steps' no-commit section, in the position it holds
+// after the working-directory paragraph.
+const wantNoCommit = "" +
+	"## Do not commit\n" +
+	"\n" +
+	"Do NOT run `git commit`, whatever the goal says. A goal that mentions a commit\n" +
+	"type or message describes the commit the flow makes itself after review; it is\n" +
+	"not an instruction to you. Leave every change uncommitted in the working tree so\n" +
+	"the reviewer reads it as a diff, and do not amend, reset or stash.\n" +
+	"\n"
 
 const planPath = "/var/lib/singularity/flows/f3/plan.md"
 
@@ -238,7 +247,7 @@ func TestFixPromptRound3(t *testing.T) {
 		"/srv/work/singularity\n" +
 		"\n" +
 		"The work from the previous rounds is already in that directory. Fix it in place.\n" +
-		"\n" +
+		"\n" + wantNoCommit +
 		"## Earlier rounds\n" +
 		"\n" +
 		"- Round 1: reject, 1 finding — No retry at all on 429.\n" +
@@ -347,7 +356,7 @@ func TestReviewPrompt(t *testing.T) {
 		"Writing this file is the only way your decision is recorded. If it is missing or\n" +
 		"malformed, your review does not count.\n" +
 		""
-	got := ReviewPrompt(testFlow(), verdictPath)
+	got := ReviewPrompt(testFlow(), verdictPath, "")
 	if got != wantReview {
 		t.Errorf("ReviewPrompt():\n%s\nwant:\n%s", got, wantReview)
 	}
@@ -443,7 +452,7 @@ func TestReviewPromptWithReviewGoal(t *testing.T) {
 		""
 	f := testFlow()
 	f.ReviewGoal = "Pay particular attention to the clock handling in the date branch."
-	got := ReviewPrompt(f, verdictPath)
+	got := ReviewPrompt(f, verdictPath, "")
 	if got != wantReviewFocus {
 		t.Errorf("ReviewPrompt() with ReviewGoal:\n%s\nwant:\n%s", got, wantReviewFocus)
 	}
@@ -455,7 +464,7 @@ func TestReviewPromptWithReviewGoal(t *testing.T) {
 // TestReviewPromptAcceptsItsOwnExample guards the one coupling this file exists for:
 // the schema the reviewer is handed must be a document ParseVerdict accepts.
 func TestReviewPromptAcceptsItsOwnExample(t *testing.T) {
-	prompt := ReviewPrompt(testFlow(), verdictPath)
+	prompt := ReviewPrompt(testFlow(), verdictPath, "")
 	start := strings.Index(prompt, "```json\n")
 	if start < 0 {
 		t.Fatal("ReviewPrompt() carries no json example")

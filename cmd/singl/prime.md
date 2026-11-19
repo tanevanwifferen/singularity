@@ -231,6 +231,21 @@ commit has landed** — the commit agent is usually still running. The task is
 fire-and-forget: it is not recorded on the flow (`flow show` and `flow tree`
 do not list it), and if it fails the flow stays `accepted`.
 
+**A work step that commits anyway is recorded, not undone.** The implement and
+fix prompts say plainly not to run `git commit` whatever the goal text says (a
+goal that mentions a commit type or message describes the flow's own commit),
+but an agent can still do it. The daemon records HEAD of the work dir when the
+flow starts (`base_head` on the flow in `--json flow show`) and, per round, the
+HEAD its work step started from (`base_head`) and, when the round settles,
+`committed_head` if HEAD has moved; `flow show` prints a `Work step committed`
+line for it. Reviewers are told the flow's base commit, so they review
+`git diff <base>` — the committed and the uncommitted change together — and the
+daemon never resets or rewrites the agent's commit. A retried round keeps its
+base. The commit task treats "already committed, tree clean" as a normal
+outcome: it commits only what is left and reports the existing commits.
+A work dir that is not inside a git repo (one that merely contains nested
+checkouts) has no HEAD to record and is not tracked.
+
 Wait for it before you touch the branch:
 
 ```
@@ -343,6 +358,18 @@ singl --json queue queues                           # every queue with its state
 
 Task states: `blocked` → `ready` → `running` → `done`, plus `failed`,
 `cancelled` and `skipped` (a dependency failed under `on_failure: block`).
+**Agents: do not end your turn while something is still running.** A turn end
+is a completion, and a queued task's agent is terminated the moment its task is
+terminal, so a test run or watch you left in the background (a `Monitor`, a
+`run_in_background` command) dies unread. Run it in the foreground, or wait for
+it, before you answer. The daemon enforces this for `claude` and `herdr`
+agents: a turn that ends with background work the agent started and never
+looked at again (no `TaskOutput`/`BashOutput`/`TaskStop` call) is not `done` —
+the task ends `failed`, with the reason in the agent's `error`, and a flow step
+that does this is a failed step, so the flow never reviews the unfinished work.
+`queue retry` it, and tell the agent in the prompt to run long commands in the
+foreground. Put that sentence in the prompts you write.
+
 A running task turns `waiting_human` when its agent stops to ask a question
 (see "Questions" below); it goes back to `running` once the questions are
 answered.

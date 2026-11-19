@@ -25,8 +25,8 @@ func ImplementPrompt(f *Flow) string {
 	writeGoal(&b, f.Goal)
 	writePlan(&b, f.Plan)
 	fmt.Fprintf(&b, "## Working directory\n\n%s\n\n", f.WorkDir)
-	b.WriteString("All work happens in that directory. Do not create a branch, a worktree or a\n")
-	b.WriteString("commit unless the goal asks for one.\n\n")
+	b.WriteString("All work happens in that directory. Do not create a branch or a worktree.\n\n")
+	writeNoCommit(&b)
 
 	b.WriteString("## When you are done\n\n")
 	b.WriteString("Report what you changed: the files you touched and, for each, what changed and\n")
@@ -53,6 +53,7 @@ func FixPrompt(f *Flow, prior []*Round) string {
 	writePlan(&b, f.Plan)
 	fmt.Fprintf(&b, "## Working directory\n\n%s\n\n", f.WorkDir)
 	b.WriteString("The work from the previous rounds is already in that directory. Fix it in place.\n\n")
+	writeNoCommit(&b)
 
 	if len(prior) > 1 {
 		b.WriteString("## Earlier rounds\n\n")
@@ -96,9 +97,14 @@ func FixPrompt(f *Flow, prior []*Round) string {
 // the daemon state directory — never the work tree, which an agent may be
 // told to commit — that the daemon will read the verdict back from.
 //
+// base is the commit the flow's work started from ("" when the work dir is not
+// a git repository). The prompt is fixed when the round is submitted, before
+// the work step runs, so it cannot say whether the work step committed; it
+// gives the reviewer the range to look at either way.
+//
 // The schema spelled out below is exactly what ParseVerdict accepts; change
 // one and change the other.
-func ReviewPrompt(f *Flow, verdictPath string) string {
+func ReviewPrompt(f *Flow, verdictPath, base string) string {
 	var b strings.Builder
 
 	b.WriteString("You are reviewing a change another agent just made in an existing codebase.\n")
@@ -113,6 +119,14 @@ func ReviewPrompt(f *Flow, verdictPath string) string {
 	fmt.Fprintf(&b, "## Working directory\n\n%s\n\n", f.WorkDir)
 	b.WriteString("The change is in that directory. Read the code as it stands now; `git diff` and\n")
 	b.WriteString("`git status` will show what is uncommitted.\n\n")
+	if base != "" {
+		fmt.Fprintf(&b, "The work started from commit %s. The implementer was told not to commit but may\n", base)
+		b.WriteString("have anyway, so review the whole change since that commit, not only the\n")
+		b.WriteString("uncommitted part: `git log` over that range lists any commits it made, and\n")
+		fmt.Fprintf(&b, "`git diff %s` shows committed and uncommitted changes together (`git status`\n", base)
+		b.WriteString("adds untracked files). A clean working tree with commits on top of that commit\n")
+		b.WriteString("is the work, not an empty change — review those commits.\n\n")
+	}
 
 	if rg := strings.TrimSpace(f.ReviewGoal); rg != "" {
 		b.WriteString("## Extra review focus\n\n")
@@ -224,6 +238,13 @@ func CommitPrompt(f *Flow) string {
 	b.WriteString("verbatim. Do not push, and do not create or switch branches.\n\n")
 	b.WriteString("If a repository's working tree is already clean — nothing to commit — skip it;\n")
 	b.WriteString("that is not an error. If every repository is clean, say so and stop.\n\n")
+	if base := f.BaseHead; base != "" {
+		b.WriteString("The work steps were told not to commit, but one may have anyway. A clean working\n")
+		fmt.Fprintf(&b, "tree with commits already on top of %s in the working directory's own\n", base)
+		b.WriteString("repository is therefore a normal outcome, not a problem: leave those commits as\n")
+		b.WriteString("they are (do not amend, squash, reset or rewrite them), commit only what is\n")
+		b.WriteString("still uncommitted, and list the existing commits in your report.\n\n")
+	}
 
 	b.WriteString("## When you are done\n\n")
 	b.WriteString("Report each commit you made, naming its repository by its path relative to the\n")
@@ -231,6 +252,18 @@ func CommitPrompt(f *Flow) string {
 	b.WriteString("to commit.\n")
 
 	return b.String()
+}
+
+// writeNoCommit is the work steps' no-commit rule, stated so that a goal text
+// cannot override it: a goal that names a commit type or message (a Jira-style
+// "fix: ..." line, say) was once read as an instruction to commit, which left
+// the reviewer a clean tree and the commit task nothing to do.
+func writeNoCommit(b *strings.Builder) {
+	b.WriteString("## Do not commit\n\n")
+	b.WriteString("Do NOT run `git commit`, whatever the goal says. A goal that mentions a commit\n")
+	b.WriteString("type or message describes the commit the flow makes itself after review; it is\n")
+	b.WriteString("not an instruction to you. Leave every change uncommitted in the working tree so\n")
+	b.WriteString("the reviewer reads it as a diff, and do not amend, reset or stash.\n\n")
 }
 
 // writeNoUserInput reminds an agent that this run is unattended: nothing reads

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -399,9 +400,43 @@ func createGiteaPull(repoPath, source, target, title, description string) (strin
 	out := res.Stdout + "\n" + res.Stderr
 	url := ExtractURL(out)
 	if url == "" {
+		// tea 0.16 prints only "# #<index> <title>" and no URL. The PR exists
+		// then, so build its URL from the instance, owner/repo and the index.
+		if n := teaPullIndex(out); n > 0 {
+			return giteaPullURL(gr, n), gr, nil
+		}
 		return "", gr, noURLError("tea pulls create", out)
 	}
 	return url, gr, nil
+}
+
+// teaPullIndexRE matches the "# #353 <title>" line tea 0.16 prints after
+// creating a pull request.
+var teaPullIndexRE = regexp.MustCompile(`(?m)^\s*#*\s*#(\d+)\b`)
+
+// teaPullIndex returns the pull index from tea's output, or 0 when none is
+// printed.
+func teaPullIndex(out string) int {
+	m := teaPullIndexRE.FindStringSubmatch(out)
+	if m == nil {
+		return 0
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// giteaPullURL builds the web URL of a pull request:
+// <base>/<owner>/<repo>/pulls/<index>. The base is the instance URL of the
+// tea login, falling back to https://<host> of the origin remote.
+func giteaPullURL(gr *giteaRepo, index int) string {
+	base := strings.TrimRight(strings.TrimSpace(gr.Login.URL), "/")
+	if base == "" {
+		base = "https://" + gr.Host
+	}
+	return fmt.Sprintf("%s/%s/%s/pulls/%d", base, gr.Owner, gr.Name, index)
 }
 
 // giteaPullNumber extracts the pull index from a Gitea PR URL

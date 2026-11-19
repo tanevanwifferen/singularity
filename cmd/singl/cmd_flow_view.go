@@ -154,6 +154,10 @@ func fmtFlow(f api.Flow, steps map[string]api.FlowTreeNode) string {
 		if r.ReviewAttempt > 1 {
 			s += fmt.Sprintf("Review attempts: %d  \n", r.ReviewAttempt)
 		}
+		if r.CommittedHead != "" {
+			s += fmt.Sprintf("Work step committed: `%.12s` → `%.12s` (it was told not to; left as is)  \n",
+				r.BaseHead, r.CommittedHead)
+		}
 		s += fmtFlowStep(workStepName(r.N), r.WorkTaskID, steps)
 		s += fmtFlowStep("review", r.ReviewTaskID, steps)
 		if !r.StartedAt.IsZero() {
