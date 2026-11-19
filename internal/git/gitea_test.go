@@ -402,6 +402,47 @@ func TestCreateGiteaPRBuildsTeaCommand(t *testing.T) {
 	}
 }
 
+func TestCreateGiteaPRBuildsURLFromIndexWhenTeaPrintsNoURL(t *testing.T) {
+	installedCLIs(t, teaBin)
+	stubRemote(t, "https://gitea.example.com/acme/widget.git", nil)
+	fakeCLI(t, func(c recordedCall) cliResult {
+		if len(c.Args) > 1 && c.Args[0] == "logins" {
+			return cliResult{Stdout: teaLoginsJSON(teaLogin{
+				Name: "example", URL: "https://gitea.example.com/", User: "dev", Default: "true",
+			})}
+		}
+		// tea 0.16.0: index and title, no URL.
+		return cliResult{Stdout: "# #353 Add widget\n"}
+	})
+
+	mr, err := createGiteaPR("/repo", "feature/x", "main", "Add widget", "body")
+	if err != nil {
+		t.Fatalf("createGiteaPR failed: %v", err)
+	}
+	if want := "https://gitea.example.com/acme/widget/pulls/353"; mr.URL != want || mr.WebURL != want {
+		t.Errorf("MR URL = %q / %q, want %q", mr.URL, mr.WebURL, want)
+	}
+	if mr.Number != 353 {
+		t.Errorf("MR number = %d, want 353", mr.Number)
+	}
+}
+
+func TestCreateGiteaPullErrorsWhenTeaPrintsNeitherURLNorIndex(t *testing.T) {
+	installedCLIs(t, teaBin)
+	stubRemote(t, "https://gitea.example.com/acme/widget.git", nil)
+	fakeCLI(t, func(c recordedCall) cliResult {
+		if len(c.Args) > 1 && c.Args[0] == "logins" {
+			return cliResult{Stdout: teaLoginsJSON(teaLogin{
+				Name: "example", URL: "https://gitea.example.com", User: "dev", Default: "true",
+			})}
+		}
+		return cliResult{Stdout: "done\n"}
+	})
+	if _, _, err := createGiteaPull("/repo", "feature/x", "main", "T", "D"); err == nil {
+		t.Fatal("expected an error when tea prints neither URL nor index")
+	}
+}
+
 func TestCreateGiteaPRErrorsAreActionable(t *testing.T) {
 	t.Run("tea missing", func(t *testing.T) {
 		installedCLIs(t)
