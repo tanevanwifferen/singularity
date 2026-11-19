@@ -231,6 +231,21 @@ commit has landed** — the commit agent is usually still running. The task is
 fire-and-forget: it is not recorded on the flow (`flow show` and `flow tree`
 do not list it), and if it fails the flow stays `accepted`.
 
+**A work step that commits anyway is recorded, not undone.** The implement and
+fix prompts say plainly not to run `git commit` whatever the goal text says (a
+goal that mentions a commit type or message describes the flow's own commit),
+but an agent can still do it. The daemon records HEAD of the work dir when the
+flow starts (`base_head` on the flow in `--json flow show`) and, per round, the
+HEAD its work step started from (`base_head`) and, when the round settles,
+`committed_head` if HEAD has moved; `flow show` prints a `Work step committed`
+line for it. Reviewers are told the flow's base commit, so they review
+`git diff <base>` — the committed and the uncommitted change together — and the
+daemon never resets or rewrites the agent's commit. A retried round keeps its
+base. The commit task treats "already committed, tree clean" as a normal
+outcome: it commits only what is left and reports the existing commits.
+A work dir that is not inside a git repo (one that merely contains nested
+checkouts) has no HEAD to record and is not tracked.
+
 Wait for it before you touch the branch:
 
 ```

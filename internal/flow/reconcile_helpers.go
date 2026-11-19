@@ -167,6 +167,111 @@ func findRound(f *Flow, n int) *Round {
 	return nil
 }
 
+// gitHead is the commit HEAD points at in dir (or the nearest enclosing git
+// work tree), or "" when there is none or it cannot be read: not a repository,
+// no commit yet, a reftable repository. "" disables the committed-by-the-work-
+// step handling; it is never an error, because a flow over such a directory has
+// always worked.
+//
+// It reads .git in-process rather than running git, which would put a process
+// spawn (and its timeout) under m.mu in settleRound's apply. It is never called
+// between a pass's snapshot and its apply, a window in which a concurrent
+// Cancel makes apply refuse the batch; see roundBase.
+func gitHead(dir string) string {
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return ""
+	}
+	for ; ; dir = filepath.Dir(dir) {
+		if fi, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return headOf(dir, fi.IsDir())
+		}
+		if filepath.Dir(dir) == dir {
+			return ""
+		}
+	}
+}
+
+// headOf resolves HEAD of the work tree whose .git entry is in root: a
+// directory, or a file "gitdir: <path>" as in a linked worktree.
+func headOf(root string, dotGitIsDir bool) string {
+	gitDir := filepath.Join(root, ".git")
+	if !dotGitIsDir {
+		b, err := os.ReadFile(gitDir)
+		if err != nil {
+			return ""
+		}
+		path, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir:")
+		if !ok {
+			return ""
+		}
+		if gitDir = strings.TrimSpace(path); !filepath.IsAbs(gitDir) {
+			gitDir = filepath.Join(root, gitDir)
+		}
+	}
+	// A linked worktree keeps its own HEAD but shares refs with the main one.
+	commonDir := gitDir
+	if b, err := os.ReadFile(filepath.Join(gitDir, "commondir")); err == nil {
+		if commonDir = strings.TrimSpace(string(b)); !filepath.IsAbs(commonDir) {
+			commonDir = filepath.Join(gitDir, commonDir)
+		}
+	}
+	b, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
+	if err != nil {
+		return ""
+	}
+	ref, symbolic := strings.CutPrefix(strings.TrimSpace(string(b)), "ref:")
+	if !symbolic {
+		return validOID(strings.TrimSpace(string(b)))
+	}
+	ref = strings.TrimSpace(ref)
+	for _, d := range []string{gitDir, commonDir} {
+		if b, err := os.ReadFile(filepath.Join(d, filepath.FromSlash(ref))); err == nil {
+			return validOID(strings.TrimSpace(string(b)))
+		}
+	}
+	packed, err := os.ReadFile(filepath.Join(commonDir, "packed-refs"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(packed), "\n") {
+		if oid, name, ok := strings.Cut(line, " "); ok && name == ref {
+			return validOID(oid)
+		}
+	}
+	return ""
+}
+
+// validOID returns s when it is a full hex object id, else "".
+func validOID(s string) string {
+	if len(s) != 40 && len(s) != 64 {
+		return ""
+	}
+	for _, c := range s {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			return ""
+		}
+	}
+	return s
+}
+
+// roundBase is the HEAD recorded as round n's starting point: the flow's own
+// base for round 1, and for a later round the HEAD its predecessor settled at,
+// which is the predecessor's CommittedHead if that moved and its own base if it
+// did not. Nothing is read from disk here: this runs between a pass's snapshot
+// and its apply, a window in which a concurrent Cancel makes apply refuse the
+// batch, so only settleRound (inside apply) and Start read HEAD.
+func roundBase(f *Flow, n int) string {
+	if n <= 1 || n-2 >= len(f.Rounds) {
+		return f.BaseHead
+	}
+	prev := f.Rounds[n-2]
+	if prev.CommittedHead != "" {
+		return prev.CommittedHead
+	}
+	return prev.BaseHead
+}
+
 // isFlowQueueID reports whether a queue ID looks like a flow's own queue.
 func isFlowQueueID(queueID string) bool {
 	const prefix = "flow-"

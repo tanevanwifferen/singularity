@@ -159,7 +159,7 @@ func TestPendingFlowSubmitsRoundOne(t *testing.T) {
 	if !strings.HasSuffix(wantPath, "r1-a1-verdict.json") {
 		t.Fatalf("verdict path = %q, want it to end r1-a1-verdict.json", wantPath)
 	}
-	if review.Prompt != ReviewPrompt(&f, wantPath) {
+	if review.Prompt != ReviewPrompt(&f, wantPath, "") {
 		t.Errorf("review prompt is not ReviewPrompt with the round's verdict path:\n%s", review.Prompt)
 	}
 	// The reviewer writes the file with a shell redirect, which will not

@@ -562,6 +562,25 @@ func TestFmtFlow(t *testing.T) {
 	}
 }
 
+// TestFmtFlowShowsAWorkStepThatCommitted: a round whose work step moved HEAD
+// says so in `flow show`; a round that did not prints no such line.
+func TestFmtFlowShowsAWorkStepThatCommitted(t *testing.T) {
+	f := api.Flow{ID: "f1", Goal: "do it", MaxRounds: 2, State: service.FlowAccepted,
+		Rounds: []*api.FlowRound{
+			{N: 1, WorkTaskID: "t1", ReviewTaskID: "t2", ReviewAttempt: 1, State: service.FlowRoundRejected,
+				BaseHead: "aaaaaaaaaaaa1111", CommittedHead: "bbbbbbbbbbbb2222"},
+			{N: 2, WorkTaskID: "t3", ReviewTaskID: "t4", ReviewAttempt: 1, State: service.FlowRoundAccepted,
+				BaseHead: "bbbbbbbbbbbb2222"},
+		}}
+	out := fmtFlow(f, nil)
+	if want := "Work step committed: `aaaaaaaaaaaa` → `bbbbbbbbbbbb`"; !strings.Contains(out, want) {
+		t.Errorf("flow show output missing %q:\n%s", want, out)
+	}
+	if n := strings.Count(out, "Work step committed"); n != 1 {
+		t.Errorf("flow show prints %d 'Work step committed' lines, want 1 (round 2 did not commit):\n%s", n, out)
+	}
+}
+
 // TestFmtFlowWithoutTree pins the degradation `flow show` accepts: the tree
 // fetch is best-effort, so an unavailable tree costs the agent lines and
 // nothing else. A show that failed outright would lose the verdicts too.

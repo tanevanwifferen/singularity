@@ -208,7 +208,16 @@ type Round struct {
 	// ReviewAttempt is 1 or 2. It becomes 2 when the first review produced
 	// no parseable verdict and the flow submitted one more review task for
 	// the same round; a second failure errors the flow.
-	ReviewAttempt int        `json:"review_attempt"`
+	ReviewAttempt int `json:"review_attempt"`
+	// BaseHead is HEAD of the work dir when the round's work step was
+	// submitted ("" when the work dir is not in a git repository); for
+	// round 1 it is the flow's BaseHead. CommittedHead is HEAD when the
+	// round settled, recorded only when it differs from BaseHead: the work
+	// step committed although it was told not to. The flow does not undo
+	// that; reviewers are pointed at Flow.BaseHead and the commit task
+	// treats it as normal.
+	BaseHead      string     `json:"base_head,omitempty"`
+	CommittedHead string     `json:"committed_head,omitempty"`
 	Verdict       *Verdict   `json:"verdict,omitempty"`
 	State         RoundState `json:"state"`
 	StartedAt     time.Time  `json:"started_at"`
@@ -257,6 +266,14 @@ type Flow struct {
 	// re-derived per round, the way Goal is repeated verbatim rather than
 	// re-fetched.
 	Plan string `json:"plan,omitempty"`
+
+	// BaseHead is HEAD of WorkDir when the flow started ("" when WorkDir is
+	// not inside a git repository). It is the commit every reviewer and the
+	// commit task measure the change from, so a commit a work step made
+	// despite being told not to stays inside the range under review. It is
+	// read at Start so that no pass has to read it between a snapshot and
+	// its apply (see roundBase).
+	BaseHead string `json:"base_head,omitempty"`
 
 	Rounds    []*Round   `json:"rounds"`
 	CreatedAt time.Time  `json:"created_at"`

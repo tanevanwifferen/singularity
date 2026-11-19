@@ -191,7 +191,7 @@ func (m *Manager) submitRound(snap *Flow, n int) (Flow, bool) {
 			Name:    "review",
 			QueueID: snap.QueueID,
 			Title:   reviewTitle(snap.ID, n, 1),
-			Prompt:  ReviewPrompt(snap, verdictPath),
+			Prompt:  ReviewPrompt(snap, verdictPath, snap.BaseHead),
 			WorkDir: snap.WorkDir,
 			After:   []string{work},
 			Opts:    stepOpts(snap.ReviewOpts),
@@ -228,6 +228,7 @@ func (m *Manager) submitRound(snap *Flow, n int) (Flow, bool) {
 			WorkTaskID:    tasks[0].ID,
 			ReviewTaskID:  tasks[1].ID,
 			ReviewAttempt: 1,
+			BaseHead:      roundBase(f, n),
 			State:         RoundRunning,
 			StartedAt:     now,
 		})
@@ -250,7 +251,7 @@ func (m *Manager) submitReReview(snap *Flow, cur *Round, detail string) (Flow, b
 	tasks, err := m.queue.Add([]queue.TaskSpec{{
 		QueueID: snap.QueueID,
 		Title:   reviewTitle(snap.ID, cur.N, attempt),
-		Prompt:  ReviewPrompt(snap, verdictPath),
+		Prompt:  ReviewPrompt(snap, verdictPath, snap.BaseHead),
 		WorkDir: snap.WorkDir,
 		Opts:    stepOpts(snap.ReviewOpts),
 	}})
@@ -283,6 +284,17 @@ func (m *Manager) settleRound(snap *Flow, cur *Round, round RoundState, v *Verdi
 	now := time.Now()
 	return m.apply(snap, cur, func(f *Flow, r *Round) bool {
 		r.State = round
+		// A moved HEAD means the round's work step committed its own work.
+		// The record says so; nothing is undone (the agent's commit stays
+		// as it is). Read here, under apply's lock, not before it: the
+		// read must not widen the window between snapshot and apply.
+		if r.BaseHead != "" {
+			if head := gitHead(snap.WorkDir); head != "" && head != r.BaseHead {
+				r.CommittedHead = head
+				log.Printf("flow: %s round %d: the work step committed (HEAD %s -> %s) although told not to",
+					snap.ID, r.N, r.BaseHead, head)
+			}
+		}
 		if v != nil {
 			r.Verdict = v
 		}

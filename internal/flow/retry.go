@@ -221,7 +221,7 @@ func (m *Manager) resubmitRound(snap *Flow, cur *Round) (Flow, error) {
 			Name:    "review",
 			QueueID: snap.QueueID,
 			Title:   reviewTitle(snap.ID, n, 1),
-			Prompt:  ReviewPrompt(snap, verdictPath),
+			Prompt:  ReviewPrompt(snap, verdictPath, snap.BaseHead),
 			WorkDir: snap.WorkDir,
 			After:   []string{work},
 			Opts:    stepOpts(snap.ReviewOpts),
@@ -236,6 +236,10 @@ func (m *Manager) resubmitRound(snap *Flow, cur *Round) (Flow, error) {
 		r.WorkTaskID = tasks[0].ID
 		r.ReviewTaskID = tasks[1].ID
 		r.ReviewAttempt = 1
+		// BaseHead is left alone: a retried round restarts from the base its
+		// first attempt had, so an earlier attempt's commit stays inside the
+		// range every reviewer looks at.
+		r.CommittedHead = ""
 		r.Verdict = nil
 		r.State = RoundRunning
 		r.StartedAt = now
@@ -266,7 +270,7 @@ func (m *Manager) resubmitReview(snap *Flow, cur *Round) (Flow, error) {
 	tasks, err := m.queue.Add([]queue.TaskSpec{{
 		QueueID: snap.QueueID,
 		Title:   reviewTitle(snap.ID, cur.N, cur.ReviewAttempt) + " (retry)",
-		Prompt:  ReviewPrompt(snap, verdictPath),
+		Prompt:  ReviewPrompt(snap, verdictPath, snap.BaseHead),
 		WorkDir: snap.WorkDir,
 		Opts:    stepOpts(snap.ReviewOpts),
 	}})
