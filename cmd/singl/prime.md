@@ -343,6 +343,18 @@ singl --json queue queues                           # every queue with its state
 
 Task states: `blocked` → `ready` → `running` → `done`, plus `failed`,
 `cancelled` and `skipped` (a dependency failed under `on_failure: block`).
+**Agents: do not end your turn while something is still running.** A turn end
+is a completion, and a queued task's agent is terminated the moment its task is
+terminal, so a test run or watch you left in the background (a `Monitor`, a
+`run_in_background` command) dies unread. Run it in the foreground, or wait for
+it, before you answer. The daemon enforces this for `claude` and `herdr`
+agents: a turn that ends with background work the agent started and never
+looked at again (no `TaskOutput`/`BashOutput`/`TaskStop` call) is not `done` —
+the task ends `failed`, with the reason in the agent's `error`, and a flow step
+that does this is a failed step, so the flow never reviews the unfinished work.
+`queue retry` it, and tell the agent in the prompt to run long commands in the
+foreground. Put that sentence in the prompts you write.
+
 A running task turns `waiting_human` when its agent stops to ask a question
 (see "Questions" below); it goes back to `running` once the questions are
 answered.

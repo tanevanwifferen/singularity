@@ -144,6 +144,11 @@ type Agent struct {
 	blockedSince  time.Time
 	blockedTotal  time.Duration
 
+	// backgroundWork is the background work (tool_use id -> tool name) started
+	// in the current turn and not yet looked at again, guarded by mu; see
+	// handleResult.
+	backgroundWork map[string]string
+
 	// bridge and mcpConfigPath wire the ask_questions MCP server into the
 	// subprocess (mcp_config.go). onExit runs once the subprocess is gone.
 	bridge        QuestionBridge
