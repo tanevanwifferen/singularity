@@ -313,8 +313,11 @@ func (s *localProjectService) Subscribe(ctx context.Context, handle service.Proj
 // with only some of its repos isolated. The result is persisted so
 // LoadWorkflows / the TUI see it.
 //
-// Calling it twice for the same branch is safe: existing worktrees are adopted
-// and the persisted workflow is updated in place.
+// The branch must be new: if it already exists locally or on origin in any
+// repo of the project the create is refused (service.ErrConflict, naming the
+// repos) before any worktree is made and before anything is persisted,
+// because removing a workflow force-deletes its branch and a workflow may
+// only own a branch it created itself.
 //
 // On partial failure the workflow is still returned (and persisted) with the
 // failing repos carrying a per-repo Error; only a total failure is an error,
@@ -335,21 +338,22 @@ func (s *localProjectService) CreateWorkflow(ctx context.Context, handle service
 		baseDir = project.DefaultWorkflowBaseDir(p.Name)
 	}
 
-	// Reuse a persisted workflow for the same branch so repeated creates are
-	// idempotent instead of forking a second layout for the same feature.
-	var wf *service.FeatureWorkflow
+	wf := project.NewFeatureWorkflow(p, branch, baseDir)
+	if err := wf.CheckBranchAvailable(); err != nil {
+		return nil, wrapErr(err)
+	}
+
+	// A persisted workflow for the same branch can only be a leftover whose
+	// branch is gone (the check above passed): replace it rather than listing
+	// the branch twice.
 	var others []*service.FeatureWorkflow
 	if persisted, lerr := project.LoadWorkflows(key, p); lerr == nil {
 		for _, existing := range persisted {
 			if existing.BranchName == branch && existing.BaseDir == baseDir {
-				wf = existing
 				continue
 			}
 			others = append(others, existing)
 		}
-	}
-	if wf == nil {
-		wf = project.NewFeatureWorkflow(p, branch, baseDir)
 	}
 
 	createErr := wf.CreateAllWorktrees()

@@ -82,7 +82,11 @@ singl --json workflows create --project proj-<key> --branch feature/x
 
 Branches are cut from `origin/<default-branch>` per repo, the workflow is
 persisted (so `workflows list` and the TUI see it), and re-running the
-same create is idempotent — existing worktrees on that branch are adopted.
+same create is refused (`CONFLICT`) because the branch now exists. A create
+also refuses when the branch already exists in any repo, locally or on origin
+(this includes the default branch, e.g. `main`): nothing is created or
+persisted, and the error names the repos. Pick a new branch name — a workflow
+owns its branch and deletes it on removal, so it never adopts an existing one.
 Exit code is `1` if any repo failed; check each repo's `error` field, the other
 worktrees are real and already tracked.
 

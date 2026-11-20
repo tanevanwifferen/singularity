@@ -597,7 +597,8 @@ func (v *WorktreeView) handleProjectCreateInput(msg tea.KeyMsg) tea.Cmd {
 }
 
 // createProjectWorktrees makes one worktree per project repo on branch, laid
-// out under the project's workflow dir (existing ones are adopted). The
+// out under the project's workflow dir. The branch must be new in every repo
+// (an existing one is refused, creating nothing). The
 // workflow is returned even on partial failure so the repos that did get a
 // worktree can be managed; the error names the repos that failed.
 func (v *WorktreeView) createProjectWorktrees(branch string) (*service.FeatureWorkflow, error) {

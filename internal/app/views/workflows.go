@@ -858,6 +858,10 @@ func (v *WorkflowsView) startFlowFromJira(issue *service.Issue, extraMsg string)
 	prompt := buildJiraAgentPrompt(issue, extraMsg)
 
 	wf := service.NewFeatureWorkflow(v.proj, branchName, v.workflowBaseDir)
+	if err := checkWorkflowBranch(wf); err != nil {
+		v.workflowStatusMsg = fmt.Sprintf("Workflow not created: %v", err)
+		return nil
+	}
 	v.workflows = append(v.workflows, wf)
 	v.selectedWorkflow = len(v.workflows) - 1
 	v.rebuildFilter()
@@ -884,6 +888,13 @@ func (v *WorkflowsView) startFlowFromJira(issue *service.Issue, extraMsg string)
 	}
 }
 
+// checkWorkflowBranch refuses a workflow whose branch already exists in any
+// repo. Views run it before listing or persisting a new workflow, so a refused
+// create leaves nothing behind. A variable so tests can skip real git.
+var checkWorkflowBranch = func(wf *service.FeatureWorkflow) error {
+	return wf.CheckBranchAvailable()
+}
+
 // createWorkflowWorktrees is a variable so tests can skip real git worktrees.
 var createWorkflowWorktrees = func(wf *service.FeatureWorkflow) error {
 	return wf.CreateAllWorktrees()
@@ -907,6 +918,10 @@ func (v *WorkflowsView) startWorkflowFromJira(issue *service.Issue, extraMsg str
 	agentPrompt := buildJiraAgentPrompt(issue, extraMsg)
 
 	wf := service.NewFeatureWorkflow(v.proj, branchName, baseDir)
+	if err := checkWorkflowBranch(wf); err != nil {
+		v.workflowStatusMsg = fmt.Sprintf("Workflow not created: %v", err)
+		return nil
+	}
 	v.workflows = append(v.workflows, wf)
 	v.selectedWorkflow = len(v.workflows) - 1
 	v.rebuildFilter()
@@ -1026,6 +1041,10 @@ func (v *WorkflowsView) handleWorkflowStartInput(msg tea.KeyMsg) tea.Cmd {
 			v.showWorkflowStart = false
 			v.workflowBranchInput.Clear()
 			wf := service.NewFeatureWorkflow(v.proj, branchName, baseDir)
+			if err := checkWorkflowBranch(wf); err != nil {
+				v.workflowStatusMsg = fmt.Sprintf("Workflow not created: %v", err)
+				return nil
+			}
 			v.workflows = append(v.workflows, wf)
 			v.selectedWorkflow = len(v.workflows) - 1
 			v.rebuildFilter()
