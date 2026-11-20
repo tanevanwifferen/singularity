@@ -77,10 +77,16 @@ info in one call. Commands taking a project handle: all `project *`,
 singl --json workflows create --project proj-<key> --branch feature/x
 # optional: --base-dir ~/worktrees   (default ~/.worktrees/<project>)
 # → {"branch_name":"feature/x","base_dir":"...","repos":{
-#      "api":{"worktree_path":"~/.worktrees/<project>/feature-x/api","worktree_created":true}, ...}}
+#      "api":{"worktree_path":"~/.worktrees/<project>/feature-x/api","worktree_created":true,
+#             "base_ref":"origin/main","base_commit":"<sha>"}, ...}}
 ```
 
-Branches are cut from `origin/<default-branch>` per repo, the workflow is
+Branches are cut from `origin/<default-branch>` per repo, after first running
+`git fetch origin <default-branch>` (that ref only, 30s timeout, repos in parallel).
+Each repo reports `base_ref` and `base_commit` — the ref and commit the branch was
+cut from — so you can verify the base. If the fetch fails (offline, auth) the create
+does not abort: it falls back to the local ref and sets a `warning` on that repo
+(also in the daemon log); treat a warning as a possibly stale base. The workflow is
 persisted (so `workflows list` and the TUI see it), and re-running the
 same create is refused (`CONFLICT`) because the branch now exists. A create
 also refuses when the branch already exists in any repo, locally or on origin

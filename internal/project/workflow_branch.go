@@ -70,22 +70,22 @@ func (fw *FeatureWorkflow) CheckBranchAvailable() error {
 // existing branch cannot be ours, so ensureWorktree refuses it. The default
 // branch is never reattached, and a branch that only exists on origin is not
 // ours either; both fall through to ensureWorktree's refusal.
-func reattachWorktree(repoPath, worktreePath, branch, defaultBranch string) (string, error) {
+func reattachWorktree(repoPath, worktreePath, branch, defaultBranch string) (worktreeResult, error) {
 	if branch == defaultBranchOrMain(defaultBranch) || !git.BranchExists(repoPath, branch) {
 		return ensureWorktree(repoPath, worktreePath, branch, defaultBranch)
 	}
 	if worktrees, err := git.GetWorktrees(repoPath); err == nil {
 		for _, wt := range worktrees {
 			if wt.Path != repoPath && wt.Branch == branch {
-				return wt.Path, nil
+				return worktreeResult{Path: wt.Path}, nil
 			}
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
-		return "", fmt.Errorf("create worktree parent: %w", err)
+		return worktreeResult{}, fmt.Errorf("create worktree parent: %w", err)
 	}
 	if err := git.CreateWorktree(repoPath, worktreePath, branch, false, ""); err != nil {
-		return "", err
+		return worktreeResult{}, err
 	}
-	return worktreePath, nil
+	return worktreeResult{Path: worktreePath}, nil
 }

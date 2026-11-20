@@ -257,3 +257,103 @@ func TestSyncRepos_NestedNewRepoUsesLayout(t *testing.T) {
 		t.Fatalf("api after sync: %+v, want path %q", api, want)
 	}
 }
+
+func gitT(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %s %v", args, out, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// newRemoteBackedRepo clones a bare remote into a working repo, then pushes a
+// newer commit to the remote from a second clone, leaving the first clone's
+// origin/main tracking ref stale. Returns the repo, the stale and the new tip.
+func newRemoteBackedRepo(t *testing.T, root string) (repo, staleTip, newTip, bare string) {
+	t.Helper()
+	seed := initWorkflowTestRepo(t, root, "seed", "main")
+	bare = filepath.Join(root, "remote.git")
+	if out, err := exec.Command("git", "clone", "--bare", seed, bare).CombinedOutput(); err != nil {
+		t.Fatalf("bare clone: %s %v", out, err)
+	}
+	repo = filepath.Join(root, "repo")
+	if out, err := exec.Command("git", "clone", bare, repo).CombinedOutput(); err != nil {
+		t.Fatalf("clone: %s %v", out, err)
+	}
+	staleTip = gitT(t, repo, "rev-parse", "origin/main")
+
+	other := filepath.Join(root, "other")
+	if out, err := exec.Command("git", "clone", bare, other).CombinedOutput(); err != nil {
+		t.Fatalf("clone other: %s %v", out, err)
+	}
+	gitT(t, other, "config", "user.email", "test@test.com")
+	gitT(t, other, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(other, "new.txt"), []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, other, "add", ".")
+	gitT(t, other, "commit", "-m", "newer")
+	gitT(t, other, "push", "origin", "main")
+	newTip = gitT(t, other, "rev-parse", "HEAD")
+	return repo, staleTip, newTip, bare
+}
+
+func TestEnsureWorktree_FetchesStaleRemoteTrackingRef(t *testing.T) {
+	root := t.TempDir()
+	repo, staleTip, newTip, _ := newRemoteBackedRepo(t, root)
+
+	res, err := ensureWorktree(repo, filepath.Join(root, "wt"), "feature/x", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Warning != "" {
+		t.Errorf("unexpected warning: %s", res.Warning)
+	}
+	if got := gitT(t, res.Path, "rev-parse", "HEAD"); got != newTip || got == staleTip {
+		t.Errorf("branch started at %s, want new tip %s (stale %s)", got, newTip, staleTip)
+	}
+	if res.BaseRef != "origin/main" || res.BaseCommit != newTip {
+		t.Errorf("base = %s@%s, want origin/main@%s", res.BaseRef, res.BaseCommit, newTip)
+	}
+}
+
+func TestEnsureWorktree_FetchFailureFallsBackWithWarning(t *testing.T) {
+	root := t.TempDir()
+	repo, staleTip, _, bare := newRemoteBackedRepo(t, root)
+	if err := os.RemoveAll(bare); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := ensureWorktree(repo, filepath.Join(root, "wt"), "feature/x", "main")
+	if err != nil {
+		t.Fatalf("fetch failure must not abort the create: %v", err)
+	}
+	if !strings.Contains(res.Warning, "origin/main") {
+		t.Errorf("warning = %q, want mention of origin/main", res.Warning)
+	}
+	if res.BaseRef != "origin/main" || res.BaseCommit != staleTip {
+		t.Errorf("base = %s@%s, want local origin/main@%s", res.BaseRef, res.BaseCommit, staleTip)
+	}
+}
+
+func TestReattachWorktree_DoesNotFetchOrMoveBranch(t *testing.T) {
+	root := t.TempDir()
+	repo, staleTip, newTip, _ := newRemoteBackedRepo(t, root)
+	wt := filepath.Join(root, "wt")
+	gitT(t, repo, "worktree", "add", "-b", "feature/x", wt, staleTip)
+
+	res, err := reattachWorktree(repo, wt, "feature/x", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.BaseRef != "" || res.Warning != "" {
+		t.Errorf("reattach must not report a base or warning: %+v", res)
+	}
+	if got := gitT(t, repo, "rev-parse", "feature/x"); got != staleTip {
+		t.Errorf("branch moved to %s, want untouched %s", got, staleTip)
+	}
+	if got := gitT(t, repo, "rev-parse", "origin/main"); got == newTip {
+		t.Error("reattach fetched; it must leave refs alone")
+	}
+}

@@ -3,6 +3,7 @@ package project
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -57,6 +58,14 @@ type WorkflowRepo struct {
 	MRURL           string `json:"mr_url,omitempty"`
 	MRTitle         string `json:"mr_title,omitempty"`
 	Error           string `json:"error,omitempty"`
+
+	// BaseRef/BaseCommit record what a freshly cut branch started from, so
+	// an orchestrator can verify the base. Empty when the branch or worktree
+	// already existed and was adopted. Warning is set when the base could
+	// not be refreshed from the remote (the local ref was used instead).
+	BaseRef    string `json:"base_ref,omitempty"`
+	BaseCommit string `json:"base_commit,omitempty"`
+	Warning    string `json:"warning,omitempty"`
 
 	// Runtime branch status (not persisted)
 	AheadDefault  int  `json:"-"`
@@ -347,13 +356,14 @@ func (fw *FeatureWorkflow) SyncRepos(proj *Project, stop func(worktreePath strin
 		if fresh[wr] {
 			create = ensureWorktree // a repo new to the workflow must get a new branch
 		}
-		path, err := create(wr.OriginalPath, wr.WorktreePath, fw.BranchName, wr.DefaultBranch)
+		res, err := create(wr.OriginalPath, wr.WorktreePath, fw.BranchName, wr.DefaultBranch)
 		if err != nil {
 			setResult(wr, fmt.Sprintf("create worktree: %v", err))
 			return
 		}
 		fw.mu.Lock()
-		wr.WorktreePath = path
+		wr.WorktreePath = res.Path
+		res.applyTo(wr)
 		wr.WorktreeCreated = true
 		wr.Error = ""
 		changed = true
@@ -442,17 +452,43 @@ func (fw *FeatureWorkflow) retireRepo(wr *WorkflowRepo, stop func(string) error)
 	return nil
 }
 
+// baseFetchTimeout bounds the per-repo fetch of the default branch, so an
+// unreachable remote cannot stall a workflow create for minutes.
+const baseFetchTimeout = 30 * time.Second
+
+// worktreeResult is what ensureWorktree and reattachWorktree report for one repo.
+type worktreeResult struct {
+	Path string
+	// BaseRef and BaseCommit describe the start point of a branch cut by
+	// this call; empty when an existing branch or worktree was reattached.
+	BaseRef    string
+	BaseCommit string
+	// Warning is non-empty when the base could not be refreshed from the remote.
+	Warning string
+}
+
+// applyTo records the result's base and warning on wr. A reattached branch
+// keeps the base recorded when it was cut. Callers hold fw.mu.
+func (r worktreeResult) applyTo(wr *WorkflowRepo) {
+	if r.BaseRef != "" {
+		wr.BaseRef, wr.BaseCommit = r.BaseRef, r.BaseCommit
+	}
+	if r.Warning != "" {
+		wr.Warning = r.Warning
+	}
+}
+
 // ensureWorktree creates a worktree of repoPath at worktreePath on a brand-new
-// branch cut from the repo's default branch. It never adopts: if the branch
-// already exists (locally, on origin, or as the default branch) or is already
-// checked out in a worktree, it refuses with a *BranchExistsError, because a
-// workflow force-deletes its branch on removal and so may only own a branch
-// it created itself.
+// branch cut from the freshly fetched origin/<default>. It never adopts: if
+// the branch already exists (locally, on origin, or as the default branch) or
+// is already checked out in a worktree, it refuses with a *BranchExistsError,
+// because a workflow force-deletes its branch on removal and so may only own
+// a branch it created itself.
 //
-// Returns the created path, or an error. Callers hold no lock.
-func ensureWorktree(repoPath, worktreePath, branch, defaultBranch string) (string, error) {
+// Callers hold no lock.
+func ensureWorktree(repoPath, worktreePath, branch, defaultBranch string) (worktreeResult, error) {
 	if where := branchConflict(repoPath, defaultBranch, branch); where != "" {
-		return "", &BranchExistsError{Branch: branch, Repos: []string{fmt.Sprintf("%s (%s)", repoPath, where)}}
+		return worktreeResult{}, &BranchExistsError{Branch: branch, Repos: []string{fmt.Sprintf("%s (%s)", repoPath, where)}}
 	}
 
 	defaultBranch = defaultBranchOrMain(defaultBranch)
@@ -460,12 +496,24 @@ func ensureWorktree(repoPath, worktreePath, branch, defaultBranch string) (strin
 	// Nested layouts (pdflibrary/librarian) need the intermediate dirs; git
 	// creates the leaf itself.
 	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
-		return "", fmt.Errorf("create worktree parent: %w", err)
+		return worktreeResult{}, fmt.Errorf("create worktree parent: %w", err)
 	}
 
-	// Fresh branch. Prefer origin/<default> so the worktree starts from the
-	// remote tip; fall back to the local default branch when there is no
-	// remote-tracking ref (never fetched, or a local-only repo).
+	// Refresh origin/<default> first so the branch does not start from a
+	// stale remote-tracking ref. A fetch failure (offline, auth) falls back
+	// to the local ref with a warning. A repo without an origin remote is
+	// local-only and has nothing to fetch.
+	var res worktreeResult
+	if git.HasRemote(repoPath, "origin") {
+		if err := git.FetchBranch(repoPath, "origin", defaultBranch, baseFetchTimeout); err != nil {
+			res.Warning = fmt.Sprintf("could not fetch origin/%s, branch cut from the local ref which may be stale: %v", defaultBranch, err)
+			log.Printf("workflow: %s: %s", repoPath, res.Warning)
+		}
+	}
+
+	// Prefer origin/<default> so the worktree starts from the remote tip;
+	// fall back to the local default branch when there is no remote-tracking
+	// ref (never fetched, or a local-only repo).
 	startPoint := "origin/" + defaultBranch
 	if !git.RefExists(repoPath, startPoint) {
 		if git.RefExists(repoPath, defaultBranch) {
@@ -475,9 +523,17 @@ func ensureWorktree(repoPath, worktreePath, branch, defaultBranch string) (strin
 		}
 	}
 	if err := git.CreateWorktree(repoPath, worktreePath, branch, true, startPoint); err != nil {
-		return "", err
+		return worktreeResult{}, err
 	}
-	return worktreePath, nil
+	res.Path = worktreePath
+	res.BaseRef = startPoint
+	if startPoint == "" {
+		res.BaseRef = "HEAD"
+	}
+	if commit, err := git.GetHEAD(worktreePath); err == nil {
+		res.BaseCommit = commit
+	}
+	return res, nil
 }
 
 // CreateAllWorktrees creates worktrees for all repos in the project — the
@@ -505,14 +561,15 @@ func (fw *FeatureWorkflow) CreateAllWorktrees() error {
 		repos = append(repos, wr)
 	}
 	forEachRepoByDepth(repos, false, func(wr *WorkflowRepo) {
-		path, err := ensureWorktree(wr.OriginalPath, wr.WorktreePath, fw.BranchName, wr.DefaultBranch)
+		res, err := ensureWorktree(wr.OriginalPath, wr.WorktreePath, fw.BranchName, wr.DefaultBranch)
 
 		fw.mu.Lock()
 		defer fw.mu.Unlock()
 		if err != nil {
 			wr.Error = fmt.Sprintf("create worktree: %v", err)
 		} else {
-			wr.WorktreePath = path
+			wr.WorktreePath = res.Path
+			res.applyTo(wr)
 			wr.WorktreeCreated = true
 			wr.Error = ""
 		}
