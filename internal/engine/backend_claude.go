@@ -40,10 +40,9 @@ func (b *claudeBackend) Env() []string {
 	return append(os.Environ(), "CLAUDE_NO_ANALYTICS=true", "MCP_TOOL_TIMEOUT="+mcpToolTimeoutMS)
 }
 
-// MCPArgs implements MCPBackend. --mcp-config takes any number of values, so
-// it has to stay the last flag: anything after it would be read as a config.
+// MCPArgs implements MCPBackend.
 func (b *claudeBackend) MCPArgs(configPath string) []string {
-	return []string{"--mcp-config", configPath}
+	return claudeMCPArgs(configPath)
 }
 
 // PostStartCommands is a no-op for claude; effort is handled via launch flags.

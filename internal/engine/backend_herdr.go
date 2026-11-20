@@ -144,10 +144,9 @@ func (b *herdrBackend) Name() string { return "herdr" }
 func (b *herdrBackend) Binary() string { return SingularityBinary() }
 
 // MCPArgs implements MCPBackend. The args land after the driver's `--`, so
-// they go to claude; --mcp-config takes any number of values and therefore
-// has to stay the last flag.
+// they go to claude.
 func (b *herdrBackend) MCPArgs(configPath string) []string {
-	return []string{"--mcp-config", configPath}
+	return claudeMCPArgs(configPath)
 }
 
 // BlockedInput implements BlockAwareBackend: the driver must not let herdr's
